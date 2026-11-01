@@ -1,0 +1,9 @@
+node_modules/
+.env
+*.mp4
+*.mov
+*.jpg
+*.jpeg
+*.png
+frames/
+.DS_Store

@@ -1,0 +1,12 @@
+{
+  "name": "ai-dance-motion-control",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Jezelf laten dansen met AI: motion control met Kling en Wan via fal.ai",
+  "scripts": {
+    "test-render": "node render.mjs test",
+    "render": "node render.mjs vol kling"
+  },
+  "dependencies": { "@fal-ai/client": "^1" }
+}
