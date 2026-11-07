@@ -1,0 +1,3 @@
+web/*-bundle.mjs linguist-generated=true
+web/frontend/*-bundle.js linguist-generated=true
+web/frontend/multiuser/*-bundle.js linguist-generated=true

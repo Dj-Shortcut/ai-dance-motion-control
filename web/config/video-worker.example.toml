@@ -1,0 +1,8 @@
+# Inert example only. Real tenant, storage, service bindings and secrets must
+# be reviewed separately; CI never deploys this file or selects an account.
+name = "rig-video-private-example"
+main = "../closed-video-worker.mjs"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = false
+preview_urls = false
