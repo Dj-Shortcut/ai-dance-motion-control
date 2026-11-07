@@ -8,7 +8,7 @@ const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.ur
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const waitFor=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Edit UI did not settle');};
-function fixture({qualities=['standard','pro','edit-standard'],withGeneration=false,price=100,polledFailure=false,refundConfirmed=true,scopedStorage,videoEnabled=true}={}){
+function fixture({qualities=['standard','pro','edit-standard'],withGeneration=false,price=100,polledFailure=false,refundConfirmed=true,failureCode,scopedStorage,videoEnabled=true}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),prepared=[],imagePreparations=[],calls=[],storage=new Map();
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoEnabled=videoEnabled;w.rigVideoFunding='sponsored';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.URL.createObjectURL=()=>`blob:fixture-${Math.random()}`;w.URL.revokeObjectURL=()=>{};w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
@@ -27,8 +27,8 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   else if(path==='/api/sponsor-invitations/status')value={state:'eligible',remainingCents:500};
   else if(path==='/api/assets')value={id:'asset'+(++uploads),status:'ready'};
   else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
-  else if(path==='/api/generations')value=polledFailure?{id:'job-edit',state:'queued',priceCents:price,currency:'EUR'}:{id:'job-edit',state:'failed',refundConfirmed:true};
-  else if(path==='/api/generations/job-edit')value={id:'job-edit',state:'failed',priceCents:price,currency:'EUR',refundConfirmed};
+  else if(path==='/api/generations')value=polledFailure?{id:'job-edit',state:'queued',priceCents:price,currency:'EUR'}:{id:'job-edit',state:'failed',refundConfirmed,...(failureCode?{failureCode}:{})};
+  else if(path==='/api/generations/job-edit')value={id:'job-edit',state:'failed',priceCents:price,currency:'EUR',refundConfirmed,...(failureCode?{failureCode}:{})};
   else if(path.startsWith('/api/estimate/fal?')){const params=new URL(path,w.location.origin).searchParams;value={quality:params.get('quality'),durationSeconds:Number(params.get('duration')),billedSeconds:Math.ceil(Number(params.get('duration'))),customerProposal:{currency:'EUR',priceCents:100,binding:false}};}
   else throw Error('unexpected request '+path);
   return {ok:true,json:async()=>value};
@@ -39,7 +39,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
  const file=(id,name,type)=>{Object.defineProperty(el(id),'files',{configurable:true,value:[new w.File(['file'],name,{type})]});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));};
  const load=()=>{file('personInput','dog.jpg','image/jpeg');file('motionInput','orchestra.mp4','video/mp4');el('motionVideo').dispatchEvent(new w.Event('loadedmetadata'));};
  const prepare=()=>{el('prepare').click();if(el('briefDialog').open)el('confirmBrief').click();};
- return {dom,w,d,el,prepared,imagePreparations,calls,storage,change,prompt,file,load,prepare};
+ return {dom,w,d,el,prepared,imagePreparations,calls,storage,change,prompt,file,load,prepare,setRefundConfirmed:value=>{refundConfirmed=value;}};
 }
 test('editing appears only when the server offers edit-standard and adds no footer controls',()=>{
  const unavailable=fixture({qualities:['standard','pro']});
@@ -176,6 +176,32 @@ test('a terminal failure reports a proven refund and keeps uncertain refunds und
    assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
   }finally{f.dom.window.close();}
  }
+});
+test('known Fal input failures identify the cause without blaming preparation or retrying the generation',async()=>{
+ for(const [failureCode,reason] of [['provider_input_unavailable','Fal kon je foto of video niet openen.'],['provider_subject_not_detected','Fal herkende geen duidelijk menselijk bovenlichaam op je foto.']]){
+  for(const confirmed of [true,false,'true'])for(const polledFailure of [true,false]){
+   const f=fixture({withGeneration:true,polledFailure,refundConfirmed:confirmed,failureCode});
+   try{
+    f.el('editModeButton').click();f.load();f.prompt('Vervang de zanger door mijn hond.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
+    f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.startsWith(reason));
+    const refunded=confirmed===true;
+    assert.equal(f.el('quoteMessage').textContent,reason+(refunded?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'));
+    assert.equal(f.storage.has('rig-generation-pending'),false);assert.equal(f.storage.get('rig-generation-job'),refunded?undefined:'job-edit');assert.equal(f.el('checkGeneration').hidden,refunded);assert.equal(f.el('confirmGeneration').hidden,true);
+    assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
+    if(!refunded){
+     f.setRefundConfirmed(true);f.el('checkGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.endsWith('Je RIG-tegoed is teruggezet.'));
+     assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.el('checkGeneration').hidden,true);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
+    }
+   }finally{f.dom.window.close();}
+  }
+ }
+});
+test('an unrecognised failure code cannot display raw provider details or a known Fal diagnosis',async()=>{
+ const f=fixture({withGeneration:true,polledFailure:true,refundConfirmed:true,failureCode:'https://private.invalid/token?secret=never-show'});
+ try{
+  f.load();f.change('duration','5');f.prompt('Maak een dansvideo.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent==='De video kon niet worden gemaakt. Je tegoed is teruggezet.');
+  assert.doesNotMatch(f.el('quoteMessage').textContent,/private|secret|token|Fal/);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
+ }finally{f.dom.window.close();}
 });
 test('a five-second edit exceeding the gift cannot spend and draft changes hide old confirmation',async()=>{
  const f=fixture({withGeneration:true,price:600});

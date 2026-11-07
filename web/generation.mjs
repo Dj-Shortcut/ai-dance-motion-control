@@ -1,5 +1,6 @@
 import {providerJSON,providerInputValidation} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
+import {isR2InputUrl} from './rig-r2-inputs.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -27,7 +28,10 @@ function configured(s) {
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
   return typeof s?.authenticate === 'function' && typeof s?.assets?.getOwned === 'function' && typeof s?.assets?.uploadOwned === 'function' && typeof s?.quotes?.create === 'function' && typeof s?.quotes?.getOwned === 'function' && typeof s?.jobs?.getByIdempotency === 'function' && typeof s?.jobs?.getRecent === 'function' && typeof s?.jobs?.begin === 'function' && typeof s?.jobs?.getOwned === 'function' && typeof s?.jobs?.authorizeDispatch === 'function' && typeof s?.jobs?.markSubmitted === 'function' && typeof s?.jobs?.markUnknown === 'function' && typeof s?.jobs?.markPreparationFailed === 'function' && typeof s?.jobs?.claimPoll === 'function' && typeof s?.jobs?.releasePoll === 'function' && typeof s?.jobs?.markCompleted === 'function' && typeof s?.jobs?.markProviderFailed === 'function' && typeof s?.results?.store === 'function' && typeof s?.results?.read === 'function' && typeof s?.falKey === 'string' && s.falKey.length>0 && s.falKey.length<1024 && Number.isSafeInteger(s?.pricing?.standard) && s.pricing.standard>0 && Number.isSafeInteger(s?.pricing?.pro) && s.pricing.pro>0 && typeof s.pricing.version==='string' && s.pricing.version.length>0;
 }
-function publicJob(job) { return { id:job.id, state:job.state, priceCents:job.priceCents, currency:'EUR' }; }
+function publicJob(job) {
+  const failureCode=job.state==='failed'&&['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)?job.failureCode:null;
+  return { id:job.id, state:job.state, priceCents:job.priceCents, currency:'EUR',...(failureCode?{failureCode}:{}) };
+}
 async function readJSON(req) {
   if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers.get('content-type') ?? '')) return null;
   const declared=req.headers.get('content-length');
@@ -147,7 +151,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           const kind=i===1?'video':'image', ref=refs[i];
           if(!ref||ref.id!==ids[i]||ref.kind!==kind||!/^[a-f0-9]{64}$/.test(ref.sha256??''))throw Error('invalid reference');
           const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,selected.quality==='edit-standard'?{jobId,model:quote.model}:undefined);
-          if(selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind)) : !validAsset(asset,kind))throw Error('invalid uploaded asset');
+          if(selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&(services.inputR2Config?isR2InputUrl(asset.url,{config:services.inputR2Config,kind}):isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind))) : !validAsset(asset,kind))throw Error('invalid uploaded asset');
           uploaded.push(asset);
         }
         const [image,video,...rest]=uploaded;

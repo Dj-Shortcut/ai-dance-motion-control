@@ -2,6 +2,7 @@
 // the service directly. Live billing and real provider access remain disabled.
 import { uploadVerifiedAsset } from './upload.mjs';
 import {mintProviderInput,verifyProviderInput} from './rig-provider-inputs.mjs';
+import {mintR2Input,verifyR2Input} from './rig-r2-inputs.mjs';
 const BASE='https://rig-media.internal';
 const MAX=16*1024*1024; // deliberate Worker memory bound; deployment needs global concurrency budget
 const USER=/^[a-zA-Z0-9_-]{1,100}$/;
@@ -94,8 +95,19 @@ export function createAssets(o){
    // only after authenticated ownership and digest checks on exact held bytes.
    let url;
    if(context?.model==='fal-ai/kling-video/o3/standard/video-to-video/edit'){
-    url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,kind});
-    await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+    if(o.r2Inputs){
+     // A private, metadata-free delivery copy has its own opaque filename.
+     // Its short-lived S3 URL avoids the browser checks on workers.dev.
+     const response=await o.media.fetch(createMediaRequest(o,`/v1/provider-inputs/${id}`,user,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json'},body:JSON.stringify({jobId:context.jobId,sha256:sha})}));
+     if(response.status!==201&&response.status!==200)throw Error('Private delivery copy unavailable');
+     const copy=await boundedJson(response);
+     if(copy?.kind!==kind||copy.mime!==mime||copy.size!==size||copy.sha256!==sha)throw Error('Private delivery copy mismatch');
+     url=await mintR2Input({config:o.r2Inputs,key:copy.key});
+     await verifyR2Input(url,{config:o.r2Inputs,key:copy.key,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+    }else{
+     url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,kind});
+     await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+    }
    }else url=await uploadVerifiedAsset({asset:{verified:true,mime,size,body:new Blob([bytes],{type:mime})},key:o.falKey,fetchImpl:o.providerFetch||fetch});
    return {kind,verified:true,url,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
  }

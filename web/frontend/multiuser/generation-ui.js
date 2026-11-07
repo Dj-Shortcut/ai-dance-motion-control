@@ -5,6 +5,11 @@
   let quote = null, active = false, recentId=null;
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
+  function providerFailureMessage(data){
+    if(data.state!=='failed')return null;
+    const reason=data.failureCode==='provider_input_unavailable'?'Fal kon je foto of video niet openen.':data.failureCode==='provider_subject_not_detected'?'Fal herkende geen duidelijk menselijk bovenlichaam op je foto.':null;
+    return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
+  }
   function showReviewedType(quality){const edit=quality==='edit-standard';el('quoteTitle').textContent=edit?'Video bewerken':'Persoon laten bewegen';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
   async function call(path, options={}) {
     const response=await window.rigRequest(path,{credentials:'same-origin',cache:'no-store',...options});
@@ -90,7 +95,7 @@
       const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:current.id,idempotencyKey:requestId,...(current.approvalToken?{approvalToken:current.approvalToken}:{})})});
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
-      if(data.state==='failed'&&data.refundConfirmed===true){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note('Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
+      if(data.state==='failed'&&data.refundConfirmed===true){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
       window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       await follow(data.id);
     } catch(error) {
@@ -109,7 +114,12 @@
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
         const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');note('Je video is klaar.');return;
       }
-      if(data.state==='failed'){window.rigScopedStorage.removeItem('rig-generation-job');note(data.refundConfirmed===true?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.');return;}
+      if(data.state==='failed'){
+        const providerMessage=providerFailureMessage(data),refundConfirmed=data.refundConfirmed===true;
+        if(!providerMessage||refundConfirmed)window.rigScopedStorage.removeItem('rig-generation-job');
+        el('checkGeneration').hidden=refundConfirmed;
+        note(providerMessage||(refundConfirmed?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
+      }
       if(['unknown','needs_review'].includes(data.state)){note('De opdracht wordt gecontroleerd. Start niet opnieuw.');return;}
       note('Je video wordt gemaakt…');await delay(5000);
     }

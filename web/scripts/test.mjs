@@ -7,7 +7,7 @@ const groups={
   'edit-mode-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui',
   'browser-recording-integrity','browser-frame-padding','browser-edit-dimensions','rig-mcp','rig-chatgpt-files','rig-sites-app','build-rig-sites',
-  'generation','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',
+  'generation','rig-r2-delivery','rig-r2-inputs','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',
   'price-estimate','price-preflight','media-binding','media-redirect','consent-assets','production-bridge-auth',
   'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay'
  ],

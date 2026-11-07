@@ -161,8 +161,19 @@ test('completed matching provider input-validation failure refunds once and repo
  f.services.jobs.markProviderFailed=async(u,id,providerId,token,reason)=>{assert.deepEqual([u,id,providerId,token,reason],['u1','job1','abc-123','token1','provider_input_unavailable']);refunds++;return Object.assign(await f.services.jobs.getOwned(u,id),{state:'failed',falRequestId:providerId,failureCode:reason})};
  f.services.jobs.confirmInputFailureRefund=async()=>true;
  f.setResultResponse(()=>Response.json({detail:[{loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error'}]},{status:422}));
- await quote(f,editBody);await submit(f);let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
- r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+ await quote(f,editBody);await submit(f);let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
+ r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+});
+test('public jobs expose only allowlisted terminal failure codes and never imply an unconfirmed refund',async()=>{
+ for(const failureCode of ['provider_input_unavailable','provider_subject_not_detected','provider_raw_failure: https://private.invalid/token','constructor',undefined]){
+  const f=fixture();await quote(f);await submit(f);const job=await f.services.jobs.getOwned('u1','job1');
+  Object.assign(job,{state:'failed',failureCode,providerError:'private diagnostic',providerInputUrl:'https://private.invalid/token'});
+  f.services.jobs.confirmInputFailureRefund=async()=>false;
+  const result=await (await f.handler(get('/api/generations/job1'))).json();
+  assert.deepEqual(result,{id:'job1',state:'failed',priceCents:270,currency:'EUR',...(['provider_input_unavailable','provider_subject_not_detected'].includes(failureCode)?{failureCode}:{})});
+  assert.equal(Object.hasOwn(result,'refundConfirmed'),false);assert.doesNotMatch(JSON.stringify(result),/private|token|diagnostic|abc-123/);
+  job.state='unknown';assert.equal(Object.hasOwn(await (await f.handler(get('/api/generations/job1'))).json(),'failureCode'),false);
+ }
 });
 test('other HTTP 422s and wrong status request IDs remain queued without refund',async()=>{
  const expected={loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error'};
@@ -177,7 +188,7 @@ test('exact observed pro subject rejection returns one proven refund, and is nev
  f.services.jobs.confirmInputFailureRefund=async()=>true;
  f.setResultResponse(()=>Response.json({detail:[{loc:['body'],msg:message,type:'input_value_error'}]},{status:422}));
  assert.equal((await quote(f)).status,201);assert.equal((await submit(f)).status,202);
- let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
+ let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_subject_not_detected');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
  r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
 });
 test('subject errors with changed model, message, request ID, content-type or status remain unrefunded',async()=>{
