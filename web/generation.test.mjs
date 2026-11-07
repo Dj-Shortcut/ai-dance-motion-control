@@ -164,6 +164,21 @@ test('completed matching provider input-validation failure refunds once and repo
  await quote(f,editBody);await submit(f);let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
  r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
 });
+test('large inline validation echoes settle only the configured owner edit and never leak or resubmit',async()=>{
+ for(const enabledOwner of ['u1','other',undefined]){
+  const f=editFixture();let refunds=0;
+  f.services.jobs.markProviderFailed=async(u,id,providerId,_token,reason)=>{refunds++;return Object.assign(await f.services.jobs.getOwned(u,id),{state:'failed',falRequestId:providerId,failureCode:reason})};
+  f.services.jobs.confirmInputFailureRefund=async()=>true;
+  f.setResultResponse(()=>Response.json({request_id:'abc-123',detail:[{loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error',input:'data:video/mp4;base64,'+'A'.repeat(100000)}]},{status:422}));
+  await quote(f,editBody);await submit(f);f.services.inlineO3Owner=enabledOwner;
+  const response=await f.handler(get('/api/generations/job1')),result=await response.json();
+  assert.doesNotMatch(JSON.stringify(result),/data:|base64|AAAA/);
+  if(enabledOwner==='u1'){
+   assert.equal(response.status,200);assert.equal(result.state,'failed');assert.equal(result.refundConfirmed,true);assert.equal(refunds,1);
+   assert.equal((await f.handler(get('/api/generations/job1'))).status,200);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+  }else{assert.equal(response.status,503);assert.equal(refunds,0);assert.equal((await f.services.jobs.getOwned('u1','job1')).state,'queued');}
+ }
+});
 test('public jobs expose only allowlisted terminal failure codes and never imply an unconfirmed refund',async()=>{
  for(const failureCode of ['provider_input_unavailable','provider_subject_not_detected','provider_raw_failure: https://private.invalid/token','constructor',undefined]){
   const f=fixture();await quote(f);await submit(f);const job=await f.services.jobs.getOwned('u1','job1');

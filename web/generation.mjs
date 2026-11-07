@@ -218,6 +218,10 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(match[2]) { if(job.state!=='completed') return fail('Video is nog niet beschikbaar.',404); try {return await services.results.read(job);} catch {return fail('Video is tijdelijk niet beschikbaar.',503);} }
       if(job.state==='completed') return respond({...publicJob(job),videoPath:`/api/generations/${job.id}/video`});
       if(job.state!=='queued' || !REQ_ID.test(job.falRequestId??'')) return respond(await publicFailure(job));
+      let allowInlineEcho=false;
+      if(services.inlineO3Owner===user.id){
+        try{const q=await services.quotes.getOwned(user.id,job.quoteId);allowInlineEcho=q?.userId===user.id&&q.model===MODEL['edit-standard']&&inlineFiveSeconds(q.durationSeconds);}catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
+      }
       const url=`${QUEUE}/fal-ai/kling-video/requests/${encodeURIComponent(job.falRequestId)}`;
       let claim; try {claim=await services.jobs.claimPoll(user.id,job.id);} catch {return fail('Status is tijdelijk niet beschikbaar.',503);}
       if(!claim || claim.kind!=='acquired' || !REQ_ID.test(claim.token??'')) {
@@ -239,7 +243,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         }
         const response=await fetchImpl(url,{signal,redirect:'manual',headers:{Authorization:`Key ${services.falKey}`}});
         if(!response.ok){
-          const reason=await providerInputValidation(response,{signal,requestId:job.falRequestId});
+          const reason=await providerInputValidation(response,{signal,requestId:job.falRequestId,allowInlineEcho});
           if(reason){
             if(reason==='provider_subject_not_detected'){
               const q=await services.quotes.getOwned(user.id,job.quoteId);
