@@ -12,6 +12,7 @@ import {createInputVerification} from './rig-input-verification.mjs';
 import {createAssets} from './assets.mjs';
 import {handleProviderInput,mintProofProviderInput} from './rig-provider-inputs.mjs';
 import {authorizeGatewayProof,createGatewayVerification,GATEWAY_PROOF_JOB} from './rig-gateway-verification.mjs';
+import {createR2InputVerification,R2_INPUT_VERIFICATION_JOB} from './rig-r2-verification.mjs';
 
 const ownerId=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const tokenPattern=/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -161,7 +162,10 @@ export function createClosedVideoWorker({serviceFactory=createClosedVideoService
      const data=await readBridgeJSON(sites.request,[]);if(!data)return reply({error:'Controleer je aanvraag.'},400);
      const transport=closedVideoTesting.providerTransport(fetch);
      const noQueue=async(input,init)=>{const host=new URL(String(input)).hostname;if(host==='fal.run'||host.endsWith('.fal.run'))throw Error('Queue is unavailable during input verification');return transport(input,init)};
-     const recovery=createInputVerification({db:env.DB,ownerUserId:env.RIG_VIDEO_OWNER_USER_ID,verifyTenant:()=>tenantMatches(env),makeAssets:()=>recoveryAssetsFactory({mode:'test',origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:noQueue,authenticate:async()=>({id:sites.userId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})})});
+     const privateAssets={mode:'test',origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,authenticate:async()=>({id:sites.userId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})};
+     const recovery=recovering[1]===R2_INPUT_VERIFICATION_JOB
+      ?createR2InputVerification({env,verifyTenant:tenantMatches,makeAssets:({r2Inputs})=>recoveryAssetsFactory({...privateAssets,r2Inputs,gatewayFetch:fetch,providerFetch:async()=>{throw Error('Provider transport is unavailable during R2 verification')}})})
+      :createInputVerification({db:env.DB,ownerUserId:env.RIG_VIDEO_OWNER_USER_ID,verifyTenant:()=>tenantMatches(env),makeAssets:()=>recoveryAssetsFactory({...privateAssets,providerFetch:noQueue})});
      return await recovery({userId:sites.userId,jobId:recovering[1]});
     }
     const issuing=u.pathname==='/api/chatgpt/quote-approvals',consuming=u.pathname==='/api/chatgpt/quote-approvals/consume';

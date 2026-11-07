@@ -58,6 +58,14 @@ submission, verify the actual delivery path with synthetic private objects.
 A successful, explicitly confirmed five-second O3 output remains the final
 generation gate. Do not automatically repeat a failed or uncertain job.
 
+An owner-only, signed `verify-inputs` operation also permits one readback of
+the exact observed, refunded O3 request. It first verifies the original
+immutable references and terminal refund, then checks the real private copies
+using anonymous GET and Range. It returns only a fixed receipt and never
+calls a model, changes credit or resets dispatch. A durable one-time claim
+prevents duplicates; failure consumes that diagnostic attempt. This checks
+delivery from the Worker and does not establish downstream Kling acceptance.
+
 References:
 
 - [Cloudflare error 1010](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1010/)

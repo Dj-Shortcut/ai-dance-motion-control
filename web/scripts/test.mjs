@@ -12,7 +12,7 @@ const groups={
   'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay'
  ],
  workerd:[
-  'sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-provider-inputs',
+  'sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
   'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','gateway-relay-workerd'
  ],
  media:['mp4-inspect','mp4-edit-support','video-preparer','cloud-media-service','long-duration','closed-video-service','normalize']
