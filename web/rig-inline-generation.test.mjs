@@ -33,7 +33,7 @@ test('inline edit waits for price confirmation, sends exact bound bytes with pri
  assert.equal((await f.post('/api/generations',confirm)).status,200);assert.equal(f.calls().queue,1);assert.equal(f.calls().reserve,1);
 });
 test('inline owner must use the five-second fragment, including a fresh quote after activation',async()=>{
- const f=await fixture();f.records.get(videoId).durationSeconds=5.976;assert.equal((await f.post('/api/generation-quotes',selection)).status,400);assert.equal(f.calls().reserve,0);assert.equal(f.calls().queue,0);
+ for(const seconds of [5.011,5.976]){const f=await fixture();f.records.get(videoId).durationSeconds=seconds;assert.equal((await f.post('/api/generation-quotes',selection)).status,400);assert.equal(f.calls().reserve,0);assert.equal(f.calls().queue,0);}
  const g=await fixture();await g.post('/api/generation-quotes',selection);g.quote().durationSeconds=6;assert.equal((await g.post('/api/generations',confirm)).status,409);assert.equal(g.calls().reserve,0);
 });
 test('changed inline bytes, wrong identity and URL fallback fail before dispatch and release only once',async()=>{

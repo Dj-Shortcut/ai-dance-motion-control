@@ -17,3 +17,15 @@ test('three-second minimum is checked from encoded frames, never rounded up from
   await assert.rejects(prepare(89));assert.equal((await prepare(90)).durationSeconds,3);const x=await prepare(91);assert.ok(x.durationSeconds>=91/30&&x.durationSeconds<=91/30+0.001);assert.equal(Math.ceil(x.durationSeconds),4);
  }finally{await rm(dir,{recursive:true,force:true})}
 });
+test('real encoded five-second inputs retain their measured price boundary instead of rounding an overrun down',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'rig-five-second-bounds-'));try{
+  for(const count of [149,150,151]){
+   const file=join(dir,`frames-${count}.mp4`);await run('ffmpeg',['-hide_banner','-v','error','-stream_loop','-1','-i',source,'-vf','fps=30','-frames:v',String(count),'-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',file]);const bytes=await readFile(file),requests=[];
+   const binding={input(){return {transform(){return {output(options){requests.push(options);return {response:async()=>new Response(bytes,{headers:{'content-type':'video/mp4'}})}}}}}}};
+   const prepared=createVideoPreparer(binding)({input:new Uint8Array(32),mime:'video/mp4',durationSeconds:5,startSeconds:2.345,keepSound:false});
+   if(count===151)await assert.rejects(prepared,error=>error.message==='Unverified transformed video'&&error.rigMediaSettled===true);
+   else{const result=await prepared;assert.ok(result.durationSeconds>=count/30&&result.durationSeconds<=count/30+0.001);assert.equal(Math.ceil(result.durationSeconds),5);assert.deepEqual(Buffer.from(result.bytes),bytes);}
+   assert.deepEqual(requests,[{mode:'video',time:'2.345s',duration:'4.94s',audio:false}]);
+  }
+ }finally{await rm(dir,{recursive:true,force:true});}
+});

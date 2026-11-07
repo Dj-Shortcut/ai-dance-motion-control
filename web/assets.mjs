@@ -97,7 +97,7 @@ export function createAssets(o){
    let url,inline=false;
    if(context?.model==='fal-ai/kling-video/o3/standard/video-to-video/edit'){
     if(o.inlineO3Owner===user){
-     if(!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||kind==='video'&&(!Number.isFinite(duration)||duration<4.9||duration>5.1))throw Error('Inline media unavailable');
+     if(!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||kind==='video'&&(!Number.isFinite(duration)||duration<4.9||duration>5))throw Error('Inline media unavailable');
      url=encodeInlineInput({bytes,kind});inline=true;
     }else if(o.r2Inputs){
      // A private, metadata-free delivery copy has its own opaque filename.

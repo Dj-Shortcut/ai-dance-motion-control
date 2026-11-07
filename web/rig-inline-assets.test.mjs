@@ -30,7 +30,7 @@ test('only opted-in owner O3 delivery encodes exact private owned bytes after co
 test('owner, quoted digest, bounded five-second video and job context cannot be bypassed or fall back',async()=>{
  const f=await fixture();assert.equal(await f.assets.uploadOwned(other,imageId,f.data.get(imageId).sha256,{jobId,model}),null);await assert.rejects(f.assets.uploadOwned(owner,imageId,'0'.repeat(64),{jobId,model}),/asset changed/);
  for(const badJob of [undefined,'not-a-job',jobId.toUpperCase()+'X'])await assert.rejects(f.assets.uploadOwned(owner,imageId,f.data.get(imageId).sha256,{jobId:badJob,model}));
- for(const duration of [4.899,5.101,6]){const v=await fixture({duration});await assert.rejects(v.assets.uploadOwned(owner,videoId,v.data.get(videoId).sha256,{jobId,model}),/Inline media unavailable/);assert.deepEqual(v.counts(),{copies:0,signReads:0,providerCalls:0});}
+ for(const duration of [4.899,5.001,5.101,6]){const v=await fixture({duration});await assert.rejects(v.assets.uploadOwned(owner,videoId,v.data.get(videoId).sha256,{jobId,model}),/Inline media unavailable/);assert.deepEqual(v.counts(),{copies:0,signReads:0,providerCalls:0});}
  const large=await fixture({oversized:true});await assert.rejects(large.assets.uploadOwned(owner,videoId,large.data.get(videoId).sha256,{jobId,model}),/Inline media unavailable/);assert.deepEqual(large.counts(),{copies:0,signReads:0,providerCalls:0});assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:0});
 });
 test('an unconfigured owner keeps the R2 path and motion keeps the existing Fal path',async()=>{

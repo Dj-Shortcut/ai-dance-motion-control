@@ -31,7 +31,10 @@ export async function transformAndVerifyVideo({media,input,mime,durationSeconds,
  // Browser uploads default to an already-trimmed clip. Authenticated file
  // uploads may select a bounded source offset; output is independently checked.
  const raw=new ReadableStream({start(c){c.enqueue(input);c.close()}});
- const requestedDuration=durationSeconds===3?'3.08s':`${durationSeconds}s`;
+ // Leave a short encoding margin below an integer billing boundary. Frame
+ // timing and an initial empty edit can otherwise turn a selected 5s into
+ // 5.01s. Keep the verified measured duration; never round it down for price.
+ const requestedDuration=durationSeconds===3?'3.08s':`${(durationSeconds-0.06).toFixed(2)}s`;
  const task=media.input(raw).transform({width:1280,height:1280,fit:'scale-down'}).output({mode:'video',time:`${startSeconds}s`,duration:requestedDuration,audio:keepSound}).response();
  const response=await raceDeadline(task,signal);expired(signal);
  const bytes=await boundedBody(response,signal);
@@ -39,7 +42,7 @@ export async function transformAndVerifyVideo({media,input,mime,durationSeconds,
  // transform has settled. An aborted inspection remains uncertain.
  try {
   const metadata=await raceDeadline(inspect(bytes,{signal}),signal);expired(signal);
-  if(!metadata||metadata.mime!=='video/mp4'||metadata.codec!=='h264'||!Number.isInteger(metadata.width)||!Number.isInteger(metadata.height)||metadata.width<340||metadata.height<340||metadata.width>1280||metadata.height>1280||!Number.isFinite(metadata.fps)||metadata.fps<20||metadata.fps>60||!Number.isInteger(metadata.frameCount)||!Number.isFinite(metadata.sampleDurationSeconds)||!Number.isFinite(metadata.durationSeconds)||Math.abs(metadata.frameCount/metadata.fps-metadata.sampleDurationSeconds)>0.000001||metadata.durationSeconds<metadata.sampleDurationSeconds||metadata.durationSeconds-metadata.sampleDurationSeconds>0.251001||metadata.durationSeconds<3||metadata.durationSeconds>30||Math.abs(metadata.durationSeconds-durationSeconds)>0.1||typeof metadata.hasAudio!=='boolean'||(!keepSound&&metadata.hasAudio))throw Error('Unverified transformed video');
+  if(!metadata||metadata.mime!=='video/mp4'||metadata.codec!=='h264'||!Number.isInteger(metadata.width)||!Number.isInteger(metadata.height)||metadata.width<340||metadata.height<340||metadata.width>1280||metadata.height>1280||!Number.isFinite(metadata.fps)||metadata.fps<20||metadata.fps>60||!Number.isInteger(metadata.frameCount)||!Number.isFinite(metadata.sampleDurationSeconds)||!Number.isFinite(metadata.durationSeconds)||Math.abs(metadata.frameCount/metadata.fps-metadata.sampleDurationSeconds)>0.000001||metadata.durationSeconds<metadata.sampleDurationSeconds||metadata.durationSeconds-metadata.sampleDurationSeconds>0.251001||metadata.durationSeconds<3||metadata.durationSeconds>30||Math.abs(metadata.durationSeconds-durationSeconds)>0.1||(durationSeconds>3&&metadata.durationSeconds>durationSeconds)||typeof metadata.hasAudio!=='boolean'||(!keepSound&&metadata.hasAudio))throw Error('Unverified transformed video');
   const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));expired(signal);
   return {bytes,mime:'video/mp4',sha256:Array.from(hash,x=>x.toString(16).padStart(2,'0')).join(''),width:metadata.width,height:metadata.height,fps:metadata.fps,durationSeconds:metadata.durationSeconds};
  } catch (error) {

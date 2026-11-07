@@ -23,7 +23,7 @@ function validPrepared(x,kind,id) { return !!x && x.verified===true && x.kind===
 function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.editStandard:s.pricing[quality]; }
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
-const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5.1;
+const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
 function editPrompt(prompt) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${prompt}`; }
 function configured(s) {
   if (s?.mode !== 'test') return false; // live billing/settlement is not ready
