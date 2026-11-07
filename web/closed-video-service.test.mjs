@@ -31,7 +31,7 @@ test('enabling R2 without complete credentials closes the service instead of fal
  }
  assert.equal(forbiddenCalls,0);
 });
-test('O3 composition requires operator enablement and a price, then reserves the exact verified edit quote once',async()=>{
+for(const inline of [false,true])test(`O3 ${inline?'inline':'gateway'} composition requires operator enablement and a price, then reserves the exact verified edit quote once`,async()=>{
  const dir=await mkdtemp(join(process.cwd(),'.closed-video-edit-'));let mf;try{
   const path=join(dir,'five.mp4');await promisify(execFile)('ffmpeg',['-hide_banner','-v','error','-f','lavfi','-i','color=c=blue:s=1280x720:r=30:d=5','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',path]);
   for(const [input,out] of [['closed-video-test-fixture.mjs','main.mjs'],['cloud-media-workerd-fixture.mjs','media.mjs']])await build({entryPoints:[input],outfile:join(dir,out),bundle:true,format:'esm',platform:'browser',logLevel:'silent',loader:{'.mp4':'base64'}});
@@ -42,7 +42,7 @@ test('O3 composition requires operator enablement and a price, then reserves the
   const imageId=await upload('image',await readFile('test/fixtures/input.jpg')),videoId=await upload('video',await readFile(path)),selection={imageId,videoId,quality:'edit-standard',keepSound:false,prompt:'Use the dog in @Image1.'};
   assert.equal((await json(mf,'alice','/api/generation-quotes',selection)).status,503);await mf.dispose();
   mf=create({RIG_EDIT_ENABLED:'yes'});assert.equal((await json(mf,'alice','/api/generation-quotes',selection)).status,503);await mf.dispose();
-  mf=create({RIG_EDIT_ENABLED:'yes',RIG_PRICE_EDIT:'20'});db=await mf.getD1Database('DB','main');
+  mf=create({RIG_EDIT_ENABLED:'yes',RIG_PRICE_EDIT:'20',...(inline?{RIG_O3_INLINE_INPUTS_ENABLED:'yes',RIG_VIDEO_OWNER_USER_ID:'alice'}:{})});db=await mf.getD1Database('DB','main');
   let r=await json(mf,'alice','/api/generation-quotes',selection);assert.equal(r.status,201,await r.clone().text());const quote=await r.json();assert.equal(quote.priceCents,100);assert.equal(quote.durationSeconds,5);assert.equal(quote.providerEstimateUsdMicros,700000);
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_fixture_fal_dispatch').first()).n,0);assert.equal((await db.prepare('SELECT SUM(delta) n FROM rig_ledger WHERE user_id=?').bind('alice').first()).n,500);
   const spare=await (await json(mf,'alice','/api/generation-quotes',selection)).json(),request={quoteId:quote.id,idempotencyKey:'edit-attempt'};

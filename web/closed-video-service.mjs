@@ -66,8 +66,9 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
  try{const state=await env.DB.prepare('SELECT mode FROM rig_payment_environment WHERE id=1').first();if(state?.mode!=='test')return unavailable;}catch{return unavailable;}
  const r2Inputs=env.RIG_R2_INPUTS_ENABLED==='yes'?r2InputsConfig(env):null;
  if(env.RIG_R2_INPUTS_ENABLED==='yes'&&!r2Inputs)return unavailable;
+ const inlineO3Owner=env.RIG_O3_INLINE_INPUTS_ENABLED==='yes'&&accessMode==='owner'&&trustedUserId===env.RIG_VIDEO_OWNER_USER_ID?trustedUserId:undefined;
  const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env)}));
- const makeAssets=()=>createAssets({mode:'test',origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
+ const makeAssets=()=>createAssets({mode:'test',origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
  const router=createRouter({identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
   const stores=createD1GenerationStores(env.DB,{mode:'test',dispatchMode:accessMode});
   if(accessMode==='sponsored'){
@@ -95,7 +96,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
     return result;
    };
   }
-  return {...stores,inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode})};
+  return {...stores,inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode})};
  },generationFactory:s=>createGenerationHandler(s,transport)});
  return async req=>{
   const p=new URL(req.url).pathname;

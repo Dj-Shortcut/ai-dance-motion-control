@@ -1,6 +1,7 @@
 import {providerJSON,providerInputValidation} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
 import {isR2InputUrl} from './rig-r2-inputs.mjs';
+import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -22,6 +23,7 @@ function validPrepared(x,kind,id) { return !!x && x.verified===true && x.kind===
 function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.editStandard:s.pricing[quality]; }
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
+const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5.1;
 function editPrompt(prompt) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${prompt}`; }
 function configured(s) {
   if (s?.mode !== 'test') return false; // live billing/settlement is not ready
@@ -97,6 +99,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       // not from a browser, file name or untrusted user-provided metadata.
       if (video.durationVerified!==true || !Number.isFinite(video.durationSeconds) || video.durationSeconds<3 || video.durationSeconds>30) return fail('De videoduur kon niet veilig worden vastgesteld.',400);
       if (data.quality==='edit-standard' && !validEditVideo(video)) return fail('Kies voor deze videobewerking 3 tot 15 seconden, minstens 720 pixels breed en hoog, met 23 tot 60 beelden per seconde.',400);
+      if (data.quality==='edit-standard' && services.inlineO3Owner===user.id && !inlineFiveSeconds(video.durationSeconds)) return fail('Kies voor deze privéproef een fragment van 5 seconden.',400);
       const cents=Math.ceil(video.durationSeconds)*configuredRate(services,data.quality);
       if (!Number.isSafeInteger(cents) || cents<=0) return fail('Prijs is niet beschikbaar.',503);
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:video.durationSeconds,priceCents:cents}))return fail(services.trialGuard.limitMessage||'Deze video past niet binnen het beschikbare testbudget.',400);
@@ -118,6 +121,8 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let quote; try {quote=await services.quotes.getOwned(user.id,data.quoteId);} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || quote.userId!==user.id || !Object.values(MODEL).includes(quote.model) || !Number.isSafeInteger(quote.priceCents) || quote.priceCents<=0 || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now() || !quote.input || !inputData(quote.input.data) || !Array.isArray(quote.input.refs) || quote.input.refs.length<2 || quote.input.refs.length>6) return fail('Prijsopgave is niet geldig of verlopen.',409);
       if (quote.model!==MODEL[quote.input.data.quality] || !qualityEnabled(services,quote.input.data.quality)) return fail('Dit videomodel is niet beschikbaar. Vraag opnieuw de prijs op.',409);
+      const inlineEdit=quote.model===MODEL['edit-standard']&&services.inlineO3Owner===user.id;
+      if(inlineEdit&&!inlineFiveSeconds(quote.durationSeconds))return fail('Kies voor deze privéproef 5 seconden en vraag de prijs opnieuw op.',409);
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
       if(quote.input.data.quality!=='edit-standard'){
         const imageRef=quote.input.refs[0];
@@ -133,7 +138,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if (!started.job || !ID.test(started.job.id??'')) return fail('Aanvraagstatus is onzeker.',503);
       if (started.kind==='existing') return respond(publicJob(started.job));
       const jobId=started.job.id;
-      let providerInput;
+      let providerInput,providerBody;
       try {
         if(services.trialGuard){const estimate=quote.input.providerEstimateUsdMicros;if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Missing confirmed provider estimate');const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);if(current>estimate)throw Error('Provider price increased');}
         if(services.trialGuard && !await services.trialGuard.claimOnce({userId:user.id,jobId,quote}))throw Error('Trial allowance unavailable');
@@ -144,14 +149,16 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if(refs.length!==ids.length || typeof quote.input.prompt!=='string' || quote.input.prompt.length>2500)throw Error('invalid quote');
         if(selected.quality==='edit-standard'){
           const verified=await services.assets.getOwned(user.id,selected.videoId);
-          if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validEditVideo(verified))throw Error('Invalid prepared edit video');
+          if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validEditVideo(verified)||inlineEdit&&!inlineFiveSeconds(verified.durationSeconds))throw Error('Invalid prepared edit video');
         }
         const uploaded=[];
         for(let i=0;i<refs.length;i++){
           const kind=i===1?'video':'image', ref=refs[i];
           if(!ref||ref.id!==ids[i]||ref.kind!==kind||!/^[a-f0-9]{64}$/.test(ref.sha256??''))throw Error('invalid reference');
           const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,selected.quality==='edit-standard'?{jobId,model:quote.model}:undefined);
-          if(selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&(services.inputR2Config?isR2InputUrl(asset.url,{config:services.inputR2Config,kind}):isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind))) : !validAsset(asset,kind))throw Error('invalid uploaded asset');
+          if(inlineEdit){
+            if(asset?.id!==ref.id||asset.sha256!==ref.sha256||!await validateInlineInput(asset,{kind,sha256:ref.sha256}))throw Error('Invalid inline input');
+          }else if(asset?.inline===true|| (selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&(services.inputR2Config?isR2InputUrl(asset.url,{config:services.inputR2Config,kind}):isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind))) : !validAsset(asset,kind)))throw Error('invalid uploaded asset');
           uploaded.push(asset);
         }
         const [image,video,...rest]=uploaded;
@@ -162,6 +169,11 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
           if(selected.faceId){providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];if(!providerInput.prompt.includes('@Element1'))providerInput.prompt+=' The person is @Element1.';}
         }
+        // Inline bytes stay only in this authenticated server-to-provider body.
+        // Bound the complete encoding before the atomic dispatch decision; no
+        // fallback upload, public link or paid retry is permitted on overflow.
+        providerBody=JSON.stringify(providerInput);
+        if(inlineEdit&&new TextEncoder().encode(providerBody).byteLength>INLINE_REQUEST_MAX_BYTES)throw Error('Inline request too large');
       } catch {
         // No generation request has been sent yet. Release once, transactionally.
         try {
@@ -185,7 +197,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       }
       try {
         const signal=AbortSignal.timeout(30000);
-        const r=await fetchImpl(`${QUEUE}/${quote.model}`,{method:'POST',redirect:'manual',signal,headers:{Authorization:`Key ${services.falKey}`,'Content-Type':'application/json','X-Fal-No-Retry':'1','X-Fal-Request-Start-Timeout':'300','x-app-fal-disable-fallback':'true','X-Fal-Store-IO':'0','X-Fal-Object-Lifecycle-Preference':'{"expiration_duration_seconds":86400,"initial_acl":{"default":"forbid","rules":[]}}'},body:JSON.stringify(providerInput)});
+        const r=await fetchImpl(`${QUEUE}/${quote.model}`,{method:'POST',redirect:'manual',signal,headers:{Authorization:`Key ${services.falKey}`,'Content-Type':'application/json','X-Fal-No-Retry':'1','X-Fal-Request-Start-Timeout':'300','x-app-fal-disable-fallback':'true','X-Fal-Store-IO':'0','X-Fal-Object-Lifecycle-Preference':'{"expiration_duration_seconds":86400,"initial_acl":{"default":"forbid","rules":[]}}'},body:providerBody});
         if (!r.ok) throw Error('ambiguous');
         const result=await providerJSON(r,{signal}); if (!REQ_ID.test(result.request_id??'')) throw Error('ambiguous');
         await services.jobs.markSubmitted(user.id,jobId,result.request_id);

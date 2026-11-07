@@ -3,6 +3,7 @@
 import { uploadVerifiedAsset } from './upload.mjs';
 import {mintProviderInput,verifyProviderInput} from './rig-provider-inputs.mjs';
 import {mintR2Input,verifyR2Input} from './rig-r2-inputs.mjs';
+import {encodeInlineInput} from './rig-inline-inputs.mjs';
 const BASE='https://rig-media.internal';
 const MAX=16*1024*1024; // deliberate Worker memory bound; deployment needs global concurrency budget
 const USER=/^[a-zA-Z0-9_-]{1,100}$/;
@@ -93,9 +94,12 @@ export function createAssets(o){
    if(!upload)return {id,kind,verified:true,sha256:sha,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
    // Do not expose URLs or credentials in user-facing responses; upload is made
    // only after authenticated ownership and digest checks on exact held bytes.
-   let url;
+   let url,inline=false;
    if(context?.model==='fal-ai/kling-video/o3/standard/video-to-video/edit'){
-    if(o.r2Inputs){
+    if(o.inlineO3Owner===user){
+     if(!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||kind==='video'&&(!Number.isFinite(duration)||duration<4.9||duration>5.1))throw Error('Inline media unavailable');
+     url=encodeInlineInput({bytes,kind});inline=true;
+    }else if(o.r2Inputs){
      // A private, metadata-free delivery copy has its own opaque filename.
      // Its short-lived S3 URL avoids the browser checks on workers.dev.
      const response=await o.media.fetch(createMediaRequest(o,`/v1/provider-inputs/${id}`,user,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json'},body:JSON.stringify({jobId:context.jobId,sha256:sha})}));
@@ -109,7 +113,7 @@ export function createAssets(o){
      await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
     }
    }else url=await uploadVerifiedAsset({asset:{verified:true,mime,size,body:new Blob([bytes],{type:mime})},key:o.falKey,fetchImpl:o.providerFetch||fetch});
-   return {kind,verified:true,url,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
+   return {kind,verified:true,url,width,height,...(inline?{inline:true,id,sha256:sha,size}:{}),...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
  }
  async function handle(req){
    if(req.method!=='POST'||new URL(req.url).pathname!==(o.ephemeral===true?'/api/media/test':'/api/assets'))return null;
