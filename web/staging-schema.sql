@@ -1,0 +1,1 @@
+CREATE TABLE rig_staging_lease(id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,expires_at INTEGER NOT NULL);

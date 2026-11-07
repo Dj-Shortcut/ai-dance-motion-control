@@ -1,0 +1,103 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {JSDOM} from 'jsdom';
+
+const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8');
+const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
+function fixture(){
+ const dom=new JSDOM(html,{url:'https://rig.example/multiuser/',runScripts:'outside-only'}),win=dom.window,doc=win.document;
+ const byId=id=>doc.getElementById(id),prepared=[];
+ win.URL.createObjectURL=()=>`blob:fixture-${Math.random()}`;win.URL.revokeObjectURL=()=>{};
+ win.requestAnimationFrame=()=>1;win.cancelAnimationFrame=()=>{};
+ for(const dialog of doc.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true};dialog.close=function(){this.open=false}}
+ for(const video of doc.querySelectorAll('video')){
+  for(const [name,value] of Object.entries({duration:60,currentTime:0,paused:true,readyState:2,videoWidth:640,videoHeight:480}))Object.defineProperty(video,name,{configurable:true,writable:true,value});
+  video.pause=()=>{video.paused=true};video.play=async()=>{video.paused=false;video.dispatchEvent(new win.Event('play'))};
+ }
+ win.Image=class{constructor(){this.naturalWidth=640;this.naturalHeight=480}set src(value){this.onload()}};
+ win.rigVideoEnabled=true;win.rigSessionActive=()=>true;
+ win.rigMedia={bounds:crop=>crop,dimensions:()=>({width:640,height:480}),paint(){},prepareImage:async()=>({blob:new win.Blob(['image'],{type:'image/jpeg'})}),
+  prepareVideo:async(video,crop,start,duration)=>{const result={blob:new win.Blob(['video'],{type:'video/mp4'}),start,duration};prepared.push(result);return result},
+ };
+ win.eval(app);
+ const change=(id,value)=>{byId(id).value=value;byId(id).dispatchEvent(new win.Event('change',{bubbles:true}))};
+ const loadMotion=duration=>{
+  const input=byId('motionInput'),video=byId('motionVideo');
+  Object.defineProperty(input,'files',{configurable:true,value:[new win.File(['motion'],'motion.mp4',{type:'video/mp4'})]});
+  input.dispatchEvent(new win.Event('change',{bubbles:true}));video.duration=duration;video.currentTime=0;video.dispatchEvent(new win.Event('loadedmetadata'));
+ };
+ const loadPerson=()=>{
+  const input=byId('personInput');Object.defineProperty(input,'files',{configurable:true,value:[new win.File(['person'],'person.jpg',{type:'image/jpeg'})]});
+  input.dispatchEvent(new win.Event('change',{bubbles:true}));
+ };
+ const prepare=()=>{byId('prepare').click();if(byId('briefDialog').open)byId('confirmBrief').click();};
+ return {dom,win,doc,byId,change,loadMotion,loadPerson,prepare,prepared,close:()=>win.close()};
+}
+const waitFor=async check=>{for(let i=0;i<100;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,1))}throw Error('Trim UI did not settle')};
+
+test('HTML starts at 3 seconds; a new source defaults to its full integer duration up to 30 seconds',()=>{
+ const f=fixture();try{
+  assert.equal(f.byId('duration').value,'3');assert.equal(f.byId('duration').max,'30');assert.match(f.byId('trialDurationNote').textContent,/3–30 s/);
+  for(const [source,expected] of [[3,3],[3.9,3],[9.8,9],[30,30],[45.25,30]]){
+   f.loadMotion(source);
+   assert.equal(f.byId('duration').value,String(expected));assert.equal(f.byId('duration').max,String(expected));
+   assert.equal(f.byId('start').value,'0');assert.equal(f.byId('start').max,String(Math.floor((source-expected)*10+1e-7)/10));
+   assert.equal(f.byId('motionSeek').max,String(source),'preview seek range covers the full source');
+  }
+ }finally{f.close()}
+});
+
+test('the chosen duration and start survive preview events and repeated metadata for the same source',()=>{
+ const f=fixture();try{
+  f.loadMotion(60);f.change('duration','12');f.change('start','20.5');
+  const video=f.byId('motionVideo');video.currentTime=49;video.paused=false;
+  for(const event of ['timeupdate','seeked','pause','loadeddata','loadedmetadata'])video.dispatchEvent(new f.win.Event(event));
+  assert.equal(f.byId('duration').value,'12');assert.equal(f.byId('start').value,'20.5');
+  assert.equal(video.currentTime,49);assert.equal(video.paused,false);assert.equal(f.byId('motionSeek').value,'49');
+  f.loadMotion(8.8);assert.equal(f.byId('duration').value,'8');assert.equal(f.byId('start').value,'0');
+ }finally{f.close()}
+});
+
+test('duration changes clamp only a start that would place the selected fragment beyond the source',()=>{
+ const f=fixture();try{
+  f.loadMotion(60);f.change('duration','8');f.change('start','45');
+  f.change('duration','12');assert.equal(f.byId('start').value,'45');assert.equal(f.byId('start').max,'48');
+  f.change('duration','30');assert.equal(f.byId('duration').value,'30');assert.equal(f.byId('start').value,'30');
+  f.byId('motionVideo').currentTime=58.9;f.byId('useCurrentStart').click();
+  assert.equal(f.byId('start').value,'30');assert.equal(f.byId('motionVideo').currentTime,30);
+  f.change('duration','3');f.change('start','12');assert.equal(f.byId('start').value,'12');
+  f.change('duration','31');assert.match(f.byId('duration').validationMessage,/3 tot 30/);assert.equal(f.byId('start').value,'12');
+  f.change('duration','2');assert.match(f.byId('duration').validationMessage,/3 tot 30/);
+  f.change('duration','3');assert.equal(f.byId('duration').validationMessage,'');
+ }finally{f.close()}
+});
+
+test('cropped and uncropped previews continue through the whole source beyond the selected fragment',()=>{
+ const f=fixture();try{
+  f.loadMotion(60);f.change('duration','3');f.change('start','2');
+  const video=f.byId('motionVideo');
+  f.byId('motionCropButton').click();f.byId('cropX').value='10';f.byId('cropW').value='80';f.byId('applyCrop').click();
+  assert.equal(f.byId('motionCropped').hidden,false);assert.equal(video.hidden,true);
+  for(const time of [5.1,30,59.5]){video.currentTime=time;video.paused=false;video.dispatchEvent(new f.win.Event('timeupdate'));assert.equal(video.currentTime,time);assert.equal(video.paused,false)}
+  assert.equal(f.byId('motionSeek').max,'60');assert.equal(f.byId('motionSeek').value,'59.5');
+  f.byId('motionCropButton').click();f.byId('resetCrop').click();f.byId('applyCrop').click();
+  assert.equal(f.byId('motionCropped').hidden,true);assert.equal(video.hidden,false);
+  video.currentTime=59.8;video.paused=false;video.dispatchEvent(new f.win.Event('timeupdate'));
+  assert.equal(video.currentTime,59.8);assert.equal(video.paused,false);assert.equal(f.byId('duration').value,'3');assert.equal(f.byId('start').value,'2');
+ }finally{f.close()}
+});
+
+test('preparation accepts the selected 30 seconds and rejects values outside the source or 3–30 second range',async()=>{
+ const f=fixture();try{
+  f.loadPerson();f.loadMotion(60);f.byId('editPrompt').value='Maak een dansvideo.';f.byId('editPrompt').dispatchEvent(new f.win.Event('input'));
+  for(const duration of ['2','31','3.5']){
+   f.change('duration',duration);f.prepare();await waitFor(()=>f.byId('status').textContent.includes('3 tot 30'));
+   assert.equal(f.prepared.length,0);
+  }
+  f.change('duration','30');f.change('start','9.5');f.prepare();await waitFor(()=>f.win.rigPreparedMedia()!==null);
+  assert.equal(f.prepared.length,1);assert.equal(f.prepared[0].duration,30);assert.equal(f.prepared[0].start,9.5);
+  f.loadMotion(8.9);f.change('duration','9');f.prepare();await waitFor(()=>f.byId('status').textContent.includes('3 tot 30'));
+  assert.equal(f.prepared.length,1,'a fragment longer than the source maximum is not prepared');
+ }finally{f.close()}
+});
