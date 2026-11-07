@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import {mintProviderInput,mintProofProviderInput,handleProviderInput,isProviderInputUrl,verifyProviderInput} from './rig-provider-inputs.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const origin='https://gateway.example', secret='x'.repeat(40),job='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',image='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',video='cccccccc-cccc-4ccc-8ccc-cccccccccccc',user='u-owner';
 const hash=async b=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',b)),x=>x.toString(16).padStart(2,'0')).join('');
 const bytes=new TextEncoder().encode('test image bytes');
@@ -25,7 +24,7 @@ test('real D1 checks funding, ownership, hashes, status, HEAD and single byte ra
  const sha=await hash(bytes),vsha='b'.repeat(64);
  const bundle=await build({stdin:{contents:"import {handleProviderInput} from './rig-provider-inputs.mjs';export default {fetch:(req,env)=>handleProviderInput(req,env,{verifyTenant:async()=>true})}",resolveDir:process.cwd(),sourcefile:'gateway-fixture.mjs'},bundle:true,format:'esm',platform:'browser',write:false,logLevel:'silent'});
  const media=`export default {fetch(req){if(req.headers.get('X-Rig-User')!=='${user}'||req.headers.get('authorization')!=='Bearer ${secret}')return new Response(null,{status:403});return new Response('test image bytes',{headers:{'content-type':'image/jpeg','content-length':'16','x-rig-asset-kind':'image','x-rig-sha256':'${sha}'}})}}`;
- const mf=new Miniflare({workers:[{name:'gateway',modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-01-01',bindings:{RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test'},d1Databases:{DB:'gateway'},serviceBindings:{RIG_MEDIA:'media'}},{name:'media',modules:true,script:media,compatibilityDate:'2026-01-01'}]});
+ const mf=new Miniflare({cf:false,workers:[{name:'gateway',modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-01-01',bindings:{RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test'},d1Databases:{DB:'gateway'},serviceBindings:{RIG_MEDIA:'media'}},{name:'media',modules:true,script:media,compatibilityDate:'2026-01-01'}]});
  try{
   const db=await mf.getD1Database('DB','gateway');
   for(const f of ['schema.sql','generation-schema.sql'])for(const s of (await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();

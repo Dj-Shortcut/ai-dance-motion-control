@@ -1,4 +1,4 @@
-// Closed, single-attempt test composition. Not routed or deployed by this module.
+// Closed, ledger-funded test composition. Not routed or deployed by this module.
 // The caller must authenticate the subject and provide an actual shared media
 // lease; client identity headers must never be passed as trustedUserId.
 import {createAssets} from './assets.mjs';
@@ -21,10 +21,13 @@ function valid(env){
 // never followed: particularly important for Authorization and signed URLs.
 function providerTransport(fetcher){return async(input,init={})=>{const u=new URL(String(input));if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||!['fal.ai','fal.run','fal.media'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d))||init.redirect!=='manual')throw Error('Untrusted provider endpoint');const r=await fetcher(input,init);if(r.status>=300&&r.status<400)throw Error('Provider redirect refused');return r;};}
 function guard(env,priceFetch,{trustedUserId,accessMode}){return {
- limitMessage:accessMode==='sponsored'?'Je gratis testtegoed is hiervoor niet voldoende. Kies een kortere video of Standaard.':'Deze video past niet binnen het beschikbare testbudget.',
+ limitMessage:accessMode==='sponsored'?'Je gratis testtegoed is hiervoor niet voldoende. Kies een kortere video of Standaard.':'Je beschikbare RIG-tegoed is hiervoor niet voldoende of je account wordt gecontroleerd.',
  async permits({durationSeconds,priceCents}){
   if(!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>30||!Number.isSafeInteger(priceCents)||priceCents<=0||priceCents>+env.RIG_CLOSED_VIDEO_MAX_CENTS)return false;
-  if(accessMode!=='sponsored')return true;
+  if(accessMode!=='sponsored'){
+   const row=await env.DB.prepare('SELECT COALESCE(SUM(delta),0) AS cents,NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS unfrozen FROM rig_ledger WHERE user_id=?').bind(trustedUserId,trustedUserId).first();
+   return row?.unfrozen===1&&Number.isSafeInteger(row.cents)&&row.cents>=priceCents;
+  }
   try{const state=await createSponsoredInvitationStore(env.DB).eligibility(trustedUserId);return state.state==='eligible'&&state.remainingCents>=priceCents}catch{return false}
  },
  async estimate(quality,durationSeconds){if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env)))||!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>(quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY),rate=p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
@@ -35,7 +38,24 @@ function guard(env,priceFetch,{trustedUserId,accessMode}){return {
    const reservation=await createSponsoredInvitationStore(env.DB).reserveForJob(userId,jobId);
    return reservation.state==='reserved'&&reservation.amountCents===quote.priceCents;
   }
-  const row=await env.DB.prepare('INSERT INTO rig_rate_limits(bucket,window_start,requests) VALUES(?,?,1) ON CONFLICT(bucket) DO NOTHING RETURNING bucket').bind('rig-closed-video-global-one-attempt-v1',Date.now()).first();return row?.bucket==='rig-closed-video-global-one-attempt-v1';
+  if(!id.test(jobId||'')||!id.test(quote.id||'')||quote.userId!==userId||typeof quote.model!=='string'||typeof quote.pricingVersion!=='string'||!Number.isFinite(quote.durationSeconds))return false;
+  // Each explicitly confirmed owner request spends its existing ledger funds.
+  // Historical global trial markers are deliberately irrelevant. This check
+  // requires the exact reserved job; authorizeDispatch supplies the subsequent
+  // atomic, one-time decision immediately before the provider queue request.
+  const row=await env.DB.prepare(`SELECT 1 AS authorized FROM rig_generation_jobs j
+   JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
+   WHERE j.id=? AND j.user_id=? AND q.id=? AND q.model=? AND q.price_cents=?
+    AND q.price_cents=j.price_cents AND q.pricing_version=? AND q.duration_seconds=? AND q.expires_at>?
+    AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL
+    AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='test')
+    AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id)
+    AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='reserve:'||j.id AND l.user_id=j.user_id AND l.order_id IS NULL AND l.delta=-j.price_cents)
+    AND NOT EXISTS(SELECT 1 FROM rig_ledger WHERE event_id IN ('release:'||j.id,'settle:'||j.id))
+    AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=j.user_id),0)>=0
+    AND NOT EXISTS(SELECT 1 FROM rig_generation_jobs active WHERE active.user_id=j.user_id AND active.id<>j.id AND active.state IN ('submitting','unknown','queued'))`)
+   .bind(jobId,userId,quote.id,quote.model,quote.priceCents,quote.pricingVersion,quote.durationSeconds,Date.now()).first();
+  return row?.authorized===1;
  }
 };}
 // lease.acquire/complete must be durable, shared and never expire automatically.
@@ -96,4 +116,4 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
  };
 }
-export const closedVideoTesting={valid,providerTransport};
+export const closedVideoTesting={valid,providerTransport,guard};

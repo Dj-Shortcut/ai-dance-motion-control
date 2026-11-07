@@ -1,4 +1,4 @@
-import encoded from './trial-fixtures/synthetic.mp4';
+import encoded from './test/fixtures/silent.mp4';
 // Isolated fal stand-in, bound directly as a private workerd service only.
 export default {async fetch(req,env){
  const u=new URL(req.url);

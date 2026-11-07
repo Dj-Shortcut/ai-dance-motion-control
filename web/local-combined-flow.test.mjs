@@ -2,12 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');
-const {Miniflare}=require('miniflare');
-const createWorker=(dir,enabled)=>new Miniflare({d1Persist:join(dir,'d1'),r2Persist:join(dir,'r2'),workers:[
+import {Miniflare} from 'miniflare';
+const createWorker=(dir,enabled)=>new Miniflare({cf:false,d1Persist:join(dir,'d1'),r2Persist:join(dir,'r2'),workers:[
  {name:'ingress',modules:true,scriptPath:join(dir,'ingress.mjs'),compatibilityDate:'2026-01-01',bindings:enabled?{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'}:{},serviceBindings:{PRIVATE_ROUTER:'private'}},
  {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:enabled?{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'}:{},d1Databases:{DB:'rig-video-fixture'},r2Buckets:{BUCKET:'rig-video-fixture'},serviceBindings:{MOCK_AUTH:'mock-auth',MOCK_FAL:'mock-fal',MOCK_MOLLIE:'mock-mollie'}},
  {name:'mock-auth',modules:true,scriptPath:join(dir,'mock-auth.mjs'),compatibilityDate:'2026-01-01'},
@@ -49,7 +47,7 @@ test('two users buy mock credits and generate private videos through local worke
   assert.equal((await (await send(mf,'a.b.c','/api/payments/balance')).json()).balance,500);
   assert.equal((await (await send(mf,'d.e.f','/api/payments/balance')).json()).balance,500);
   assert.equal((await send(mf,'d.e.f','/api/payments/orders/payment-alice-0001')).status,404);
-  const picture=await readFile('trial-fixtures/synthetic.jpg'),clip=await readFile('trial-fixtures/synthetic.mp4');
+  const picture=await readFile('test/fixtures/input.jpg'),clip=await readFile('test/fixtures/silent.mp4');
   let res=await send(mf,'a.b.c','/api/assets',{method:'POST',body:picture,headers:{'content-type':'image/jpeg','x-rig-asset-kind':'image'}});assert.equal(res.status,201,await res.clone().text());const imageId=(await res.json()).id;
   res=await send(mf,'a.b.c','/api/assets',{method:'POST',body:clip,headers:{'content-type':'video/mp4','x-rig-asset-kind':'video'}});assert.equal(res.status,201,await res.clone().text());const videoId=(await res.json()).id;
   const r2=await mf.getR2Bucket('BUCKET','private');assert.ok(await r2.get(`rig-fixture-inputs/${a}/${videoId}`));

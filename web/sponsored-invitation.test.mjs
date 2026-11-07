@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
 import {createD1GenerationStores} from './d1.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const alice='u-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',bob='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 async function fixture(){
- const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});
  const db=await mf.getD1Database('DB');
  for(const f of ['closed-payment-migrations/0001_test_baseline.sql','closed-payment-migrations/0005_sponsored_invitation.sql']){
   const sql=(await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'');for(const q of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(q).run();

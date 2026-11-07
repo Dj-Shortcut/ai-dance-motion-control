@@ -2,9 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const url='https://hooks.rig.local/api/payments/webhook';
 const vars={RIG_CLOSED_TEST_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_MODE:'test',RIG_MOLLIE_MODE:'test',MOLLIE_API_KEY:'test_fixture',RIG_MOLLIE_PROFILE_ID:'pfl_TESTPROFILE',RIG_TEST_ENVIRONMENT_ID:'closed-fixture',RIG_PUBLIC_ORIGIN:'https://rig.local',RIG_WEBHOOK_URL:url,RIG_PACKAGES:'[{"id":"test-5","amountCents":500,"credits":500}]',SUPABASE_URL:'https://abcdefghijklmnopqrst.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixturekey12345'};
 async function migrate(db,file){const sql=(await readFile(new URL(file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const q of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(q).run()}
@@ -12,7 +11,7 @@ test('private Worker and separate callback relay process an idempotent test paym
  const dir=await mkdtemp(join(process.cwd(),'.rig-callback-integration-'));let mf;
  try{
   for(const [input,output] of [['closed-cloudflare-fixture.mjs','private.mjs'],['closed-webhook-test-fixture.mjs','relay.mjs'],['local-mock-auth.mjs','auth.mjs'],['local-mock-mollie.mjs','mollie.mjs']])await build({entryPoints:[input],outfile:join(dir,output),bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
-  mf=new Miniflare({workers:[
+  mf=new Miniflare({cf:false,workers:[
    {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:vars,d1Databases:{DB:'closed-webhook-fixture'},serviceBindings:{MOCK_AUTH:'auth',MOCK_MOLLIE:'mollie'}},
    {name:'relay',modules:true,scriptPath:join(dir,'relay.mjs'),compatibilityDate:'2026-01-01',bindings:{LOCAL_FIXTURE:'yes'},serviceBindings:{RIG_STAGING_SERVICE:'private'}},
    {name:'auth',modules:true,scriptPath:join(dir,'auth.mjs'),compatibilityDate:'2026-01-01'},
@@ -44,7 +43,7 @@ test('wrong Mollie profile or mode on paid lookup cannot credit the test ledger'
  try{
   for(const [input,output] of [['closed-cloudflare-fixture.mjs','private.mjs'],['closed-webhook-test-fixture.mjs','relay.mjs'],['local-mock-auth.mjs','auth.mjs'],['local-mock-mollie.mjs','mollie.mjs']])await build({entryPoints:[input],outfile:join(dir,output),bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
   for(const flag of [{BAD_PAID_PROFILE:'yes'},{BAD_PAID_MODE:'yes'}]){
-   mf=new Miniflare({workers:[
+   mf=new Miniflare({cf:false,workers:[
     {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:vars,d1Databases:{DB:'closed-webhook-fixture'},serviceBindings:{MOCK_AUTH:'auth',MOCK_MOLLIE:'mollie'}},
     {name:'relay',modules:true,scriptPath:join(dir,'relay.mjs'),compatibilityDate:'2026-01-01',bindings:{LOCAL_FIXTURE:'yes'},serviceBindings:{RIG_STAGING_SERVICE:'private'}},
     {name:'auth',modules:true,scriptPath:join(dir,'auth.mjs'),compatibilityDate:'2026-01-01'},

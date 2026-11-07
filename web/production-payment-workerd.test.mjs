@@ -1,13 +1,13 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {readFile,mkdtemp,rm} from 'node:fs/promises';import {join} from 'node:path';import {createRequire} from 'node:module';import {build} from 'esbuild';
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');const {Miniflare}=require('miniflare');
+import {readFile,mkdtemp,rm} from 'node:fs/promises';import {join} from 'node:path';import {build} from 'esbuild';
+import {Miniflare} from 'miniflare';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',hook='https://hooks.example/api/payments/webhook';
 async function migrate(db){const sql=(await readFile(new URL('./production-schema.sql',import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const s of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run()}
 test('isolated actual D1 live composition: disabled tenant, create, verify, replay',async()=>{
  const dir=await mkdtemp(join(process.cwd(),'.rig-prod-test-'));let mf;
  try{
   await build({entryPoints:['production-payment-workerd-fixture.mjs'],outfile:join(dir,'entry.mjs'),bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
-  mf=new Miniflare({workers:[{name:'private',modules:true,scriptPath:join(dir,'entry.mjs'),compatibilityDate:'2026-01-01',d1Databases:{DB:'test-db',PRODUCTION_DB:'prod-db'}}]});
+  mf=new Miniflare({cf:false,workers:[{name:'private',modules:true,scriptPath:join(dir,'entry.mjs'),compatibilityDate:'2026-01-01',d1Databases:{DB:'test-db',PRODUCTION_DB:'prod-db'}}]});
   const db=await mf.getD1Database('PRODUCTION_DB'),other=await mf.getD1Database('DB');await migrate(db);
   const post=()=>mf.dispatchFetch(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'unit',requestId:'request-id-000001'})});
   assert.equal((await post()).status,503);

@@ -7,3 +7,14 @@ node_modules/
 *.png
 frames/
 .DS_Store
+.env.*
+!.env.example
+.wrangler/
+.build/
+dist/
+coverage/
+__pycache__/
+*.pyc
+*.log
+.rig-sites-build/
+*.app/

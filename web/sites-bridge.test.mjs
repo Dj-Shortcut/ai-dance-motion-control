@@ -1,17 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {signSitesBridgeRequest,SITE_HEADER_NAMES} from './sites-bridge-protocol.mjs';
 import {authenticateSitesBridge} from './sites-bridge-auth.mjs';
 import {createClosedVideoWorker} from './closed-video-worker.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
 import ingress from './sites-bridge-ingress.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const owner='u-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',origin='https://rig.local',producer='https://rig.example.chatgpt.site',bridgeOrigin='https://rig-bridge.example.workers.dev',project='https://abcdefghijklmnopqrst.supabase.co';
 async function fixture(){
- const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});const db=await mf.getD1Database('DB');
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});const db=await mf.getD1Database('DB');
  for(const name of ['0001_test_baseline.sql','0002_public_identity.sql','0003_closed_tenant.sql','0004_test_media_work_lock.sql','0005_sponsored_invitation.sql','0006_sites_bridge.sql','0007_chatgpt_approvals.sql']){const sql=(await readFile('closed-payment-migrations/'+name,'utf8')).replace(/^\s*--.*$/gm,'');for(const q of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(q).run()}
  await db.prepare('INSERT INTO rig_closed_test_tenant VALUES(1,?,?,?,?,?,?)').bind('site-test-1','test',origin,project,'','').run();
  await db.prepare('INSERT INTO rig_external_identities(issuer,subject,user_id) VALUES(?,?,?)').bind(project+'/auth/v1','owner',owner).run();

@@ -2,13 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');
-const {Miniflare}=require('miniflare');
+import {Miniflare} from 'miniflare';
 const bearer=token=>({authorization:`Bearer ${token}`});
-const createWorker=(dir,enabled)=>new Miniflare({d1Persist:join(dir,'d1'),r2Persist:join(dir,'r2'),workers:[
+const createWorker=(dir,enabled)=>new Miniflare({cf:false,d1Persist:join(dir,'d1'),r2Persist:join(dir,'r2'),workers:[
  {name:'ingress',modules:true,scriptPath:join(dir,'ingress.mjs'),compatibilityDate:'2026-01-01',bindings:enabled?{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'}:{},serviceBindings:{PRIVATE_ROUTER:'private'}},
  {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:enabled?{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'}:{},d1Databases:{DB:'rig-identity-fixture'},r2Buckets:{BUCKET:'rig-identity-fixture'},serviceBindings:{MOCK_AUTH:'mock-auth',MOCK_FAL:'mock-fal'}},
  {name:'mock-auth',modules:true,scriptPath:join(dir,'mock-auth.mjs'),compatibilityDate:'2026-01-01'},

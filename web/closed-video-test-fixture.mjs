@@ -2,7 +2,7 @@
 import {handleProviderInput} from './rig-provider-inputs.mjs';
 import {createClosedVideoService} from './closed-video-service.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
-import encoded from './trial-fixtures/synthetic.mp4';
+import encoded from './test/fixtures/silent.mp4';
 const bytes=Uint8Array.from(atob(encoded),x=>x.charCodeAt(0));
 export default {async fetch(req,env){
  if(env.LOCAL_FIXTURE!=='yes')return new Response(null,{status:503});

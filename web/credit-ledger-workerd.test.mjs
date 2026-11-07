@@ -2,12 +2,10 @@
 import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {createD1GenerationStores} from './d1.mjs';
 import {auditTestCreditLedger} from './credit-ledger-audit.mjs';
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');
-const {Miniflare}=require('miniflare');
-const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});
+import {Miniflare} from 'miniflare';
+const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});
 const db=await mf.getD1Database('DB');
 const sql=(await readFile(new URL('./cloudflare-migrations/0001_test_baseline.sql',import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');
 for(const stmt of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(stmt).run();

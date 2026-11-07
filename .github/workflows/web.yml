@@ -1,0 +1,56 @@
+name: Web CI
+
+on:
+  pull_request:
+    paths: ['web/**', '.github/workflows/web.yml']
+  push:
+    branches: [main]
+    paths: ['web/**', '.github/workflows/web.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, workerd, media]
+    defaults:
+      run:
+        working-directory: web
+    env:
+      CLOUDFLARE_CF_FETCH_ENABLED: 'false'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install local media tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install pinned dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Audit production dependencies
+        if: matrix.suite == 'unit'
+        run: npm audit --omit=dev --audit-level=high
+      - name: Check source syntax
+        if: matrix.suite == 'unit'
+        run: npm run check:syntax
+      - name: Build the current Site locally
+        if: matrix.suite == 'unit'
+        run: npm run build -- --out-dir dist/site
+      - name: Run isolated regression tests
+        run: npm run test:${{ matrix.suite }}

@@ -2,12 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const origin='https://rig.local',hook='https://hooks.rig.local/api/payments/webhook',project='https://abcdefghijklmnopqrst.supabase.co';
 const base={RIG_CLOSED_TEST_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_MODE:'test',RIG_MOLLIE_MODE:'test',RIG_TEST_ENVIRONMENT_ID:'closed-fixture',RIG_PUBLIC_ORIGIN:origin,SUPABASE_URL:project,SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixturekey12345'};
-const workers=(dir,vars)=>new Miniflare({d1Persist:join(dir,'d1'),workers:[
+const workers=(dir,vars)=>new Miniflare({cf:false,d1Persist:join(dir,'d1'),workers:[
  {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:vars,d1Databases:{DB:'identity-first'},serviceBindings:{MOCK_AUTH:'auth',MOCK_MOLLIE:'mollie'}},
  {name:'auth',modules:true,scriptPath:join(dir,'auth.mjs'),compatibilityDate:'2026-01-01'},
  {name:'mollie',modules:true,scriptPath:join(dir,'mollie.mjs'),compatibilityDate:'2026-01-01'}]});

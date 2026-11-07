@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {inspectMp4} from './mp4-inspect.mjs';
-const run=promisify(execFile),source=new URL('../rig-v4-runtime/fixtures/input.mp4',import.meta.url).pathname;
+const run=promisify(execFile),source=new URL('./test/fixtures/input.mp4',import.meta.url).pathname;
 function locate(bytes){
  function scan(start,end,parents){for(let p=start;p<end;){const n=bytes.readUInt32BE(p),name=bytes.toString('ascii',p+4,p+8);assert.ok(n>=8&&p+n<=end);if(name==='elst')return {at:p,parents};if(['moov','trak','edts'].includes(name)){const found=scan(p+8,p+n,[...parents,p]);if(found)return found}p+=n}return null}
  const result=scan(0,bytes.length,[]);assert.ok(result);return result;

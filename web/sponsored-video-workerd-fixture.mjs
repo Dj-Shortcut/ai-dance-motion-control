@@ -1,7 +1,7 @@
 // Offline test fixture. Every provider operation is handled here, in process.
 import {createClosedVideoWorker} from './closed-video-worker.mjs';
 import {createClosedVideoService} from './closed-video-service.mjs';
-import encoded from './trial-fixtures/synthetic.mp4';
+import encoded from './test/fixtures/silent.mp4';
 const bytes=Uint8Array.from(atob(encoded),x=>x.charCodeAt(0));
 export default {fetch(req,env){
  if(env.LOCAL_FIXTURE!=='yes')return new Response(null,{status:503});

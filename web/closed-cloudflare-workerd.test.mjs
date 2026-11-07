@@ -2,12 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import ingress from './closed-access-ingress.mjs';
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');const {Miniflare}=require('miniflare');
+import {Miniflare} from 'miniflare';
 const enabled={RIG_CLOSED_TEST_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_MODE:'test',RIG_MOLLIE_MODE:'test',MOLLIE_API_KEY:'test_fixture',RIG_MOLLIE_PROFILE_ID:'pfl_TESTPROFILE',RIG_TEST_ENVIRONMENT_ID:'closed-fixture',RIG_PUBLIC_ORIGIN:'https://rig.local',RIG_WEBHOOK_URL:'https://hooks.rig.local/api/payments/webhook',RIG_PACKAGES:'[{"id":"test-5","amountCents":500,"credits":500}]',SUPABASE_URL:'https://abcdefghijklmnopqrst.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixturekey12345'};
-const workers=(dir,vars={},mock={})=>new Miniflare({workers:[
+const workers=(dir,vars={},mock={})=>new Miniflare({cf:false,workers:[
  {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:vars,d1Databases:{DB:'cloudflare-closed-fixture'},serviceBindings:{MOCK_AUTH:'mock-auth',MOCK_MOLLIE:'mock-mollie'}},
  {name:'mock-auth',modules:true,scriptPath:join(dir,'mock-auth.mjs'),compatibilityDate:'2026-01-01'},
  {name:'mock-mollie',modules:true,scriptPath:join(dir,'mock-mollie.mjs'),compatibilityDate:'2026-01-01',bindings:mock}]});

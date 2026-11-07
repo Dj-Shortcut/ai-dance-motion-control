@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {readFile,mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {createCloudMediaService} from './cloud-media-service.mjs';import {createAssets} from './assets.mjs';
-const run=promisify(execFile),source=new URL('../rig-v4-runtime/fixtures/input.mp4',import.meta.url).pathname,secret='x'.repeat(40),owner='owner1',origin='https://rig.test';
+const run=promisify(execFile),source=new URL('./test/fixtures/input.mp4',import.meta.url).pathname,secret='x'.repeat(40),owner='owner1',origin='https://rig.test';
 async function files(){const dir=await mkdtemp(join(tmpdir(),'rig-media-int-'));try{const jpg=join(dir,'frame.jpg'),mp4=join(dir,'clip.mp4');await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-frames:v','1','-threads','1','-y',jpg]);await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-t','3','-vf','fps=30','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',mp4]);return {jpg:await readFile(jpg),mp4:await readFile(mp4)}}finally{await rm(dir,{recursive:true,force:true})}}
 function memory(){const map=new Map();return {map,async head(k){return map.has(k)?{}:null},async delete(k){map.delete(k)},async put(k,b,o){if(map.has(k))return null;map.set(k,{bytes:new Uint8Array(b),customMetadata:o.customMetadata});return {key:k}},async get(k){const v=map.get(k);if(!v)return null;return {customMetadata:v.customMetadata,body:new Response(v.bytes).body}}}}
 function bindings(f){const trace=[];return {trace,images:{input(){return {transform(options){trace.push(options);return {output:async()=>({response:()=>new Response(f.jpg,{headers:{'content-type':'image/jpeg'}})})}}}}},video:{input(){return {transform(){return {output(){return {response:async()=>new Response(f.mp4,{headers:{'content-type':'video/mp4'}})}}}}}}}}}
@@ -27,8 +27,8 @@ test('a verified 30-second video passes the assets and private media limits; 31 
   assert.equal((await assets.handle(request(31))).status,400);assert.equal(bucket.map.size,1);
  }finally{await rm(dir,{recursive:true,force:true})}
 });
-test('real synthetic Cloudflare output retains its 29.968-second presentation duration through the private asset route',async()=>{
- const f=await files(),output=await readFile(new URL('./trial-fixtures/cloudflare-synthetic-blue-30.mp4',import.meta.url)),{handler,bucket}=setup({...f,mp4:output});
+test('synthetic Cloudflare-style output retains its 29.968-second presentation duration through the private asset route',async()=>{
+ const f=await files(),output=await readFile(new URL('./test/fixtures/cloudflare-style-blue-30.mp4',import.meta.url)),{handler,bucket}=setup({...f,mp4:output});
  let providerCalls=0;const assets=createAssets({mode:'test',origin,mediaSecret:secret,falKey:'fake',limit:async()=>true,authenticate:async()=>({id:owner}),media:{fetch:handler},providerFetch:async()=>{providerCalls++;throw Error('unexpected fal call')}});
  const r=await assets.handle(new Request(origin+'/api/assets',{method:'POST',headers:{origin,'x-rig-asset-kind':'video','content-type':'video/mp4','x-rig-duration-seconds':'30','x-rig-keep-sound':'false'},body:f.mp4}));
  assert.equal(r.status,201,await r.clone().text());const result=await r.json();assert.equal(result.durationSeconds,29.968);assert.equal(Math.ceil(result.durationSeconds),30);assert.equal(bucket.map.size,1);assert.equal(providerCalls,0);

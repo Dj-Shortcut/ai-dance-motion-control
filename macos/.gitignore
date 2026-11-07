@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+ModuleCache/
+*.app/
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.abi.json
+.env
+.env.*
+*.mp4
+*.mov
+*.jpg
+*.jpeg
+*.png
+*.log
+TestResults/

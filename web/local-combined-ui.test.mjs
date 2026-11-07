@@ -3,12 +3,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {JSDOM} from 'jsdom';
 import {build} from 'esbuild';
 import {createBrowserAuth} from './browser-auth.mjs';
 import {prepareBoundUi} from './frontend/multiuser/ui-auth.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const waitFor=async fn=>{for(let i=0;i<400;i++){if(fn())return;await new Promise(r=>setTimeout(r,10))}throw Error('UI did not settle')};
 async function migrate(db,file){const sql=(await readFile(new URL(file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const stmt of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(stmt).run()}
 
@@ -17,7 +16,7 @@ test('two UI sessions use simulated checkout, price confirmation, recovery and p
  try{
   for(const [input,output] of [['local-combined-ingress.mjs','ingress.mjs'],['local-combined-private.mjs','private.mjs'],['local-mock-auth.mjs','auth.mjs'],['local-mock-fal.mjs','fal.mjs'],['local-mock-mollie.mjs','mollie.mjs']])
    await build({entryPoints:[input],outfile:join(dir,output),bundle:true,format:'esm',platform:'browser',logLevel:'silent',loader:{'.mp4':'base64'}});
-  mf=new Miniflare({workers:[
+  mf=new Miniflare({cf:false,workers:[
    {name:'ingress',modules:true,scriptPath:join(dir,'ingress.mjs'),compatibilityDate:'2026-01-01',bindings:{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'},serviceBindings:{PRIVATE_ROUTER:'private'}},
    {name:'private',modules:true,scriptPath:join(dir,'private.mjs'),compatibilityDate:'2026-01-01',bindings:{LOCAL_FIXTURE:'yes',RIG_PUBLIC_ORIGIN:'https://rig.local'},d1Databases:{DB:'combined-ui'},r2Buckets:{BUCKET:'combined-ui'},serviceBindings:{MOCK_AUTH:'auth',MOCK_FAL:'fal',MOCK_MOLLIE:'mollie'}},
    {name:'auth',modules:true,scriptPath:join(dir,'auth.mjs'),compatibilityDate:'2026-01-01'},
@@ -26,7 +25,7 @@ test('two UI sessions use simulated checkout, price confirmation, recovery and p
   ]});
   const db=await mf.getD1Database('DB','private');for(const file of ['./public-identity-schema.sql','./cloudflare-migrations/0001_test_baseline.sql','./local-video-schema.sql'])await migrate(db,file);
   const html=await readFile('frontend/multiuser/index.html','utf8'),payments=await readFile('frontend/multiuser/payments.js','utf8'),generation=await readFile('frontend/multiuser/generation-ui.js','utf8');
-  const jpeg=await readFile('trial-fixtures/synthetic.jpg'),video=await readFile('trial-fixtures/synthetic.mp4');
+  const jpeg=await readFile('test/fixtures/input.jpg'),video=await readFile('test/fixtures/silent.mp4');
   const mockMollie=await mf.getWorker('mollie'),privateWorker=await mf.getWorker('private');
   async function makeUi(token){
    const dom=new JSDOM(html,{url:'https://rig.local/multiuser/',runScripts:'outside-only'}),win=dom.window;windows.push(dom);

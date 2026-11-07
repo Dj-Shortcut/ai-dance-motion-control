@@ -2,16 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import {JSDOM} from 'jsdom';
 import {createBrowserAuth} from './browser-auth.mjs';
 import {prepareBoundUi} from './frontend/multiuser/ui-auth.mjs';
 
-const require=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json');const {Miniflare}=require('miniflare');
+import {Miniflare} from 'miniflare';
 async function migrate(db,file){const sql=(await readFile(new URL(file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const s of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();}
 const waitFor=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('Local UI did not settle');};
-function worker(dir){return new Miniflare({workers:[
+function worker(dir){return new Miniflare({cf:false,workers:[
  {name:'private',modules:true,scriptPath:join(dir,'entry.mjs'),compatibilityDate:'2026-01-01',bindings:{LOCAL_FIXTURE:'yes'},d1Databases:{DB:'closed-ui-fixture'},serviceBindings:{MOCK_AUTH:'mock-auth',MOCK_MOLLIE:'mock-mollie'}},
  {name:'mock-auth',modules:true,scriptPath:join(dir,'mock-auth.mjs'),compatibilityDate:'2026-01-01'},
  {name:'mock-mollie',modules:true,scriptPath:join(dir,'mock-mollie.mjs'),compatibilityDate:'2026-01-01'}]});}

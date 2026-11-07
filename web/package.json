@@ -1,15 +1,26 @@
 {
-  "name": "rig-public-identity-prototype",
+  "name": "rig-web",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test *.test.mjs"
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "build": "node build-rig-sites.mjs",
+    "fixtures": "node scripts/generate-fixtures.mjs",
+    "test": "npm run test:unit && npm run test:workerd && npm run test:media",
+    "test:unit": "node scripts/test.mjs unit",
+    "test:workerd": "node scripts/test.mjs workerd",
+    "test:media": "node scripts/test.mjs media",
+    "ci": "npm run check:syntax && npm run build && npm test"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.119.0"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2",
-    "jsdom": "^31.0.0"
+    "esbuild": "0.28.2",
+    "jsdom": "31.0.0",
+    "miniflare": "4.20260515.0"
+  },
+  "engines": {
+    "node": "^24.15.0 || >=26.0.0"
   }
 }

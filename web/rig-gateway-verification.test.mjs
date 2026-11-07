@@ -1,16 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {createGatewayVerification,authorizeGatewayProof,GATEWAY_PROOF_JOB as job,gatewayProofBucket} from './rig-gateway-verification.mjs';
 import {mintProofProviderInput,handleProviderInput} from './rig-provider-inputs.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import {Miniflare} from 'miniflare';
 const owner='u-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',other='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const image='11111111-1111-4111-8111-111111111111',video='22222222-2222-4222-8222-222222222222',quote='33333333-3333-4333-8333-333333333333';
 const model='fal-ai/kling-video/o3/standard/video-to-video/edit',fal='01a1b727-0a43-7331-b508-6b03cfd8bcfb';
 const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
 async function fixture(){
- const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response()}}',compatibilityDate:'2026-01-01',d1Databases:['DB']}),db=await mf.getD1Database('DB');
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response()}}',compatibilityDate:'2026-01-01',d1Databases:['DB']}),db=await mf.getD1Database('DB');
  for(const name of ['0001_test_baseline.sql'])for(const sql of (await readFile('closed-payment-migrations/'+name,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(sql).run();
  const imageBytes=new Uint8Array(96).fill(17),videoBytes=new Uint8Array(128).fill(29),ih=await hash(imageBytes),vh=await hash(videoBytes);
  const input={data:{imageId:image,videoId:video,quality:'edit-standard',faceId:null,angleIds:[],steadyCamera:false},refs:[{id:image,kind:'image',sha256:ih},{id:video,kind:'video',sha256:vh}]};

@@ -86,18 +86,20 @@
     // Paint before starting the recorder so the captured track starts with an
     // actual frame rather than an uninitialised canvas.
     paintFrame();
-    const stream=canvas.captureStream(30); let sourceStream;
+    let stream,sourceStream,recorder,animation,paddingTimer,checkVisibility,interrupt,stopped=false;
+    try{
+    stream=canvas.captureStream(30);
     if(keepSound){sourceStream=video.captureStream();for(const track of sourceStream.getAudioTracks())stream.addTrack(track);}
     // Keep longer clips inside the same 16 MB upload bound, reserving room
     // for audio, the MP4 container and encoder variation. Output is still
     // checked against the byte limit after recording; this is not a bypass.
     const videoBitsPerSecond=Math.min(6_000_000,Math.floor(16*1024*1024*8*0.85/duration-(keepSound?192_000:0)));
-    const chunks=[];const recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond});
+    const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond});
     const done=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(Error('Video voorbereiden is mislukt.'));recorder.onstop=()=>{let b=new Blob(chunks,{type:recorder.mimeType||'video/mp4'});b.size?resolve(b):reject(Error('De voorbereide video is leeg.'))}});
-    let animation, stopped=false, started=performance.now(),paddingUntil=0,paddingTimer,frozenFrame=null,failure=null,lastMediaTime=start,drawCount=0;
+    let started=performance.now(),paddingUntil=0,frozenFrame=null,failure=null,lastMediaTime=start,drawCount=0;
     const finish=()=>{if(stopped)return;stopped=true;video.pause();if(recorder.state!=='inactive')recorder.stop()};
-    const interrupt=()=>{failure='De voorbereiding werd onderbroken. Houd RIG in beeld en probeer opnieuw.';finish()};
-    const checkVisibility=()=>{if(document.visibilityState!=='visible'||!document.hasFocus())interrupt()};
+    interrupt=()=>{failure='De voorbereiding werd onderbroken. Houd RIG in beeld en probeer opnieuw.';finish()};
+    checkVisibility=()=>{if(document.visibilityState!=='visible'||!document.hasFocus())interrupt()};
     document.addEventListener('visibilitychange',checkVisibility);window.addEventListener('blur',interrupt);
     function draw(){
       if(stopped)return;
@@ -125,8 +127,14 @@
     }
     // Start painting before awaiting play(): a delayed play promise must not
     // leave the canvas unchanged while audio or the media clock advances.
-    try { recorder.start(500);draw();await Promise.race([video.play(),done.then(()=>{throw Error(failure||'De voorbereiding werd onderbroken.')})]);const result=await done;if(failure)throw Error(failure);if(video.currentTime<start+duration-0.2||drawCount<duration*20)throw Error('De video is niet volledig voorbereid. Houd RIG in beeld en probeer opnieuw.');const actualDuration=await validateRecording(result,duration);return {blob:result,name:'rig-beweging.mp4',type:result.type,duration:actualDuration,width:d.width,height:d.height}; }
-    finally{stopped=true;document.removeEventListener('visibilitychange',checkVisibility);window.removeEventListener('blur',interrupt);clearTimeout(paddingTimer);cancelAnimationFrame(animation);video.pause();if(recorder.state!=='inactive')recorder.stop();for(const track of stream.getTracks())track.stop();if(sourceStream)for(const track of sourceStream.getTracks())track.stop()}
+    recorder.start(500);draw();await Promise.race([video.play(),done.then(()=>{throw Error(failure||'De voorbereiding werd onderbroken.')})]);const result=await done;if(failure)throw Error(failure);if(video.currentTime<start+duration-0.2||drawCount<duration*20)throw Error('De video is niet volledig voorbereid. Houd RIG in beeld en probeer opnieuw.');const actualDuration=await validateRecording(result,duration);return {blob:result,name:'rig-beweging.mp4',type:result.type,duration:actualDuration,width:d.width,height:d.height};
+    }finally{
+      stopped=true;if(checkVisibility)document.removeEventListener('visibilitychange',checkVisibility);if(interrupt)window.removeEventListener('blur',interrupt);clearTimeout(paddingTimer);if(animation!==undefined)cancelAnimationFrame(animation);
+      try{video.pause()}catch{}
+      if(recorder&&recorder.state!=='inactive')try{recorder.stop()}catch{}
+      const tracks=new Set();for(const item of [stream,sourceStream])if(item)try{for(const track of item.getTracks())tracks.add(track)}catch{}
+      for(const track of tracks)try{track.stop()}catch{}
+    }
   }
   window.rigMedia={bounds,dimensions,paint,prepareImage,prepareVideo,recordingDuration,videoDimensions};
 })();

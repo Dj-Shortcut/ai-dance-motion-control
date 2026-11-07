@@ -1,10 +1,10 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {createRequire} from 'node:module';import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';import {createD1GenerationStores} from './d1.mjs';
-const {Miniflare}=createRequire('/Users/Mac/Documents/Codex/2026-08-01/sites-plugin-sites-openai-bundled-maak-3/package.json')('miniflare');
+import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';import {createD1GenerationStores} from './d1.mjs';
+import {Miniflare} from 'miniflare';
 const owner='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',other='u-cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const job='11111111-1111-4111-8111-111111111111',job2='22222222-2222-4222-8222-222222222222',job3='33333333-3333-4333-8333-333333333333',fal='request-123';
 async function migrate(db,file){const sql=(await readFile(file,'utf8')).replace(/^\s*--.*$/gm,'');for(const s of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run()}
 test('D1 sponsor input rejection releases exact ledger and allowance once; ambiguous or generic failures stay locked',async()=>{
- const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response()}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'sponsor-input-refund'}});
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response()}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'sponsor-input-refund'}});
  try{
   const db=await mf.getD1Database('DB');for(const f of ['0001_test_baseline.sql','0005_sponsored_invitation.sql'])await migrate(db,`closed-payment-migrations/${f}`);
   const store=createSponsoredInvitationStore(db),code=(await store.issue({expiresAt:Date.now()+60000})).code;assert.equal((await store.redeem(owner,code)).state,'redeemed');

@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {mkdtemp,readFile,rm} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {inspectMp4} from './mp4-inspect.mjs';
-const run=promisify(execFile),source=new URL('../rig-v4-runtime/fixtures/input.mp4',import.meta.url).pathname;
+const run=promisify(execFile),source=new URL('./test/fixtures/input.mp4',import.meta.url).pathname;
 async function fixture(audio=false,seconds=3){const dir=await mkdtemp(join(tmpdir(),'rig-inspect-'));try{const path=join(dir,'clip.mp4');await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-t',String(seconds),'-vf','fps=30','-c:v','libx264','-threads','2',...(audio?['-c:a','aac']:['-an']),'-movflags','+faststart','-y',path]);return await readFile(path)}finally{await rm(dir,{recursive:true,force:true})}}
 function patch(b,type,offset,value){const result=Buffer.from(b),at=result.indexOf(type);assert.ok(at>0);result.writeUInt32BE(value,at+offset);return result}
 test('actual encoded 3-second synthetic MP4 derives duration, dimensions, sample count and sound from bytes',async()=>{
@@ -62,13 +62,13 @@ test('media adapter uses output-byte inspection rather than browser duration',as
 test('91-frame Cloudflare-style edit rounding is accepted but larger or sub-minimum edits fail',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'rig-edit-boundary-'));try{
   const path=join(dir,'clip.mp4');await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-vf','fps=30','-frames:v','91','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',path]);const data=await readFile(path);
-  const m=inspectMp4(data);assert.equal(m.frameCount,91);assert.equal(m.durationSeconds,3.034);
+  const m=inspectMp4(data);assert.equal(m.frameCount,91);assert.equal(m.sampleDurationSeconds,91/30);assert.ok(m.durationSeconds>=91/30&&m.durationSeconds<=91/30+0.001);assert.equal(Math.ceil(m.durationSeconds),4);
   assert.throws(()=>inspectMp4(patch(data,'elst',12,3100)),/unsupported edits/);
   const exactly3=await fixture();assert.throws(()=>inspectMp4(patch(exactly3,'elst',12,2999)),/unsupported edits/);
  }finally{await rm(dir,{recursive:true,force:true})}
 });
-test('real synthetic Cloudflare output counts its empty lead in duration without treating it as a video sample',async()=>{
- const data=await readFile(new URL('./trial-fixtures/cloudflare-synthetic-blue-30.mp4',import.meta.url));
+test('synthetic Cloudflare-style output counts its empty lead in duration without treating it as a video sample',async()=>{
+ const data=await readFile(new URL('./test/fixtures/cloudflare-style-blue-30.mp4',import.meta.url));
  const result=inspectMp4(data);assert.equal(result.frameCount,898);assert.equal(result.sampleDurationSeconds,29.931);assert.equal(result.durationSeconds,29.968);assert.equal(Math.ceil(result.durationSeconds),30);
  const at=data.indexOf('elst');assert.ok(at>0);assert.equal(data.readUInt32BE(at+8),2);
  const change=(offset,value,signed=false)=>{const bytes=Buffer.from(data);if(signed)bytes.writeInt32BE(value,at+offset);else bytes.writeUInt32BE(value,at+offset);return bytes};

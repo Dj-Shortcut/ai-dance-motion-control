@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { normalizeVideo, normalizeImage } from './normalize.mjs';
-const image=await readFile(new URL('../rig-v2-ui-fixture.png',import.meta.url));
-const video=await readFile(new URL('../rig-v2-ui-fixture.mp4',import.meta.url));
+const image=await readFile(new URL('./test/fixtures/input.png',import.meta.url));
+const video=await readFile(new URL('./test/fixtures/input.mp4',import.meta.url));
 const sha=x=>createHash('sha256').update(x).digest('hex');
 
 test('normalized output has its own validated length and digest, not claimed input duration',async()=>{
@@ -31,7 +31,7 @@ test('garbage, spoofed magic, size, malformed time and untrusted metadata are re
 });
 test('WebM is decoded into independently validated MP4',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'rig-fixture-'));try{
-    const p=join(dir,'test.webm');execFileSync('ffmpeg',['-hide_banner','-v','error','-i',new URL('../rig-v2-ui-fixture.mp4',import.meta.url).pathname,'-t','3.5','-c:v','libvpx','-an','-y',p]);
+    const p=join(dir,'test.webm');execFileSync('ffmpeg',['-hide_banner','-v','error','-i',new URL('./test/fixtures/input.mp4',import.meta.url).pathname,'-t','3.5','-c:v','libvpx','-an','-y',p]);
     const x=await normalizeVideo(await readFile(p),{durationSeconds:3});assert.equal(x.durationSeconds,3);assert.equal(x.mime,'video/mp4');assert.equal(x.sha256,sha(x.bytes));
   }finally{await rm(dir,{recursive:true,force:true});}
 });

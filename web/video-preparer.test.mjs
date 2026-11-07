@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {mkdtemp,readFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {createVideoPreparer} from './video-preparer.mjs';
-const run=promisify(execFile),source=new URL('../rig-v4-runtime/fixtures/input.mp4',import.meta.url).pathname;
+const run=promisify(execFile),source=new URL('./test/fixtures/input.mp4',import.meta.url).pathname;
 test('integrated media binding inspects the exact returned MP4 bytes before deriving duration and hash',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'rig-video-integration-'));try{
  const path=join(dir,'clip.mp4');await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-t','3','-vf','fps=30','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',path]);const bytes=await readFile(path);
