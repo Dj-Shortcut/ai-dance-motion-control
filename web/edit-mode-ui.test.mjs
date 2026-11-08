@@ -8,7 +8,7 @@ const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.ur
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const waitFor=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Edit UI did not settle');};
-function fixture({qualities=['standard','pro','edit-standard'],withGeneration=false,price=100,polledFailure=false,refundConfirmed=true,failureCode,scopedStorage,videoEnabled=true}={}){
+function fixture({qualities=['standard','pro','edit-standard'],withGeneration=false,price=100,polledFailure=false,refundConfirmed=true,failureCode,scopedStorage,videoEnabled=true,quotePolicy='echo'}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),prepared=[],imagePreparations=[],calls=[],storage=new Map();
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoEnabled=videoEnabled;w.rigVideoFunding='sponsored';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.URL.createObjectURL=()=>`blob:fixture-${Math.random()}`;w.URL.revokeObjectURL=()=>{};w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
@@ -26,7 +26,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   if(path==='/api/generations/recent')value={job:null};
   else if(path==='/api/sponsor-invitations/status')value={state:'eligible',remainingCents:500};
   else if(path==='/api/assets')value={id:'asset'+(++uploads),status:'ready'};
-  else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
+  else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(quotePolicy==='echo'?(input.transferPolicy?{transferPolicy:input.transferPolicy}:{}):quotePolicy===null?{}:{transferPolicy:quotePolicy}),...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
   else if(path==='/api/generations')value=polledFailure?{id:'job-edit',state:'queued',priceCents:price,currency:'EUR'}:{id:'job-edit',state:'failed',refundConfirmed,...(failureCode?{failureCode}:{})};
   else if(path==='/api/generations/job-edit')value={id:'job-edit',state:'failed',priceCents:price,currency:'EUR',refundConfirmed,...(failureCode?{failureCode}:{})};
   else if(path.startsWith('/api/estimate/fal?')){const params=new URL(path,w.location.origin).searchParams;value={quality:params.get('quality'),durationSeconds:Number(params.get('duration')),billedSeconds:Math.ceil(Number(params.get('duration'))),customerProposal:{currency:'EUR',priceCents:100,binding:false}};}
@@ -129,13 +129,24 @@ test('editing shows the EUR gift price before one explicit approved generation',
  try{
   f.el('editModeButton').click();f.load();f.prompt('Vervang de zanger door mijn hond.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
-  const body=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(body.quality,'edit-standard');assert.equal(body.keepSound,true);for(const key of ['faceId','angleIds','steadyCamera'])assert.equal(Object.hasOwn(body,key),false);
+  const body=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(body.quality,'edit-standard');assert.equal(body.keepSound,true);assert.equal(body.transferPolicy,'fal-temporary-links-v1');for(const key of ['faceId','angleIds','steadyCamera'])assert.equal(Object.hasOwn(body,key),false);
   assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.doesNotMatch(f.el('quoteMessage').textContent,/Fal.*credits/i);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
   assert.equal(f.el('quoteTitle').textContent,'Video bewerken');assert.equal(f.el('confirmGeneration').textContent,'Bevestig videobewerking');
+  assert.match(f.el('quoteMessage').textContent,/tijdelijke links.*foto, bronvideo en resultaat.*24 uur/);assert.match(f.el('quoteMessage').textContent,/Iedereen met zo’n link/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking.*akkoord/);
   f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
-  const confirm=JSON.parse(f.calls.find(([path])=>path==='/api/generations')[1].body);assert.deepEqual(confirm,{quoteId:'quote-edit',idempotencyKey:'rigchatgpt_quote-edit',approvalToken:'t'.repeat(43)});
+  const confirm=JSON.parse(f.calls.find(([path])=>path==='/api/generations')[1].body);assert.deepEqual(confirm,{quoteId:'quote-edit',idempotencyKey:'rigchatgpt_quote-edit',approvalToken:'t'.repeat(43),transferConsent:'fal-temporary-links-v1'});
   assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
  }finally{f.dom.window.close();}
+});
+test('editing cannot confirm an absent or substituted transfer policy',async()=>{
+ for(const quotePolicy of [null,'unknown-policy']){
+  const f=fixture({withGeneration:true,quotePolicy});
+  try{
+   f.el('editModeButton').click();f.load();f.prompt('Vervang de honden in alle shots.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
+   f.el('confirmUpload').click();await waitFor(()=>f.el('quoteMessage').textContent.includes('bestandsoverdracht kon niet worden bevestigd'));
+   assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.storage.has('rig-generation-pending'),false);
+  }finally{f.dom.window.close();}
+ }
 });
 test('the motion quote contains the reviewed description and loses approval when that description changes',async()=>{
  const f=fixture({withGeneration:true});

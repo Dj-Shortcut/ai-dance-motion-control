@@ -68,7 +68,7 @@ async function readInvitationCode(req){
   return data&&!Array.isArray(data)&&typeof data==='object'&&Object.keys(data).length===1&&/^[A-Za-z0-9_-]{43}$/.test(data.code||'')?data.code:null;
  }catch{return null}finally{clearTimeout(timer);try{void reader.cancel().catch(()=>{})}catch{}}
 }
-async function readBridgeJSON(req,keys){
+async function readBridgeJSON(req,keys,optionalKeys=[]){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')||'')||!req.body)return null;
  const length=req.headers.get('content-length');if(length&&(!/^\d+$/.test(length)||Number(length)>8192))return null;
  const reader=req.body.getReader(),chunks=[];let size=0,timer;
@@ -77,7 +77,7 @@ async function readBridgeJSON(req,keys){
   for(;;){const {done,value}=await Promise.race([reader.read(),deadline]);if(done)break;size+=value.byteLength;if(size>8192)return null;chunks.push(value)}
   const bytes=new Uint8Array(size);let pos=0;for(const chunk of chunks){bytes.set(chunk,pos);pos+=chunk.length}
   const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
-  return data&&typeof data==='object'&&!Array.isArray(data)&&Object.keys(data).length===keys.length&&keys.every(k=>Object.hasOwn(data,k)&&typeof data[k]==='string')?data:null;
+  return data&&typeof data==='object'&&!Array.isArray(data)&&Object.keys(data).every(k=>keys.includes(k)||optionalKeys.includes(k))&&keys.every(k=>Object.hasOwn(data,k)&&typeof data[k]==='string')&&optionalKeys.every(k=>!Object.hasOwn(data,k)||typeof data[k]==='string')?data:null;
  }catch{return null}finally{clearTimeout(timer);try{void reader.cancel().catch(()=>{})}catch{}}
 }
 export function createClosedVideoWorker({serviceFactory=createClosedVideoService,leaseFactory=createDurableMediaLease,pricePreflight=getFalPricePreflight,recoveryAssetsFactory=createAssets,gatewayVerificationFactory=createGatewayVerification}={}){
@@ -178,13 +178,13 @@ export function createClosedVideoWorker({serviceFactory=createClosedVideoService
      return result?reply(result,issuing?201:200):reply({error:'Deze prijsbevestiging is niet beschikbaar of verlopen.'},409);
     }
     if(u.pathname==='/api/generations'&&req.method==='POST'){
-     const data=await readBridgeJSON(sites.request,['quoteId','idempotencyKey','approvalToken']);
-     if(!data||!['quoteId','idempotencyKey'].every(k=>/^[A-Za-z0-9_-]{1,100}$/.test(data[k]))||!/^[A-Za-z0-9_-]{32,128}$/.test(data.approvalToken))return reply({error:'Bevestig eerst de prijs in RIG.'},403);
+     const data=await readBridgeJSON(sites.request,['quoteId','idempotencyKey','approvalToken'],['transferConsent']);
+     if(!data||!['quoteId','idempotencyKey'].every(k=>/^[A-Za-z0-9_-]{1,100}$/.test(data[k]))||!/^[A-Za-z0-9_-]{32,128}$/.test(data.approvalToken)||Object.hasOwn(data,'transferConsent')&&data.transferConsent!=='fal-temporary-links-v1')return reply({error:'Bevestig eerst de prijs in RIG.'},403);
      const approval=await createChatgptApprovals(env.DB).consume(sites.userId,{quoteId:data.quoteId,approvalToken:data.approvalToken});
      if(!approval||approval.idempotencyKey!==data.idempotencyKey)return reply({error:'Bevestig eerst de prijs in RIG.'},403);
      // The capability is checked here and never forwarded into generation
      // bookkeeping, provider inputs, logs or ordinary browser responses.
-     sites.request=new Request(sites.request.url,{method:'POST',redirect:'manual',headers:sites.request.headers,body:JSON.stringify({quoteId:data.quoteId,idempotencyKey:data.idempotencyKey})});
+     sites.request=new Request(sites.request.url,{method:'POST',redirect:'manual',headers:sites.request.headers,body:JSON.stringify({quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(Object.hasOwn(data,'transferConsent')?{transferConsent:data.transferConsent}:{})})});
     }
     return await serve(sites.request,env,sites);
    }

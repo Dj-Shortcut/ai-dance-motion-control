@@ -2,6 +2,8 @@
 (() => {
   const el = id => document.getElementById(id);
   const currency = n => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n/100);
+  const falTransferPolicy = 'fal-temporary-links-v1';
+  const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je foto, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null;
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
@@ -48,13 +50,14 @@
       const faceId=media.face ? await upload('face',media.face) : null;
       const angleIds=[];for(const angle of media.angles)angleIds.push(await upload('angle',angle));
       if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
-      const request={imageId,videoId,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{}:{faceId,angleIds,steadyCamera:media.steady})};
+      const request={imageId,videoId,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{faceId,angleIds,steadyCamera:media.steady})};
       const data=await call('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||'')||!Number.isSafeInteger(data.priceCents)||data.priceCents<1||data.currency!=='EUR'||!Number.isFinite(data.durationSeconds)||!Number.isInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(data.durationSeconds))throw new Error('De prijs kon niet worden bevestigd.');
       if(data.quality!==undefined&&data.quality!==media.quality||data.durationSeconds>limit)throw new Error('De prijs hoort niet bij je gekozen videobewerking.');
+      if(edit&&data.transferPolicy!==falTransferPolicy||!edit&&data.transferPolicy!==undefined)throw new Error('De bestandsoverdracht kon niet worden bevestigd. Bereid je bestanden opnieuw voor.');
       const hasApproval=Object.hasOwn(data,'approvalToken')||Object.hasOwn(data,'idempotencyKey');
       if(hasApproval&&(!/^[A-Za-z0-9_-]{43}$/.test(data.approvalToken||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(data.idempotencyKey||'')))throw new Error('De prijsbevestiging is niet beschikbaar. Bereid je bestanden opnieuw voor.');
-      const approved=hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{};
+      const approved={...(hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{}),...(edit?{transferPolicy:falTransferPolicy}:{})};
       if(window.rigVideoFunding==='sponsored'){
         const status=await call('/api/sponsor-invitations/status');
         if(status?.state!=='eligible'||!Number.isSafeInteger(status.remainingCents)||status.remainingCents<0||status.remainingCents>500)throw new Error('Je gratis testtegoed kon niet worden gecontroleerd.');
@@ -68,6 +71,7 @@
         const providerUsd=new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(data.providerEstimateUsdMicros/1000000);
         quote={id:data.id,media,...approved};note(`Als je bevestigt, gaat ${currency(data.priceCents)} van je fictieve testtegoed af. fal.ai-raming (echt fal-tegoed): ${providerUsd} voor ${data.billedSeconds} seconden. De werkelijke fal-kost kan afwijken. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
       }
+      if(edit)note(el('quoteMessage').textContent+'\n\n'+falTransferNotice);
       el('confirmGeneration').hidden=false;
     } catch(error) { quote=null; note(error.message || 'De prijs kon niet worden berekend.'); }
     finally { active=false;el('confirmUpload').disabled=false; }
@@ -92,7 +96,7 @@
     window.rigScopedStorage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));
     try {
       note('Je opdracht wordt gestart…');
-      const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:current.id,idempotencyKey:requestId,...(current.approvalToken?{approvalToken:current.approvalToken}:{})})});
+      const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:current.id,idempotencyKey:requestId,...(current.approvalToken?{approvalToken:current.approvalToken}:{}),...(current.transferPolicy===falTransferPolicy?{transferConsent:falTransferPolicy}:{})})});
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
       if(data.state==='failed'&&data.refundConfirmed===true){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}

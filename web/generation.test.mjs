@@ -235,3 +235,82 @@ test('a prior accepted job remains recoverable and is never labeled as an unstar
  f.services.jobs.hasKnownSubjectRejection=async()=>true;
  const recovered=await submit(f);assert.equal(recovered.status,200);const value=await recovered.json();assert.equal(value.state,'queued');assert.equal(value.code,undefined);assert.equal(value.generationStarted,undefined);assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().providerCalls,1);
 });
+
+const temporaryPolicy='fal-temporary-links-v1';
+const temporarySelection={...editBody,transferPolicy:temporaryPolicy};
+const temporaryConfirmation={quoteId:'quote1',idempotencyKey:'attempt',transferConsent:temporaryPolicy};
+function temporaryFixture(){
+ const f=editFixture();f.services.inlineO3Owner='u1';
+ for(const [id,a]of Object.entries(f.assets)){a.url=`https://v3b.fal.media/files/b/fixture/${id}.${a.kind==='video'?'mp4':'jpg'}`;a.size=32;}
+ const upload=f.services.assets.uploadOwned,contexts=[];
+ f.services.assets.uploadOwned=async(...args)=>{contexts.push(args[3]);return upload(...args)};
+ return {...f,contexts};
+}
+test('temporary Fal links are offered only for an explicitly requested O3 quote without uploading',async()=>{
+ const f=temporaryFixture();const response=await quote(f,temporarySelection),q=await response.json();
+ assert.equal(response.status,201);assert.equal(q.transferPolicy,temporaryPolicy);assert.equal(q.transferConsentRequired,true);
+ assert.equal(f.qs.get('quote1').input.data.transferPolicy,temporaryPolicy);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().providerCalls,0);
+ for(const policy of ['public','private',true,null,{},'fal-temporary-links-v2']){
+  const invalid=temporaryFixture();assert.equal((await quote(invalid,{...temporarySelection,transferPolicy:policy})).status,400);assert.equal(invalid.qs.size,0);
+ }
+ for(const quality of ['standard','pro']){
+  const motion=fixture();assert.equal((await quote(motion,{...body,quality,transferPolicy:temporaryPolicy})).status,400);assert.equal(motion.qs.size,0);
+ }
+ const privateEdit=editFixture(),privatePrice=await(await quote(privateEdit,editBody)).json();
+ assert.equal(Object.hasOwn(privatePrice,'transferPolicy'),false);assert.equal(Object.hasOwn(privatePrice,'transferConsentRequired'),false);
+});
+test('temporary Fal transfer needs exact quote-bound consent before reservation or media export',async()=>{
+ for(const patch of [{},{transferConsent:true},{transferConsent:null},{transferConsent:'public'},{transferConsent:temporaryPolicy,transferPolicy:temporaryPolicy}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);
+  const response=await submit(f,{quoteId:'quote1',idempotencyKey:'attempt',...patch});
+  assert.equal(response.status,400);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
+ }
+ const privateEdit=editFixture();await quote(privateEdit,editBody);
+ assert.equal((await submit(privateEdit,temporaryConfirmation)).status,400);assert.equal(privateEdit.calls().reserveCount,0);assert.equal(privateEdit.calls().uploadCalls,0);assert.equal(privateEdit.calls().providerCalls,0);
+ const motion=fixture();await quote(motion);
+ assert.equal((await submit(motion,temporaryConfirmation)).status,400);assert.equal(motion.calls().reserveCount,0);assert.equal(motion.calls().uploadCalls,0);
+});
+test('confirmed temporary edit uses exact O3 CDN body and one-day lifecycle while preserving guards and idempotency',async()=>{
+ const f=temporaryFixture();await quote(f,temporarySelection);
+ const response=await submit(f,temporaryConfirmation);assert.equal(response.status,202);assert.equal((await response.json()).state,'queued');
+ assert.deepEqual(f.contexts,[{jobId:'job1',model:'fal-ai/kling-video/o3/standard/video-to-video/edit',transferPolicy:temporaryPolicy},{jobId:'job1',model:'fal-ai/kling-video/o3/standard/video-to-video/edit',transferPolicy:temporaryPolicy}]);
+ const {submitted}=f.calls();assert.equal(submitted.url,'https://queue.fal.run/fal-ai/kling-video/o3/standard/video-to-video/edit');
+ assert.deepEqual(submitted.body,{video_url:f.assets.video.url,image_urls:[f.assets.image.url],prompt:f.qs.get('quote1').input.prompt,keep_audio:true,enable_safety_checker:true,shot_type:'customize'});
+ assert.deepEqual(JSON.parse(submitted.headers['X-Fal-Object-Lifecycle-Preference']),{expiration_duration_seconds:86400});
+ assert.equal(submitted.headers['X-Fal-Store-IO'],'0');assert.equal(submitted.headers['X-Fal-No-Retry'],'1');assert.equal(submitted.headers['x-app-fal-disable-fallback'],'true');assert.equal(submitted.headers['X-Fal-Request-Start-Timeout'],'300');
+ // A retry recovers the original accepted job, even after price expiry or
+ // without another consent field; it cannot trigger a second export/charge.
+ f.qs.get('quote1').expiresAt=Date.now()-1;assert.equal((await submit(f)).status,200);
+ assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().uploadCalls,2);assert.equal(f.calls().providerCalls,1);
+});
+test('temporary transfer bypasses the old owner-only inline restriction but keeps actual O3 duration checks',async()=>{
+ const f=temporaryFixture();f.assets.video.durationSeconds=8.2;assert.equal((await quote(f,temporarySelection)).status,201);assert.equal((await submit(f,temporaryConfirmation)).status,202);
+ const invalid=temporaryFixture();invalid.assets.video.durationSeconds=15.01;assert.equal((await quote(invalid,temporarySelection)).status,400);assert.equal(invalid.calls().reserveCount,0);
+});
+test('temporary CDN inputs reject signed URLs, inline bytes or changed manifests before dispatch and refund once',async()=>{
+ for(const patch of [{url:'https://v3b.fal.media/files/b/fixture/image.jpg?token=private'},{url:'data:image/jpeg;base64,/9j/'},{inline:true},{id:'wrong'},{size:0},{sha256:'b'.repeat(64)}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);Object.assign(f.assets.image,patch);
+  const response=await submit(f,temporaryConfirmation),job=await response.json();
+  assert.equal(job.state,'failed');assert.equal(job.refundConfirmed,true);assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().releaseCount,1);
+  assert.equal((await(await submit(f,temporaryConfirmation)).json()).state,'failed');assert.equal(f.calls().releaseCount,1);
+ }
+});
+test('result download derives temporary transfer only from the owned persisted quote and stores privately',async()=>{
+ const f=temporaryFixture();await quote(f,temporarySelection);await submit(f,temporaryConfirmation);
+ let observed;
+ f.services.results.store=async(job,url,options)=>{observed={job,url,options};return `rig-results/${job.id}.mp4`};
+ const result=await(await f.handler(get('/api/generations/job1?transferPolicy=private'))).json();
+ assert.equal(result.state,'completed');assert.equal(result.videoPath,'/api/generations/job1/video');assert.equal(result.videoUrl,undefined);
+ assert.equal(observed.options.transferPolicy,temporaryPolicy);assert.ok(observed.options.signal instanceof AbortSignal);
+ assert.doesNotMatch(JSON.stringify(result),/v3b\.fal|temporary-links|test-key/);
+ const privateMotion=fixture();await quote(privateMotion);await submit(privateMotion);let privateOptions;
+ privateMotion.services.results.store=async(_job,_url,options)=>{privateOptions=options;return 'private-key'};
+ assert.equal((await privateMotion.handler(get('/api/generations/job1?transferPolicy='+temporaryPolicy))).status,200);
+ assert.equal(Object.hasOwn(privateOptions,'transferPolicy'),false);
+});
+test('missing or corrupted quote policy prevents result access before any provider read',async()=>{
+ for(const modify of [q=>{q.input.data.transferPolicy='public'},q=>{q.input.data.quality='pro'},q=>{q.userId='other'}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);await submit(f,temporaryConfirmation);modify(f.qs.get('quote1'));
+  const response=await f.handler(get('/api/generations/job1'));assert.equal(response.status,503);assert.equal(f.calls().providerCalls,1);assert.equal((await f.services.jobs.getOwned('u1','job1')).state,'queued');
+ }
+});

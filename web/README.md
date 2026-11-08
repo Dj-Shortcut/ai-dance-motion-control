@@ -56,6 +56,29 @@ The native Site still does not sell live Mollie packages. See the
 
 ## Private five-second input transport
 
+The website's **Video bewerken** flow now offers the ordinary Mac/Fal transfer
+after the price is known. Its confirmation explains that Fal's temporary
+photo, source-video and result links can be opened by anyone holding the link.
+The persisted O3 quote selects `fal-temporary-links-v1`; the final generation
+request must explicitly confirm that same policy. The backend checks consent
+before reserving credits or exporting media. Changing a private quote's policy
+at confirmation is refused.
+
+For this opted-in route, RIG uploads the exact owned, digest-verified prepared
+bytes to new Fal CDN objects with a requested 24-hour expiry, verifies an
+anonymous byte-for-byte readback, and sends the canonical URLs to O3 Edit.
+It does not use the private R2 gateway or inline fallback for these requests.
+The output uses the same requested expiry, is checked and copied into RIG's
+existing private result bucket, and is served only through the owned job.
+No provider key, temporary URL or upload capability is returned to the browser.
+Price confirmation, one-dispatch guards, safety checks, no-retry behavior and
+failure refunds remain in place. A closed or changed confirmation never grants
+permission for another quote. Default API requests and human-motion videos
+retain the existing private provider path.
+
+The following owner-only inline path is retained for legacy private quotes;
+it is not selected by the website's opted-in O3 flow:
+
 `RIG_O3_INLINE_INPUTS_ENABLED=yes` enables a bounded, owner-only O3 input path.
 It applies only to the configured owner in owner access mode, with an
 independently verified 4.9–5.0 second clip. The private media bytes are encoded

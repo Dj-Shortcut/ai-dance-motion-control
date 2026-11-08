@@ -24,3 +24,5 @@
 #briefDialog .brief-prompt{margin:16px 0}#briefDialog .primary{width:100%}
 
 .brief-camera{font-size:12px;color:#bdc9c3;margin:0 0 14px}
+
+#quoteMessage{white-space:pre-line}

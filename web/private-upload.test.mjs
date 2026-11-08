@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {uploadVerifiedAsset,privateResultFetch} from './upload.mjs';
+import {uploadVerifiedAsset,privateResultFetch,TEMPORARY_LINK_POLICY} from './upload.mjs';
 import {stagingTesting} from './staging.mjs';
 const file='https://v3b.fal.media/files/b/store/image.jpg';
 const signed=file+'?identity=opaque';
@@ -101,4 +101,52 @@ test('poll expiry after a response still prevents token minting or result downlo
   await assert.rejects(privateResultFetch('secret',fetcher)(file,{signal:controller.signal}));
   assert.equal(calls,stopAt+1);
  }
+});
+
+function temporaryMock({readStatus=200,readBody='abc',readType='image/jpeg',fileUrl=file}={}){
+ const seen=[];
+ return {seen,async fetcher(url,options={}){
+  seen.push({url,options});
+  if(url.startsWith('https://rest.fal.ai/storage/upload/initiate'))return Response.json({upload_url:'https://upload.fal.media/temporary-upload?signature=opaque',file_url:fileUrl});
+  if(url.startsWith('https://upload.fal.media/'))return new Response(null,{status:200});
+  if(url===file)return new Response(readBody,{status:readStatus,headers:{'content-type':readType}});
+  throw Error('Unexpected private token, ACL, sign, redirect or untrusted fetch');
+ }};
+}
+test('explicit temporary link transfer uploads new bytes with 24h expiry then verifies the canonical anonymous URL',async()=>{
+ const f=temporaryMock();assert.equal(await uploadVerifiedAsset({asset,key:'secret',fetchImpl:f.fetcher,transferPolicy:TEMPORARY_LINK_POLICY}),file);
+ assert.equal(f.seen.length,3);
+ assert.deepEqual(JSON.parse(f.seen[0].options.headers['X-Fal-Object-Lifecycle-Preference']),{expiration_duration_seconds:86400});
+ assert.equal(f.seen[0].options.headers.Authorization,'Key secret');
+ assert.equal(f.seen[1].options.headers.Authorization,undefined);
+ assert.equal(new Headers(f.seen[2].options.headers).has('authorization'),false);
+ assert.ok(f.seen.every(call=>call.options.redirect==='manual'));
+});
+test('temporary link input refuses bad policy, URLs, redirects, metadata and changed or incomplete bytes without falling back',async()=>{
+ for(const transferPolicy of [null,'public','fal-temporary-links-v2',true]){
+  const f=temporaryMock();await assert.rejects(uploadVerifiedAsset({asset,key:'secret',fetchImpl:f.fetcher,transferPolicy}));assert.equal(f.seen.length,0);
+ }
+ for(const scenario of [{readStatus:403},{readStatus:302},{readBody:'abd'},{readBody:'abcd'},{readBody:'ab'},{readType:'text/html'},{fileUrl:file+'?identity=opaque'},{fileUrl:'https://attacker.invalid/image.jpg'}]){
+  const f=temporaryMock(scenario);await assert.rejects(uploadVerifiedAsset({asset,key:'secret',fetchImpl:f.fetcher,transferPolicy:TEMPORARY_LINK_POLICY}));assert.ok(f.seen.length<=3);
+ }
+});
+test('temporary output is downloaded without credentials only for the explicit policy and canonical Fal URL',async()=>{
+ const f=temporaryMock(),fetcher=privateResultFetch('secret',f.fetcher);
+ assert.equal(await (await fetcher(file,{transferPolicy:TEMPORARY_LINK_POLICY})).text(),'abc');assert.equal(f.seen.length,1);
+ assert.equal(new Headers(f.seen[0].options.headers).has('authorization'),false);assert.equal(f.seen[0].options.redirect,'manual');
+ for(const url of [file+'?identity=opaque','https://attacker.invalid/result.mp4','http://v3b.fal.media/files/b/store/result.mp4',file+'#fragment'])await assert.rejects(fetcher(url,{transferPolicy:TEMPORARY_LINK_POLICY}));
+ await assert.rejects(fetcher(file,{transferPolicy:'public'}));assert.equal(f.seen.length,1);
+ const expired=new AbortController();expired.abort();await assert.rejects(fetcher(file,{transferPolicy:TEMPORARY_LINK_POLICY,signal:expired.signal}));assert.equal(f.seen.length,1);
+ for(const readStatus of [301,302,307,308,403]){
+  const bad=temporaryMock({readStatus});await assert.rejects(privateResultFetch('secret',bad.fetcher)(file,{transferPolicy:TEMPORARY_LINK_POLICY}));assert.equal(bad.seen.length,1);
+ }
+});
+test('temporary link selection never caches or downgrades a subsequent default-private transfer',async()=>{
+ const normal=mock(),temporary=temporaryMock();
+ assert.equal(await uploadVerifiedAsset({asset,key:'secret',fetchImpl:normal.fetcher}),signed);
+ assert.equal(await uploadVerifiedAsset({asset,key:'secret',fetchImpl:temporary.fetcher,transferPolicy:TEMPORARY_LINK_POLICY}),file);
+ assert.equal(await uploadVerifiedAsset({asset,key:'secret',fetchImpl:normal.fetcher}),signed);
+ const initiates=normal.seen.filter(call=>call.url.startsWith('https://rest.fal.ai/storage/upload/initiate'));
+ assert.equal(initiates.length,2);assert.ok(initiates.every(call=>JSON.parse(call.options.headers['X-Fal-Object-Lifecycle-Preference']).initial_acl.default==='forbid'));
+ assert.notEqual(JSON.parse(initiates[0].options.body).file_name,JSON.parse(initiates[1].options.body).file_name);
 });

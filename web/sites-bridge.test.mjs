@@ -107,3 +107,25 @@ test('only the bound approval capability permits bridge generation, and the toke
   await f.db.prepare('UPDATE rig_chatgpt_approvals SET expires_at=0').run();assert.equal((await call('alice','/api/chatgpt/quote-approvals/consume',{quoteId,approvalToken:approval.approvalToken})).status,409);
  }finally{await f.mf.dispose()}
 });
+test('O3 transfer consent reaches generation only with the final owned approval and exact policy',async()=>{
+ const f=await fixture(),policy='fal-temporary-links-v1';let dispatched=0,seen;
+ try{
+  const worker=createClosedVideoWorker({serviceFactory:async()=>async req=>{dispatched++;seen=await req.json();return Response.json({ok:true})}});
+  const call=async(subject,path='/api/session',data)=>worker.fetch(await f.sign(subject,path,data===undefined?{}:{method:'POST',headers:{'content-type':'application/json'},body:new TextEncoder().encode(JSON.stringify(data))}),f.env);
+  const alice=(await(await call('alice')).json()).userId;
+  const {code}=await createSponsoredInvitationStore(f.db).issue({expiresAt:Date.now()+60000});await createSponsoredInvitationStore(f.db).redeem(alice,code);
+  const quoteId=crypto.randomUUID(),model='fal-ai/kling-video/o3/standard/video-to-video/edit';
+  await f.db.prepare("INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at) VALUES(?,?,?,?,100,'test',5,?,?)").bind(quoteId,alice,model,JSON.stringify({data:{quality:'edit-standard',transferPolicy:policy}}),Date.now()+60000,Date.now()).run();
+  const approval=await(await call('alice','/api/chatgpt/quote-approvals',{quoteId})).json();
+  const confirmed={quoteId,idempotencyKey:approval.idempotencyKey,approvalToken:approval.approvalToken,transferConsent:policy};
+  for(const patch of [{approvalToken:'x'.repeat(43)},{transferConsent:true},{transferConsent:null},{transferConsent:'public'},{transferPolicy:policy},{extra:'field'}]){
+   assert.equal((await call('alice','/api/generations',{...confirmed,...patch})).status,403);
+  }
+  assert.equal((await call('bob','/api/generations',confirmed)).status,403);assert.equal(dispatched,0);
+  // The browser's explicit final action supplies the approval capability.
+  // An earlier quote/approval request never forwards consent to generation.
+  assert.equal((await call('alice','/api/chatgpt/quote-approvals',{quoteId,transferConsent:policy})).status,400);assert.equal(dispatched,0);
+  assert.equal((await call('alice','/api/generations',confirmed)).status,200);
+  assert.equal(dispatched,1);assert.deepEqual(seen,{quoteId,idempotencyKey:approval.idempotencyKey,transferConsent:policy});assert.equal(Object.hasOwn(seen,'approvalToken'),false);
+ }finally{await f.mf.dispose()}
+});
