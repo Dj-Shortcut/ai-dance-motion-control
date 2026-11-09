@@ -69,17 +69,25 @@ test('owner cannot bypass freeze, expiry, canceled intent, exact estimate or ano
  }finally{await f.mf.dispose();}
 });
 
-test('customers cannot claim provider funding; historical purchased owner jobs retain exact EUR treatment',async()=>{
+test('customers cannot claim provider funding; old unconfirmed quotes require refresh while dispatched EUR jobs stay recoverable',async()=>{
  const f=await fixture();try{
-  const customer=await f.quote(CUSTOMER,{fundingKind:'owner-provider'});assert.equal(customer.fundingKind,'credits');assert.equal((await f.begin(customer)).kind,'insufficient');
-  const noOwnerContext=await createProductionGenerationContext({...f.env,RIG_PRODUCTION_OWNER_USER_ID:undefined}),old=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:noOwnerContext});
-  const created=await old.quotes.create({userId:OWNER,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:125,pricingVersion:'historical-v1',durationSeconds:5,input:{data:{quality:'pro'},providerEstimateUsdMicros:700000}}),q=await f.stores.quotes.getOwned(OWNER,created.id);assert.equal(q.fundingKind,'credits');
+  const customer=await f.quote(CUSTOMER,{fundingKind:'owner-provider',priceCents:200});assert.equal(customer.fundingKind,'credits');assert.equal((await f.begin(customer)).kind,'insufficient');
+  const id=crypto.randomUUID(),now=Date.now(),input={data:{quality:'pro'},providerEstimateUsdMicros:700000};
+  await f.db.prepare("INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at,funding_kind) VALUES(?,?,?,?,125,'historical-v1',5,?,?,'credits')")
+   .bind(id,OWNER,'fal-ai/kling-video/v3/pro/motion-control',JSON.stringify(input),now+600000,now).run();
+  const q=await f.stores.quotes.getOwned(OWNER,id);assert.equal(q.fundingKind,'credits');assert.equal(q.priceCents,125);
   assert.equal(await f.guard.permits({durationSeconds:5,priceCents:125,quote:q}),false);
   await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('verified-purchase',?,500)").bind(OWNER).run();
-  assert.equal(await f.guard.permits({durationSeconds:5,priceCents:125,quote:q}),true);const started=await f.begin(q),id=started.job.id;
-  assert.equal(await f.guard.claimOnce({userId:OWNER,jobId:id,quote:q}),true);assert.equal(await f.usage(id),null);
-  await f.stores.jobs.markPreparationFailed(OWNER,id);assert.equal(await f.stores.jobs.confirmFailureRefund(OWNER,id),true);assert.equal(await f.stores.jobs.confirmFailureFinalized(OWNER,id),false);
-  const rows=await f.ledger();assert.deepEqual(rows.map(x=>x.delta).sort((a,b)=>a-b),[-125,125,500]);assert.equal(rows.reduce((sum,x)=>sum+x.delta,0),500);
+  assert.equal(await f.guard.permits({durationSeconds:5,priceCents:125,quote:q}),false);assert.equal((await f.begin(q)).kind,'pricing');
+  assert.deepEqual((await f.ledger()).map(row=>row.delta),[500]);
+  // The same historical shape can already have a submitted provider request.
+  // Recovery never requires a new commercial quote or a second submission.
+  const job=crypto.randomUUID();await f.db.prepare("INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,fal_request_id,created_at) VALUES(?,?,?,?,125,'queued','historical-provider',?)").bind(job,OWNER,id,'historical-queued',now).run();
+  await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,-125)').bind('reserve:'+job,OWNER).run();
+  const poll=await f.stores.jobs.claimPoll(OWNER,job);assert.equal(poll.kind,'acquired');
+  await f.stores.jobs.markCompleted(OWNER,job,'historical-provider',`rig-results/${job}.mp4`,poll.token);
+  assert.equal((await f.stores.jobs.getOwned(OWNER,job)).fundingKind,'credits');assert.equal(await f.usage(job),null);
+  const rows=await f.ledger();assert.deepEqual(rows.map(row=>row.delta).sort((a,b)=>a-b),[-125,0,500]);assert.equal(rows.reduce((sum,row)=>sum+row.delta,0),375);
   assert.equal(productionFundingKind({...f.context},OWNER),'credits');assert.throws(()=>createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:{...f.context}}));
  }finally{await f.mf.dispose();}
 });

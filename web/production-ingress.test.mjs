@@ -59,3 +59,13 @@ test('provider capability reads forward only a bounded range and never sessions'
  const denied=fixture();assert.equal((await denied.fetch(path,{headers:{range:'bytes=0-1,3-4'}})).status,416);assert.equal(denied.calls.length,0);
  const head=fixture({response:new Response(new Uint8Array([1]),{headers:{'content-type':'video/mp4','content-length':'1'}})});const hr=await head.fetch(path,{method:'HEAD'});assert.equal(hr.status,200);assert.equal(await hr.text(),'');
 });
+
+test('owner finance transport preserves the signed month but cannot forward caller roles or secrets',async()=>{
+ const f=fixture({response:Response.json({owner:true,receiptsCents:1000})});
+ const path='/api/owner/finance?month=2026-11';
+ const response=await f.fetch(path,{headers:{authorization:'Bearer forged',cookie:'private=forged','x-rig-owner':'yes','x-rig-user':'forged'}});
+ assert.equal(response.status,200);assert.equal(f.calls[0].url,origin+path);
+ for(const name of ['authorization','cookie','x-rig-owner','x-rig-user'])assert.equal(f.calls[0].headers.get(name),null);
+ assert.equal(response.headers.get('cache-control'),'private, no-store');
+ for(const deniedPath of ['/api/owner/finance?month=2026-11&role=owner','/api/owner/finance?month=2026-99','/api/owner/finance/expenses']){const denied=fixture();assert.equal((await denied.fetch(deniedPath)).status,404);assert.equal(denied.calls.length,0);}
+});

@@ -10,6 +10,7 @@ import {handleProviderInput} from './rig-provider-inputs.mjs';
 import {d1Limit} from './router.mjs';
 import {handleProductionInvitation} from './production-invitation.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
+import {handleOwnerFinance} from './owner-finance.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -25,6 +26,14 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
+   // Financial reporting stays available while generation is paused, and the
+   // signed identity is checked again against the exact pinned owner inside.
+   if(u.pathname.startsWith('/api/owner/finance')){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleOwnerFinance(authenticated.request,env,{userId:authenticated.userId});
+   }
    // Existing purchases must stay recoverable while generation is suspended.
    // These routes still require the live tenant and the signed Sites identity,
    // but never acquire a media lease or a generation capability.
