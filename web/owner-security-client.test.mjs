@@ -166,3 +166,38 @@ test('only one verification may run and malformed operation bodies do not reques
   const pending=f.client.prepare('finance-policy',{}),rejected=assert.rejects(pending,{code:'verification_cancelled'});await waitFor(()=>f.d.querySelector('dialog')?.open);await assert.rejects(f.client.prepare('finance-expense',{}),{code:'verification_busy'});f.client.cancel();await rejected;assert.equal(f.calls.length,1);
  }finally{f.close();}
 });
+
+test('manual status check visibly loads and confirms its time without opening an authenticator',async()=>{
+ const delayed=deferred();let reads=0;const f=fixture({handler:()=>++reads===1?Response.json({configured:true,activeCredentialCount:1}):delayed.promise});try{
+  f.mount();await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Extra verificatie actief'));
+  refresh(f);const button=f.d.querySelectorAll('#security button')[1];
+  assert.equal(button.disabled,true);assert.equal(button.textContent,'Controleren…');assert.match(f.d.querySelector('.finance-status').textContent,/wordt gecontroleerd/);assert.equal(f.d.getElementById('security').getAttribute('aria-busy'),'true');
+  button.click();assert.equal(reads,2);
+  delayed.resolve(Response.json({configured:true,activeCredentialCount:1}));await waitFor(()=>!button.disabled);
+  assert.match(f.d.querySelector('.finance-status').textContent,/Extra verificatie actief/);assert.match(f.d.querySelector('.finance-status').textContent,/Laatst gecontroleerd om \d{2}:\d{2}:\d{2}/);
+  assert.equal(button.textContent,'Status controleren');assert.equal(f.d.getElementById('security').getAttribute('aria-busy'),'false');assert.equal(f.authCalls.length,0);assert.equal(f.registerCalls.length,0);
+ }finally{f.close();}
+});
+
+test('failed status check shows failure and allows a new successful check',async()=>{
+ let reads=0;const f=fixture({handler:()=>++reads===2?Promise.reject(Error('Verbinding verbroken.')):Response.json({configured:true,activeCredentialCount:1})});try{
+  f.mount();await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Extra verificatie actief'));refresh(f);
+  await waitFor(()=>f.d.querySelector('.finance-status').dataset.error==='true');assert.match(f.d.querySelector('.finance-status').textContent,/Status controleren is niet gelukt/);assert.doesNotMatch(f.d.querySelector('.finance-status').textContent,/Laatst gecontroleerd/);
+  assert.equal(f.d.querySelectorAll('#security button')[1].disabled,false);refresh(f);await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Laatst gecontroleerd'));assert.equal(f.d.querySelector('.finance-status').dataset.error,'false');assert.equal(f.authCalls.length,0);
+ }finally{f.close();}
+});
+
+test('a status response after logout cannot recreate private security state',async()=>{
+ const delayed=deferred();let reads=0;const f=fixture({handler:()=>++reads===1?Response.json({configured:true,activeCredentialCount:1}):delayed.promise});try{
+  f.mount();await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Extra verificatie actief'));refresh(f);f.stop();f.d.getElementById('authLogout').click();delayed.resolve(Response.json({configured:true,activeCredentialCount:1}));await new Promise(r=>setTimeout(r,10));
+  assert.equal(f.d.getElementById('security').textContent,'');assert.equal(f.authCalls.length,0);
+ }finally{f.close();}
+});
+
+test('a late status read cannot overwrite the status from a newly mounted panel',async()=>{
+ const old=deferred();let reads=0;const f=fixture({handler:()=>++reads===1?old.promise:Response.json({configured:true,activeCredentialCount:1})});try{
+  f.mount();const next=f.d.createElement('section');f.d.body.append(next);f.client.mount(next);
+  await waitFor(()=>next.textContent.includes('Extra verificatie actief'));old.resolve(Response.json({configured:false,activeCredentialCount:0}));await new Promise(r=>setTimeout(r,10));
+  assert.match(next.textContent,/Extra verificatie actief/);assert.equal(next.querySelector('button').hidden,true);assert.equal(next.getAttribute('aria-busy'),'false');
+ }finally{f.close();}
+});
