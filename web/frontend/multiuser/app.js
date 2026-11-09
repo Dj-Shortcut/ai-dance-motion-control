@@ -53,9 +53,9 @@ function setURL(key,file){const blob=previewBlob(file),url=URL.createObjectURL(b
 function showError(text){$('status').textContent=text}
 function invalidate(){draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton()}
 // Server capability controls the interface; the server enforces authorization.
-function refreshButton(){const enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality());const promptReady=$('editPrompt').value.trim().length>0;$('prepare').disabled=!enabled||busy||!imageSource||!motionFile;$('prepare').textContent=enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';$('confirmBrief').disabled=!enabled||busy||!promptReady;$('confirmBrief').textContent=prepared?'Verder':'Bekijk de prijs';$('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();}
+function refreshButton(){const enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality());const promptReady=$('editPrompt').value.trim().length>0;$('prepare').disabled=!enabled||busy||!imageSource||!motionFile;$('prepare').textContent=enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';$('confirmBrief').disabled=!enabled||busy||!promptReady;$('confirmBrief').textContent=prepared?'Verder':'Bekijk de prijs';const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=5;$('tryShortVideo').disabled=!enabled||busy||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=!motionFile||hasTrial;$('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();}
 function updateModeUi(){
- const edit=editing(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'Video bewerken':'Persoon laten bewegen';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
+ const edit=editing(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'In de video':'Op je foto';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
  $('videoModeHint').textContent=edit?(editAvailable()?'Je foto vervangt een persoon of dier in de video. De rest van de video blijft hetzelfde.':editUnavailableMessage):'Werkt het best met een duidelijk zichtbaar lichaam.';
  $('editPromptPanel').hidden=false;$('editPrompt').required=true;$('promptLabel').textContent=edit?'Wat wil je veranderen?':'Wat wil je maken?';$('editPrompt').placeholder=edit?'Vervang de zanger door het personage op mijn foto.':'Beschrijf het resultaat dat je wilt.';$('motionQualitySettings').hidden=edit;$('steadyOption').hidden=edit;$('backgroundOption').hidden=true;$('settingsNote').hidden=true;
  $('personChooseText').textContent=edit?'Kies een foto':'Kies een foto of video';$('personRole').textContent='Foto';$('motionChooseText').textContent='Kies een video';$('motionRole').textContent='Video';$('soundLabel').textContent=edit?'Geluid van de bronvideo behouden':'Geluid van de bewegingsvideo behouden';
@@ -167,6 +167,16 @@ async function prepareWithPrompt(){
 }
 $('prepare').addEventListener('click',()=>{if($('prepare').disabled||busy)return;refreshButton();$('briefDialog').showModal();$('editPrompt').focus();});
 $('confirmBrief').addEventListener('click',prepareWithPrompt);
+$('tryShortVideo').addEventListener('click',()=>{
+ if($('tryShortVideo').disabled||busy)return;
+ const start=Number($('start').value),remaining=$('motionVideo').duration-start;
+ if(!Number.isFinite(start)||start<0||!Number.isFinite(remaining)||remaining<5){refreshButton();return;}
+ // Reuse the reviewed preparation and price flow. This only shortens the
+ // fragment: its chosen start, crop, description and generation consent stay.
+ $('duration').value='5';$('duration').setCustomValidity('');modeDurations[videoMode]=5;
+ $('duration').dispatchEvent(new Event('change',{bubbles:true}));
+ prepareWithPrompt();
+});
 $('closeBrief').addEventListener('click',()=>$('briefDialog').close());
 // Stable handoff for the future authenticated uploader; no automatic uploads.
 window.rigPreparedMedia = () => prepared;

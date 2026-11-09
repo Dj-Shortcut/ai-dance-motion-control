@@ -78,7 +78,7 @@ test('motion prefills its description in the pop-out and still blocks an empty o
  const f=fixture();
  try{
   f.load();assert.equal(f.d.querySelectorAll('main textarea').length,0);assert.equal(f.d.querySelectorAll('#settings textarea').length,0);assert.equal(f.d.querySelectorAll('#briefDialog textarea').length,1);
-  assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');assert.equal(f.el('editPrompt').required,true);assert.match(f.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);assert.equal(f.el('confirmBrief').disabled,false);
+  assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('briefTitle').textContent,'Op je foto');assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');assert.equal(f.el('editPrompt').required,true);assert.match(f.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);assert.equal(f.el('confirmBrief').disabled,false);
   f.prompt('   ');assert.equal(f.el('confirmBrief').disabled,true);f.el('confirmBrief').click();assert.equal(f.prepared.length,0);assert.equal(f.calls.length,0);
   f.prompt('  Maak een dansvideo bij mij thuis.  ');assert.equal(f.el('confirmBrief').disabled,false);f.el('confirmBrief').click();await waitFor(()=>f.w.rigPreparedMedia()!==null);
   assert.equal(f.el('briefDialog').open,false);assert.equal(f.w.rigPreparedMedia().prompt,'Maak een dansvideo bij mij thuis.');assert.equal(f.w.rigPreparedMedia().quality,'pro');assert.equal(f.prepared.length,1);
@@ -88,7 +88,7 @@ test('the shared pop-out remembers each mode description without adding a second
  const f=fixture();
  try{
   f.load();f.el('prepare').click();f.prompt('Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
-  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('promptLabel').textContent,'Wat wil je veranderen?');assert.match(f.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);assert.equal(f.el('confirmBrief').disabled,false);f.prompt('Vervang de zanger door mijn hond.');f.el('closeBrief').click();
+  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('briefTitle').textContent,'In de video');assert.equal(f.el('promptLabel').textContent,'Wat wil je veranderen?');assert.match(f.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);assert.equal(f.el('confirmBrief').disabled,false);f.prompt('Vervang de zanger door mijn hond.');f.el('closeBrief').click();
   f.el('motionModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
   f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Vervang de zanger door mijn hond.');assert.equal(f.d.querySelectorAll('textarea').length,1);
  }finally{f.dom.window.close();}
@@ -131,7 +131,7 @@ test('editing shows the EUR gift price before one explicit approved generation',
   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
   const body=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(body.quality,'edit-standard');assert.equal(body.keepSound,true);assert.equal(body.transferPolicy,'fal-temporary-links-v1');for(const key of ['faceId','angleIds','steadyCamera'])assert.equal(Object.hasOwn(body,key),false);
   assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.doesNotMatch(f.el('quoteMessage').textContent,/Fal.*credits/i);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
-  assert.equal(f.el('quoteTitle').textContent,'Video bewerken');assert.equal(f.el('confirmGeneration').textContent,'Bevestig videobewerking');
+  assert.equal(f.el('quoteTitle').textContent,'In de video');assert.equal(f.el('confirmGeneration').textContent,'Bevestig videobewerking');
   assert.match(f.el('quoteMessage').textContent,/tijdelijke links.*foto, bronvideo en resultaat.*24 uur/);assert.match(f.el('quoteMessage').textContent,/Iedereen met zo’n link/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking.*akkoord/);
   f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
   const confirm=JSON.parse(f.calls.find(([path])=>path==='/api/generations')[1].body);assert.deepEqual(confirm,{quoteId:'quote-edit',idempotencyKey:'rigchatgpt_quote-edit',approvalToken:'t'.repeat(43),transferConsent:'fal-temporary-links-v1'});
@@ -154,9 +154,34 @@ test('the motion quote contains the reviewed description and loses approval when
   f.load();f.change('duration','5');f.el('prepare').click();f.prompt('  Neem de dans over in mijn woonkamer.  ');f.el('confirmBrief').click();await waitFor(()=>f.el('uploadDialog').open);
   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
   const input=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(input.quality,'pro');assert.equal(input.prompt,'Neem de dans over in mijn woonkamer.');assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
-  assert.equal(f.el('quoteTitle').textContent,'Persoon laten bewegen');assert.equal(f.el('confirmGeneration').textContent,'Bevestig persoonsvideo');
+  assert.equal(f.el('quoteTitle').textContent,'Op je foto');assert.equal(f.el('confirmGeneration').textContent,'Bevestig persoonsvideo');
   f.el('closeQuote').click();f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);f.prompt('Neem de dans over op een podium.');assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
  }finally{f.dom.window.close();}
+});
+test('a five-second trial invalidates a longer reviewed quote and requires a new price and explicit generation consent',async()=>{
+ for(const mode of ['motion','edit']){
+  const f=fixture({withGeneration:true});
+  try{
+   f.load();if(mode==='edit')f.el('editModeButton').click();f.change('duration','12');f.change('start','7.5');f.prompt('Vervang het personage en behoud de timing.');
+   f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
+   const previousMedia=f.w.rigPreparedMedia(),uploads=f.calls.filter(([path])=>path==='/api/assets').length;
+   f.el('closeQuote').click();f.el('prepare').click();f.el('tryShortVideo').click();
+   assert.equal(f.el('confirmGeneration').hidden,true,'the old approved price must stop being usable immediately');f.el('confirmGeneration').click();
+   await waitFor(()=>f.el('uploadDialog').open&&f.w.rigPreparedMedia()!==previousMedia);
+   assert.equal(f.calls.filter(([path])=>path==='/api/assets').length,uploads,'the trial does not automatically upload prepared media');
+   assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.prepared.at(-1)[2],7.5);assert.equal(f.prepared.at(-1)[3],5);
+   await waitFor(()=>f.calls.some(([path])=>path.startsWith('/api/estimate/fal?')&&new URL(path,f.w.location.origin).searchParams.get('duration')==='5'));
+   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
+   assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.match(f.el('quoteMessage').textContent,/5\.00 seconden/);
+   assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+   const videoUploads=f.calls.filter(([path,options])=>path==='/api/assets'&&options.headers['X-Rig-Asset-Kind']==='video');assert.equal(videoUploads.at(-1)[1].headers['X-Rig-Duration-Seconds'],'5');
+   if(mode==='edit'){assert.match(f.el('quoteMessage').textContent,/tijdelijke links/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking/);}
+   f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
+   const confirmations=f.calls.filter(([path])=>path==='/api/generations');assert.equal(confirmations.length,1);
+   const confirmation=JSON.parse(confirmations[0][1].body);assert.equal(confirmation.quoteId,'quote-edit-2');
+   assert.equal(confirmation.transferConsent,mode==='edit'?'fal-temporary-links-v1':undefined);
+  }finally{f.dom.window.close();}
+ }
 });
 test('a proven subject rejection clears only that non-started pending request so a fresh explicit edit can proceed',async()=>{
  const f=fixture({withGeneration:true});let rejected=false;
@@ -165,7 +190,7 @@ test('a proven subject rejection clears only that non-started pending request so
   f.load();f.change('duration','5');f.prompt('Maak een video met dezelfde beweging.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.includes('Deze video is niet gestart'));
   assert.equal(f.storage.has('rig-generation-pending'),false);assert.equal(f.el('checkGeneration').hidden,true);assert.equal(f.el('confirmGeneration').hidden,true);assert.equal(f.w.rigVideoMode(),'motion','a rejection must not switch or re-submit automatically');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
   f.el('closeQuote').click();f.el('editModeButton').click();f.prompt('Vervang de zanger door mijn hond.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
-  assert.equal(f.el('quoteTitle').textContent,'Video bewerken');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);f.el('confirmGeneration').click();await waitFor(()=>f.calls.filter(([path])=>path==='/api/generations').length===2);
+  assert.equal(f.el('quoteTitle').textContent,'In de video');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);f.el('confirmGeneration').click();await waitFor(()=>f.calls.filter(([path])=>path==='/api/generations').length===2);
   const submissions=f.calls.filter(([path])=>path==='/api/generations').map(([,options])=>JSON.parse(options.body));assert.notEqual(submissions[0].quoteId,submissions[1].quoteId);assert.equal(f.calls.some(([path])=>path.includes('/reconcile')),false);
  }finally{f.dom.window.close();}
 });

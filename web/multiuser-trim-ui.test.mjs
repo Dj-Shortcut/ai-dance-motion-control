@@ -18,7 +18,7 @@ function fixture(){
  win.Image=class{constructor(){this.naturalWidth=640;this.naturalHeight=480}set src(value){this.onload()}};
  win.rigVideoEnabled=true;win.rigSessionActive=()=>true;
  win.rigMedia={bounds:crop=>crop,dimensions:()=>({width:640,height:480}),paint(){},prepareImage:async()=>({blob:new win.Blob(['image'],{type:'image/jpeg'})}),
-  prepareVideo:async(video,crop,start,duration)=>{const result={blob:new win.Blob(['video'],{type:'video/mp4'}),start,duration};prepared.push(result);return result},
+  prepareVideo:async(video,crop,start,duration,keepSound,_progress,options)=>{const result={blob:new win.Blob(['video'],{type:'video/mp4'}),crop:{...crop},start,duration,keepSound,options};prepared.push(result);return result},
  };
  win.eval(app);
  const change=(id,value)=>{byId(id).value=value;byId(id).dispatchEvent(new win.Event('change',{bubbles:true}))};
@@ -100,4 +100,63 @@ test('preparation accepts the selected 30 seconds and rejects values outside the
   f.loadMotion(8.9);f.change('duration','9');f.prepare();await waitFor(()=>f.byId('status').textContent.includes('3 tot 30'));
   assert.equal(f.prepared.length,1,'a fragment longer than the source maximum is not prepared');
  }finally{f.close()}
+});
+
+test('a five-second trial preserves the chosen start, crops, description, quality and sound',async()=>{
+ for(const mode of ['motion','edit']){
+  const f=fixture();try{
+   f.win.rigVideoQualities=['standard','pro','edit-standard'];f.doc.dispatchEvent(new f.win.Event('rig-video-availability'));
+   f.loadPerson();f.loadMotion(12.8);if(mode==='edit')f.byId('editModeButton').click();
+   f.change('duration','10');f.change('start','2.3');
+   f.byId('personCropButton').click();f.byId('cropX').value='15';f.byId('cropW').value='80';f.byId('applyCrop').click();
+   f.byId('motionCropButton').click();f.byId('cropX').value='10';f.byId('cropW').value='80';f.byId('applyCrop').click();
+   f.byId('sound').checked=false;f.byId('sound').dispatchEvent(new f.win.Event('change'));
+   const prompt='Behoud de gekozen scène en vervang de hoofdrolspeler.';
+   f.byId('editPrompt').value=prompt;f.byId('editPrompt').dispatchEvent(new f.win.Event('input'));
+   const imageCrops=[];f.win.rigMedia.prepareImage=async(_source,crop)=>{imageCrops.push({...crop});return {blob:new f.win.Blob(['image'],{type:'image/jpeg'})};};
+   f.byId('prepare').click();assert.equal(f.byId('tryShortVideo').disabled,false);assert.equal(f.byId('shortTrialHint').hidden,true);
+   f.byId('tryShortVideo').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);
+   assert.equal(f.prepared.length,1);assert.equal(f.prepared[0].duration,5);assert.equal(f.prepared[0].start,2.3);
+   assert.deepEqual(f.prepared[0].crop,{x:10,y:0,w:80,h:100});assert.deepEqual(imageCrops,[{x:15,y:0,w:80,h:100}]);
+   assert.equal(f.prepared[0].keepSound,false);assert.equal(f.win.rigPreparedMedia().prompt,prompt);assert.equal(f.win.rigPreparedMedia().quality,mode==='edit'?'edit-standard':'pro');
+   assert.equal(f.byId('duration').value,'5');assert.equal(f.byId('start').value,'2.3');
+   f.byId(mode==='edit'?'motionModeButton':'editModeButton').click();f.byId(mode==='edit'?'editModeButton':'motionModeButton').click();
+   assert.equal(f.byId('duration').value,'5','the deliberate trial length is remembered for that mode');
+  }finally{f.close()}
+ }
+});
+
+test('a trial never silently moves a near-end start and leaves three- or four-second sources usable normally',async()=>{
+ for(const [source,start] of [[3,0],[4.99,0],[12,8]]){
+  const f=fixture();try{
+   f.loadPerson();f.loadMotion(source);f.change('duration','3');f.change('start',String(start));f.byId('prepare').click();
+   assert.equal(f.byId('tryShortVideo').disabled,true);assert.equal(f.byId('shortTrialHint').hidden,false);assert.match(f.byId('shortTrialHint').textContent,/5/);
+   f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(f.prepared.length,0);assert.equal(f.byId('start').value,String(start));assert.equal(f.byId('duration').value,'3');
+   f.byId('confirmBrief').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);assert.equal(f.prepared[0].duration,3);assert.equal(f.prepared[0].start,start);
+  }finally{f.close()}
+ }
+ const f=fixture();try{
+  f.loadPerson();f.loadMotion(10);f.change('duration','3');f.change('start','5');f.byId('prepare').click();
+  assert.equal(f.byId('tryShortVideo').disabled,false);f.byId('tryShortVideo').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);
+  assert.equal(f.prepared[0].start,5);assert.equal(f.prepared[0].duration,5);
+ }finally{f.close()}
+});
+
+test('trial preparation rejects an empty prompt, inactive session or capability and ignores a busy double click',async()=>{
+ const f=fixture();let release;
+ try{
+  f.loadPerson();f.loadMotion(12);f.byId('prepare').click();
+  f.byId('editPrompt').value=' ';f.byId('editPrompt').dispatchEvent(new f.win.Event('input'));
+  assert.equal(f.byId('tryShortVideo').disabled,true);f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));assert.equal(f.prepared.length,0);assert.equal(f.byId('duration').value,'12');
+  f.byId('editPrompt').value='Neem de beweging over.';f.byId('editPrompt').dispatchEvent(new f.win.Event('input'));
+  f.win.rigSessionActive=()=>false;f.doc.dispatchEvent(new f.win.Event('rig-video-availability'));
+  assert.equal(f.byId('tryShortVideo').disabled,true);f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));assert.equal(f.prepared.length,0);assert.equal(f.byId('duration').value,'12');
+  f.win.rigSessionActive=()=>true;f.win.rigVideoEnabled=false;f.doc.dispatchEvent(new f.win.Event('rig-video-availability'));
+  assert.equal(f.byId('tryShortVideo').disabled,true);f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));assert.equal(f.prepared.length,0);
+  f.win.rigVideoEnabled=true;f.doc.dispatchEvent(new f.win.Event('rig-video-availability'));
+  let images=0;f.win.rigMedia.prepareImage=()=>{images++;return new Promise(resolve=>{release=()=>resolve({blob:new f.win.Blob(['image'],{type:'image/jpeg'})});});};
+  f.byId('tryShortVideo').click();assert.equal(f.byId('tryShortVideo').disabled,true);f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));
+  assert.equal(images,1);assert.equal(f.prepared.length,0);release();await waitFor(()=>f.win.rigPreparedMedia()!==null);assert.equal(f.prepared.length,1);
+ }finally{release?.();f.close()}
 });
