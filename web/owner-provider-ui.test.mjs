@@ -29,7 +29,7 @@ function fixture({quote:quoteOverride={},quality='pro',create,status,store=new M
   if(path==='/api/generation-quotes')return Response.json(quote);
   if(path==='/api/generations')return create?create(path,init):Response.json(failed);
   if(path.startsWith('/api/generations/'))return status?status(path,init):Response.json(failed);
-  if(path.startsWith('/api/estimate/fal?'))return Response.json({funding:'owner-provider',quality,durationSeconds:5,billedSeconds:5,providerEstimate:{currency:'USD',usdMicros:700000,binding:false}});
+  if(path.startsWith('/api/estimate/fal?'))return Response.json({funding:'owner-provider',quality,durationSeconds:5,billedSeconds:5,providerEstimate:{currency:'USD',usdMicros:700000,binding:false},customerProposal:{currency:'EUR',priceCents:9900,binding:false}});
   throw Error('Unexpected request '+path);
  };
  w.eval(generation);

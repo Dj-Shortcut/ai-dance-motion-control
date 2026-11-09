@@ -4,6 +4,8 @@
   const currency = n => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n/100);
   const providerCurrency = micros => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(micros/1000000);
   const ownerProvider = data => data?.funding==='owner-provider';
+  const privateTestOwner = () => window.rigVideoFunding==='owner'&&window.rigVideoMode!=='live';
+  const mayShowPricePreview = () => ['credits','sponsored','owner-provider'].includes(window.rigVideoFunding)||privateTestOwner();
   const failureFinalized = data => ownerProvider(data)?data.finalizationConfirmed===true:data.refundConfirmed===true;
   const falTransferPolicy = 'fal-temporary-links-v1';
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je foto, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
@@ -87,9 +89,12 @@
         quote={id:data.id,media,...approved};note(`Als je bevestigt, gaat ${currency(data.priceCents)} van je gratis testtegoed af. Je hebt ${currency(status.remainingCents)} testtegoed. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
       }else{
         if(window.rigNativeSite===true&&!hasApproval){note(`Deze video kost ${currency(data.priceCents)}. De prijsbevestiging is momenteel niet beschikbaar. Bereid je bestanden opnieuw voor.`);return;}
-        if(!Number.isSafeInteger(data.providerEstimateUsdMicros)||data.providerEstimateUsdMicros<1)throw new Error('De actuele fal-prijs kon niet worden gecontroleerd.');
-        const providerUsd=new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(data.providerEstimateUsdMicros/1000000);
-        quote={id:data.id,media,...approved};note(`Als je bevestigt, gaat ${currency(data.priceCents)} van je fictieve testtegoed af. fal.ai-raming (echt fal-tegoed): ${providerUsd} voor ${data.billedSeconds} seconden. De werkelijke fal-kost kan afwijken. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
+        if(privateTestOwner()){
+          if(!Number.isSafeInteger(data.providerEstimateUsdMicros)||data.providerEstimateUsdMicros<1)throw new Error('De actuele fal-prijs kon niet worden gecontroleerd.');
+          quote={id:data.id,media,...approved};note(`Als je bevestigt, gaat ${currency(data.priceCents)} van je fictieve testtegoed af. fal.ai-raming (echt fal-tegoed): ${providerCurrency(data.providerEstimateUsdMicros)} voor ${data.billedSeconds} seconden. De werkelijke fal-kost kan afwijken. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
+        }else{
+          quote={id:data.id,media,...approved};note(`Als je bevestigt, kost deze video ${currency(data.priceCents)}. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
+        }
       }
       if(edit)note(el('quoteMessage').textContent+'\n\n'+falTransferNotice);
       el('confirmGeneration').hidden=false;
@@ -157,6 +162,7 @@
   let estimateSequence=0, estimateTimer=null, lastEstimateKey=null, lastEstimate=null, inFlightKey=null, inFlight=null;
   async function updateProviderEstimate(seq){
     const target=el('providerEstimate'), video=el('motionVideo');
+    if(!mayShowPricePreview()){target.hidden=true;target.textContent='';return;}
     const duration=Number(el('duration').value), start=Number(el('start').value);
     const quality=typeof window.rigGenerationQuality==='function'?window.rigGenerationQuality():document.querySelector('input[name="quality"]:checked')?.value;
     if(!el('motionInput').files.length || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<3 || duration>(quality==='edit-standard'?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
@@ -174,6 +180,7 @@
         data=await inFlight;
       }
       if(seq!==estimateSequence)return;
+      if(!mayShowPricePreview()){target.hidden=true;target.textContent='';return;}
       if(data.quality!==quality || data.durationSeconds!==duration)throw Error();
       if(window.rigVideoFunding==='credits'){
         const proposed=data.customerProposal;
@@ -195,12 +202,8 @@
         target.textContent=`Fal-raming: ${usd} · ${data.billedSeconds} s. Je gebruikt je eigen fal-account. Je bevestigt vóór de video start; de werkelijke kosten kunnen afwijken.`;target.hidden=false;return;
       }
       lastEstimateKey=key;lastEstimate=data;
-      const proposed=data.customerProposal;
       const checked=/^\d{4}-\d{2}-\d{2}$/.test(data.providerEstimate.rateCheckedOn||'')?` (tarief gecontroleerd op ${data.providerEstimate.rateCheckedOn})`:'';
-      let message=`fal.ai-raming: ${usd} · ${data.billedSeconds} s${checked}. De uiteindelijke fal-kost kan afwijken.`;
-      if(proposed?.currency==='EUR' && proposed.binding===false && Number.isSafeInteger(proposed.priceCents) && proposed.priceCents>0)message+=` Voorstel klantprijs: ${currency(proposed.priceCents)} (niet bindend).`;
-      else message+=' Een klantprijs is nog niet ingesteld.';
-      target.textContent=message;target.hidden=false;
+      target.textContent=`fal.ai-raming: ${usd} · ${data.billedSeconds} s${checked}. De uiteindelijke fal-kost kan afwijken.`;target.hidden=false;
     }catch(error){if(seq===estimateSequence){target.textContent=error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':['sponsored','credits'].includes(window.rigVideoFunding)?'De prijsraming is tijdelijk niet beschikbaar.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
   }
   function scheduleProviderEstimate(){

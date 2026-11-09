@@ -115,11 +115,7 @@
       if(data.quality!==quality || data.durationSeconds!==duration || data.providerEstimate?.currency!=='USD' || !Number.isSafeInteger(data.providerEstimate?.usdMicros) || data.providerEstimate?.binding!==false)throw Error();
       lastEstimateKey=key;lastEstimate=data;
       const usd=new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD'}).format(data.providerEstimate.usdMicros/1000000);
-      const proposed=data.customerProposal;
-      let message=`fal.ai-raming: ${usd} · ${data.billedSeconds} s (referentietarief 7 november 2026). De uiteindelijke fal-kost kan afwijken.`;
-      if(proposed?.currency==='EUR' && proposed.binding===false && Number.isSafeInteger(proposed.priceCents) && proposed.priceCents>0)message+=` Voorstel klantprijs: ${currency(proposed.priceCents)} (niet bindend).`;
-      else message+=' Een klantprijs is nog niet ingesteld.';
-      target.textContent=message;target.hidden=false;
+      target.textContent=`fal.ai-raming: ${usd} · ${data.billedSeconds} s (referentietarief 7 november 2026). De uiteindelijke fal-kost kan afwijken.`;target.hidden=false;
     }catch(error){if(seq===estimateSequence){target.textContent=error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
   }
   function scheduleProviderEstimate(){
