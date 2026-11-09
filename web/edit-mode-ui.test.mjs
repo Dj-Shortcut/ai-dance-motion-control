@@ -56,11 +56,11 @@ test('a deliberate mode choice survives a real account-scoped page reload withou
   first=fixture({scopedStorage:alice.scopedStorage});assert.equal(backing.size,0,'a default or capability update must not save a choice');
   first.el('editModeButton').click();first.load();first.prompt('Private hondomschrijving die alleen in dit tabblad hoort.');
   assert.deepEqual([...backing.values()],['edit']);assert.equal(alice.scopedStorage.getItem('rig-video-mode:v1'),'edit');first.dom.window.close();first=null;
-  reloaded=fixture({scopedStorage:alice.scopedStorage,qualities:[],videoEnabled:false});assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('editModeButton').getAttribute('aria-pressed'),'true');assert.equal(reloaded.el('duration').max,'15');assert.equal(reloaded.el('editPrompt').value,'');
+  reloaded=fixture({scopedStorage:alice.scopedStorage,qualities:[],videoEnabled:false});assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('editModeButton').getAttribute('aria-pressed'),'true');assert.equal(reloaded.el('duration').max,'15');assert.doesNotMatch(reloaded.el('editPrompt').value,/Private hond/);assert.match(reloaded.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);
   reloaded.load();assert.equal(reloaded.el('prepare').disabled,true);assert.match(reloaded.el('videoModeHint').textContent,/niet beschikbaar.*Kies zelf/);
   reloaded.w.rigVideoQualities=['standard','pro','edit-standard'];reloaded.w.rigVideoEnabled=true;reloaded.d.dispatchEvent(new reloaded.w.Event('rig-video-availability'));
   assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('duration').value,'5');assert.equal(reloaded.el('prepare').disabled,false);
-  other=fixture({scopedStorage:bob.scopedStorage});assert.equal(other.w.rigVideoMode(),'motion');assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),null);assert.equal(other.el('motionModeButton').textContent,'Persoon laten bewegen');assert.match(other.el('videoModeHint').textContent,/persoon.*lichaam/);
+  other=fixture({scopedStorage:bob.scopedStorage});assert.equal(other.w.rigVideoMode(),'motion');assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),null);assert.match(other.el('motionModeButton').textContent,/^Op je foto/);assert.match(other.el('videoModeHint').textContent,/lichaam/);
   other.el('motionModeButton').click();assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),'motion');assert.equal(alice.scopedStorage.getItem('rig-video-mode:v1'),'edit');assert.deepEqual([...backing.values()].sort(),['edit','motion']);
  }finally{first?.dom.window.close();reloaded?.dom.window.close();other?.dom.window.close();alice.dispose();bob.dispose();}
 });
@@ -74,12 +74,12 @@ test('temporarily missing editing capability disables the reviewed edit instead 
   f.w.rigVideoQualities=['standard','pro','edit-standard'];f.d.dispatchEvent(new f.w.Event('rig-video-availability'));assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.w.rigPreparedMedia(),null,'a lost capability invalidates the old reviewed quote');
  }finally{f.dom.window.close();}
 });
-test('motion requires its description in the pop-out before any media preparation',async()=>{
+test('motion prefills its description in the pop-out and still blocks an empty one before any media preparation',async()=>{
  const f=fixture();
  try{
   f.load();assert.equal(f.d.querySelectorAll('main textarea').length,0);assert.equal(f.d.querySelectorAll('#settings textarea').length,0);assert.equal(f.d.querySelectorAll('#briefDialog textarea').length,1);
-  assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('confirmBrief').disabled,true);
-  f.prompt('   ');f.el('confirmBrief').click();assert.equal(f.prepared.length,0);assert.equal(f.calls.length,0);
+  assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');assert.equal(f.el('editPrompt').required,true);assert.match(f.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);assert.equal(f.el('confirmBrief').disabled,false);
+  f.prompt('   ');assert.equal(f.el('confirmBrief').disabled,true);f.el('confirmBrief').click();assert.equal(f.prepared.length,0);assert.equal(f.calls.length,0);
   f.prompt('  Maak een dansvideo bij mij thuis.  ');assert.equal(f.el('confirmBrief').disabled,false);f.el('confirmBrief').click();await waitFor(()=>f.w.rigPreparedMedia()!==null);
   assert.equal(f.el('briefDialog').open,false);assert.equal(f.w.rigPreparedMedia().prompt,'Maak een dansvideo bij mij thuis.');assert.equal(f.w.rigPreparedMedia().quality,'pro');assert.equal(f.prepared.length,1);
  }finally{f.dom.window.close();}
@@ -88,7 +88,7 @@ test('the shared pop-out remembers each mode description without adding a second
  const f=fixture();
  try{
   f.load();f.el('prepare').click();f.prompt('Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
-  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('promptLabel').textContent,'Wat wil je veranderen?');assert.equal(f.el('editPrompt').value,'');assert.equal(f.el('confirmBrief').disabled,true);f.prompt('Vervang de zanger door mijn hond.');f.el('closeBrief').click();
+  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('promptLabel').textContent,'Wat wil je veranderen?');assert.match(f.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);assert.equal(f.el('confirmBrief').disabled,false);f.prompt('Vervang de zanger door mijn hond.');f.el('closeBrief').click();
   f.el('motionModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
   f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Vervang de zanger door mijn hond.');assert.equal(f.d.querySelectorAll('textarea').length,1);
  }finally{f.dom.window.close();}
@@ -98,8 +98,8 @@ test('editing has a visible description, five-second first fragment and clear so
  try{
   f.load();assert.equal(f.el('duration').value,'30');f.el('editModeButton').click();
   assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'5');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
-  assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,true);assert.equal(f.el('referencePanel').hidden,true);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
-  assert.equal(f.el('personChooseText').textContent,'Referentiefoto');assert.equal(f.el('motionRole').textContent,'Bronvideo');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*bronvideo blijft/);assert.equal(f.el('sound').checked,true);
+  assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,true);assert.equal(f.el('moreOptions').hidden,true);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
+  assert.equal(f.el('personChooseText').textContent,'Kies een foto');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*video blijft/);assert.equal(f.el('sound').checked,true);
   f.prompt('Vervang de zanger door mijn hond.');assert.equal(f.el('prepare').disabled,false);
   f.el('motionModeButton').click();assert.equal(f.el('duration').value,'30');assert.equal(f.el('duration').max,'30');assert.equal(f.el('motionQualitySettings').hidden,false);assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');
  }finally{f.dom.window.close();}
@@ -246,4 +246,19 @@ test('capabilities default to motion only and reject malformed or invented quali
   const dom=new JSDOM('<p id="videoAvailabilityNote"></p>'),w=dom.window;
   try{const valid=qualities===undefined||Array.isArray(qualities)&&qualities.length===3;const enabled=await enableVideoIfAvailable({binding:{isActive:()=>true,request:async()=>Response.json({enabled:true,qualities})},window:w,document:w.document,loadScript:async()=>{}});assert.equal(enabled,valid);if(enabled)assert.deepEqual(w.rigVideoQualities,qualities??['standard','pro']);}finally{dom.window.close();}
  }
+});
+test('idea tiles preset only the video type and description, and hide types the server does not offer',()=>{
+ const f=fixture();
+ try{
+  const band=f.el('idea-band'),dance=f.el('idea-dans');
+  assert.equal(band.hidden,false);assert.equal(band.getAttribute('aria-pressed'),'false');
+  band.click();assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.el('editPrompt').value,band.dataset.ideaPrompt);assert.equal(band.getAttribute('aria-pressed'),'true');assert.equal(f.el('status').textContent,'Idee gekozen. Kies nu een foto.');assert.equal(f.calls.length,0);
+  dance.click();assert.equal(f.w.rigVideoMode(),'motion');assert.equal(f.el('editPrompt').value,dance.dataset.ideaPrompt);assert.equal(dance.getAttribute('aria-pressed'),'true');assert.equal(band.getAttribute('aria-pressed'),'false');
+  f.prompt('Mijn eigen idee.');assert.equal(dance.getAttribute('aria-pressed'),'false');
+ }finally{f.dom.window.close();}
+ const motionOnly=fixture({qualities:['standard','pro']});
+ try{
+  assert.equal(motionOnly.el('idea-band').hidden,true);assert.equal(motionOnly.el('idea-film').hidden,true);assert.equal(motionOnly.el('idea-dans').hidden,false);
+  motionOnly.el('idea-band').click();assert.equal(motionOnly.w.rigVideoMode(),'motion');assert.doesNotMatch(motionOnly.el('editPrompt').value,/muzikant/);
+ }finally{motionOnly.dom.window.close();}
 });

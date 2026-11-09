@@ -43,3 +43,23 @@
 .legal-links{display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin:20px auto;font-size:12px}.legal-links a{color:var(--muted,#a3b3ad)}.commerce-choice{display:grid;gap:8px;margin:16px 0}.commerce-choice select,.commerce-choice input,.customer-help-form select,.customer-help-form textarea{font:inherit;color:inherit;background:#182221;border:1px solid #536461;border-radius:7px;padding:8px}.commerce-choice label{display:flex;gap:8px;align-items:baseline}.customer-history{margin-top:18px}.customer-history button{margin:6px 6px 6px 0}.customer-help-form{display:grid;gap:10px;margin-top:14px}.customer-help-form textarea{min-height:80px}
 
 .billing-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}.billing-fields>strong,.billing-fields>small{grid-column:1/-1}.billing-fields label{display:grid;gap:4px;font-size:13px}.billing-fields label:first-of-type,.billing-fields label:nth-of-type(2){grid-column:1/-1}.billing-fields input{width:100%;box-sizing:border-box;min-width:0}.commerce-choice>label{align-items:flex-start}.commerce-choice>label input[type=checkbox]{margin-top:5px;flex-shrink:0}
+
+/* Guided flow: numbered steps top to bottom, one sticky main action. */
+main{height:auto;min-height:0;max-width:1100px;margin:0 auto;gap:26px;padding-top:24px}
+.intro h1{margin:0;font-size:clamp(28px,5vw,40px);line-height:1.08;letter-spacing:-.02em}.intro p{margin:8px 0 0;color:#aab4b2;font-size:16px}
+.step{display:flex;align-items:center;gap:10px;margin:0;font-size:17px;font-weight:600;color:#eef3f1}.step-number{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--mint);color:#0d1815;font-size:14px;font-weight:700;flex-shrink:0}
+.inputs{flex:none;min-height:0;gap:24px}.slot{gap:12px}.slot .display{flex:none;height:300px}.empty{font-size:15px}.under{height:auto;min-height:24px;flex-wrap:wrap}
+.slot-tip{margin:0;font-size:13px;color:#98a4a1}
+.more-options{border:1px solid #2b3834;border-radius:10px;background:#151b1a}.more-options>summary{cursor:pointer;padding:12px 14px;font-size:14px;color:#c9d6d0;list-style-position:inside}.more-options>summary:hover{color:#eef3f1}.more-options .references{border:0;border-top:1px solid #2b3834;border-radius:0 0 10px 10px}
+.crop-button{font-size:13px}
+.video-mode-panel{gap:12px}.video-mode-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-self:stretch;padding:0;border:0;background:none}.video-mode-tabs button{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:16px 18px;border:2px solid #2e3a37;border-radius:14px;background:#171e1c;color:#c8d3cf;min-height:44px}.video-mode-tabs button strong{font-size:16px;color:#eef3f1}.video-mode-tabs button span{font-size:14px;line-height:1.35;color:#a5b2ad}.video-mode-tabs button[aria-pressed="true"]{border-color:var(--mint);background:#1b2a24;color:#d9f5e7}.video-mode-panel>p{font-size:13px}
+.result{flex:none;min-height:0;gap:12px}.result-display{flex:none;height:360px}
+footer{position:sticky;bottom:0;z-index:2;padding:12px 0;background:#111416;border-top:1px solid #202729}
+.primary{min-height:48px;border-radius:12px;font-size:16px;padding:12px 26px}
+@media(max-width:700px){main{gap:22px;padding-top:18px}.inputs{gap:22px}.slot .display{height:240px}.result-display{height:280px}.video-mode-tabs{grid-template-columns:1fr}.video-mode-tabs button{padding:14px 16px}footer{flex-direction:column;align-items:stretch;gap:10px}.actions{justify-content:space-between}.actions .primary{flex:1}.status small{max-width:none}}
+
+/* Idea tiles: one tap picks the video type and fills in the description. */
+.ideas-panel{display:flex;flex-direction:column;gap:10px;margin-top:-6px}.ideas-title{margin:0;font-size:14px;font-weight:600;color:#aab4b2}
+.ideas{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.idea{display:flex;align-items:center;gap:12px;min-height:64px;padding:12px 14px;border:2px solid #2e3a37;border-radius:14px;background:#171e1c;color:#eef3f1;text-align:left;font-size:14px;font-weight:500;line-height:1.3}.idea:hover{border-color:#4a5e57}.idea[aria-pressed="true"]{border-color:var(--mint);background:#1b2a24}.idea-icon{flex-shrink:0;color:var(--mint)}
+@media(max-width:900px){.ideas{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.idea{flex-direction:column;align-items:flex-start;gap:8px;padding:12px}}
