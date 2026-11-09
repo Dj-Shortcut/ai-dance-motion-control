@@ -100,9 +100,9 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
 // Atomic fixed-window limiter. D1 schema must be provisioned via migrations, not
 // at request time. Reject on missing DB/SQL error. Caller chooses short limits.
 export async function d1Limit({env,category,userId,method}) {
-  if (!env.DB || !['payment','generation','webhook','asset','session'].includes(category)) throw Error('Missing limiter');
+  if (!env.DB || !['payment','generation','webhook','asset','session','readiness'].includes(category)) throw Error('Missing limiter');
   const now = Math.floor(Date.now()/1000);
-  const limit = category==='session'?360:category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
+  const limit = category==='readiness'?20:category==='session'?360:category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
   const bucket = `${category}:${userId || 'global'}`;
   const row = await env.DB.prepare(`INSERT INTO rig_rate_limits(bucket,window_start,requests)
     VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET

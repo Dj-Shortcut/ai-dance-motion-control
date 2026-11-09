@@ -12,7 +12,7 @@ export function sitesOrigin(value){try{const u=new URL(value);return u.protocol=
 // operation, and reconciliation is a write even though it reads provider state.
 export function sitesPaymentPath(path,method){
  if(typeof path!=='string'||path.includes('?')||path.includes('#'))return false;
- if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}$/.test(path);
+ if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders','/api/payments/readiness'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}$/.test(path);
  return method==='POST'&&(path==='/api/payments/create'||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/reconcile$/.test(path));
 }
 export function sitesPath(path,method){
