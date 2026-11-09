@@ -100,3 +100,85 @@ test('native credit dialog distinguishes the RIG allowance from a separate Fal b
  }finally{dom.window.close();}
  }
 });
+
+async function creditScreen({balance=0,details={mode:'live',currency:'EUR',purchasesEnabled:true},packages,orders=[],reconcile,create,storage}={}){
+ const state=page(),{w,d}=state,calls=[],values=storage??new Map(),redirects=[];let active=true;
+ w.rigNativeSite=true;w.rigVideoFunding='credits';w.rigVideoMode='live';w.rigSessionActive=()=>active;
+ w.rigScopedStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
+ w.rigCheckout=async url=>{redirects.push(url);};
+ w.rigRequest=async(path,init={})=>{
+  calls.push([path,init]);
+  if(path==='/api/payments/balance')return Response.json({balance:typeof balance==='function'?balance():balance,frozen:false,...details});
+  if(path==='/api/payments/packages')return Response.json(packages??{...details,packages:[{id:'credits-5',credits:500,amountCents:500}]});
+  if(path==='/api/payments/orders')return Response.json({orders});
+  if(path.startsWith('/api/payments/orders/'))return reconcile?reconcile(path,init):Response.json({state:'paid'});
+  if(path==='/api/payments/create')return create?create(path,init):Response.json({checkoutUrl:'https://www.mollie.com/checkout/live-fixture'});
+  throw Error('Unexpected payment request '+path);
+ };
+ w.eval(payments);await waitFor(()=>calls.length&&(d.getElementById('creditsButton').textContent.includes(',')||d.getElementById('creditsMessage').textContent.includes('kon niet worden gecontroleerd')));
+ return {...state,calls,values,redirects,stop:()=>{active=false;}};
+}
+test('native live credits show exact euro price and open Mollie only after a package is chosen',async()=>{
+ const f=await creditScreen({balance:100}),{d,calls,values,redirects}=f;
+ try{
+  assert.match(d.getElementById('creditsButton').textContent,/RIG-tegoed.*1,00/);d.getElementById('creditsButton').click();
+  await waitFor(()=>d.getElementById('packageList').firstElementChild?.disabled===false);
+  assert.match(d.getElementById('packageList').textContent,/5,00.*tegoed.*5,00/);assert.match(d.getElementById('creditsMessage').textContent,/veilig via Mollie/);assert.doesNotMatch(d.getElementById('creditsMessage').textContent,/testmodus/);
+  assert.equal(calls.some(([path])=>path==='/api/payments/create'),false);d.getElementById('packageList').firstElementChild.click();await waitFor(()=>redirects.length===1);
+  assert.deepEqual(redirects,['https://www.mollie.com/checkout/live-fixture']);
+  const post=calls.find(([path])=>path==='/api/payments/create'),body=JSON.parse(post[1].body);
+  assert.equal(body.packageId,'credits-5');assert.match(body.requestId,/^[a-f0-9-]{36}$/);assert.equal(values.get('rig-payment-request'),body.requestId);assert.equal(d.getElementById('packageList').firstElementChild.disabled,true);
+ }finally{f.dom.window.close();}
+});
+test('native purchases require explicit matching euro mode and stay blocked when frozen',async()=>{
+ for(const details of [{},{mode:'live',currency:'EUR',purchasesEnabled:false},{mode:'live',currency:'USD',purchasesEnabled:true},{mode:'live',currency:'EUR',purchasesEnabled:true,frozen:true}]){
+  const f=await creditScreen({details});
+  try{f.d.getElementById('creditsButton').click();await new Promise(r=>setTimeout(r,15));assert.equal(f.calls.some(([path])=>path==='/api/payments/packages'||path==='/api/payments/create'),false);assert.equal(f.d.getElementById('packageList').children.length,0);}finally{f.dom.window.close();}
+ }
+ const f=await creditScreen({packages:{mode:'test',currency:'EUR',purchasesEnabled:true,packages:[{id:'wrong',credits:500,amountCents:500}]}});
+ try{f.d.getElementById('creditsButton').click();await waitFor(()=>f.d.getElementById('creditsMessage').textContent.includes('niet beschikbaar'));assert.equal(f.d.getElementById('packageList').children.length,0);assert.equal(f.redirects.length,0);}finally{f.dom.window.close();}
+});
+test('a late checkout response cannot navigate after the account binding ends',async()=>{
+ const pending=deferred(),f=await creditScreen({create:()=>pending.promise});
+ try{
+  f.d.getElementById('creditsButton').click();await waitFor(()=>f.d.getElementById('packageList').firstElementChild?.disabled===false);f.d.getElementById('packageList').firstElementChild.click();
+  await waitFor(()=>f.calls.some(([path])=>path==='/api/payments/create'));f.stop();pending.resolve(Response.json({checkoutUrl:'https://www.mollie.com/checkout/late'}));await new Promise(r=>setTimeout(r,15));
+  assert.equal(f.redirects.length,0);assert.equal(f.calls.filter(([path])=>path==='/api/payments/create').length,1);
+ }finally{f.dom.window.close();}
+});
+test('native order recovery finds an owned open payment without browser storage and cannot resume in another binding',async()=>{
+ const f=await creditScreen({orders:[{state:'open',requestId:'owned_request_123456'}],reconcile:()=>Response.json({state:'open',checkoutUrl:'https://www.mollie.com/checkout/existing'})});
+ try{
+  f.d.getElementById('creditsButton').click();await waitFor(()=>f.d.getElementById('resumePayment').hidden===false);
+  assert.equal(f.values.get('rig-payment-request'),'owned_request_123456');assert.equal(f.d.getElementById('packageList').firstElementChild.disabled,true);assert.equal(f.calls.some(([path])=>path==='/api/payments/create'),false);
+  f.w.rigScopedStorage={getItem:()=>null};f.d.getElementById('resumePayment').click();await new Promise(r=>setTimeout(r,10));assert.equal(f.redirects.length,0);
+ }finally{f.dom.window.close();}
+});
+test('native paid return trusts the refreshed server balance and never assumes the package was credited',async()=>{
+ const values=new Map([['rig-payment-request','paid_request_123456']]);let currentBalance=0;
+ const f=await creditScreen({storage:values,balance:()=>currentBalance,reconcile:()=>{currentBalance=235;return Response.json({state:'paid',credits:500});}});
+ try{
+  f.d.getElementById('creditsButton').click();await waitFor(()=>f.d.getElementById('creditsMessage').textContent.includes('bijgewerkt'));
+  assert.match(f.d.getElementById('creditsButton').textContent,/2,35/);assert.doesNotMatch(f.d.getElementById('creditsButton').textContent,/5,00/);assert.equal(values.has('rig-payment-request'),false);assert.equal(f.redirects.length,0);
+ }finally{f.dom.window.close();}
+});
+test('native checkout URL and session are independently checked just before navigation',async()=>{
+ const {dom,w}=page();let currentUser=alice;
+ const auth={currentSession:async()=>true,sessionSubject:async()=>currentUser,watchSession:()=>()=>{},dispose(){},api:async path=>Response.json(path==='/api/session'?{userId:alice}:{enabled:false})};
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}});
+ try{
+  for(const url of ['https://mollie.com.evil.test/checkout','https://user@mollie.com/checkout','https://www.mollie.com/checkout#secret','http://www.mollie.com/checkout'])await assert.rejects(w.rigCheckout(url),/Ongeldige betaalpagina/);
+  currentUser=bob;await assert.rejects(w.rigCheckout('https://www.mollie.com/checkout/safe'),/aanmelding is gewijzigd/);assert.equal(app.binding.isActive(),false);
+ }finally{app.dispose();dom.window.close();}
+});
+test('paid quote confirms the exact RIG euro price without a provider-cost requirement',async()=>{
+ const {dom,w,d}=page(),store=new Map(),calls=[];let uploaded=0;
+ w.Blob=Blob;w.rigNativeSite=true;w.rigVideoFunding='credits';w.rigVideoMode='live';w.rigSessionActive=()=>true;
+ w.rigScopedStorage={getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
+ const media={image:{blob:new Blob(['image'])},video:{blob:new Blob(['video'])},face:null,angles:[],quality:'pro',keepSound:true,steady:false,prompt:'Maak dezelfde dans.'};w.rigPreparedMedia=()=>media;
+ w.rigRequest=async(path,init={})=>{calls.push([path,init]);return Response.json(path==='/api/generations/recent'?{job:null}:path==='/api/assets'?{id:'asset'+(++uploaded),status:'ready'}:path==='/api/payments/balance'?{balance:500,currency:'EUR',mode:'live',purchasesEnabled:true}:path==='/api/generation-quotes'?{id:'q1',priceCents:100,currency:'EUR',durationSeconds:3,billedSeconds:3,approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_q1'}:{error:'Unexpected request'});};
+ try{
+  w.eval(generation);d.dispatchEvent(new w.Event('rig-prepared-ready'));await waitFor(()=>d.getElementById('uploadDialog').open);d.getElementById('confirmUpload').click();await waitFor(()=>d.getElementById('confirmGeneration').hidden===false);
+  assert.match(d.getElementById('quoteMessage').textContent,/betaal je.*1,00.*RIG-tegoed.*5,00/);assert.doesNotMatch(d.getElementById('quoteMessage').textContent,/fictie|fal|USD|testtegoed/i);assert.equal(calls.some(([path])=>path==='/api/generations'),false);
+ }finally{dom.window.close();}
+});

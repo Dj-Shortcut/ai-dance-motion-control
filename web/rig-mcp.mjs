@@ -16,7 +16,7 @@ const idSchema={type:'string',pattern:'^[A-Za-z0-9_-]{1,100}$'};
 const outputSchema={type:'object',additionalProperties:true};
 const fileSchema={type:'object',properties:{download_url:{type:'string',maxLength:8192},file_id:{type:'string',maxLength:256},mime_type:{type:'string',maxLength:100},file_name:{type:'string',maxLength:256}},required:['download_url','file_id'],additionalProperties:false};
 const nullableCents={anyOf:[{type:'integer',minimum:0,maximum:500},{type:'null'}]};
-const fundingSchema={enum:['owner','sponsored',null]};
+const fundingSchema={enum:['owner','sponsored','credits',null]};
 const jobSchema=schema({jobId:idSchema,state:{enum:['submitting','queued','processing','unknown','needs_review','completed','failed']},priceCents:{type:'integer',minimum:1},currency:{const:'EUR'},videoUrl:{type:'string',format:'uri'},requiresAuthentication:{const:true}},['jobId','state']);
 const OUTPUTS={
  rig_get_account:schema({userId:{type:'string',pattern:'^u-[0-9a-f-]{36}$'},currency:{const:'EUR'},freeCredit:schema({state:{enum:['eligible','unavailable']},remainingCents:nullableCents},['state','remainingCents']),videoEnabled:{type:'boolean'},funding:fundingSchema},['userId','currency','freeCredit','videoEnabled','funding']),
@@ -88,7 +88,16 @@ async function allowance(context){
  if(data?.state!=='eligible'||!Number.isSafeInteger(data.remainingCents)||data.remainingCents<0||data.remainingCents>500)throw Error('Invalid allowance');
  return {state:'eligible',remainingCents:data.remainingCents};
 }
-async function videoConfig(context){const value=await api(context,'/api/video-config');if(typeof value?.enabled!=='boolean'||value.enabled&&!['owner','sponsored'].includes(value.funding))throw Error('Invalid capability');return {enabled:value.enabled,funding:value.enabled?value.funding:null}}
+async function videoConfig(context){
+ const value=await api(context,'/api/video-config'),websiteOnly=value?.funding==='credits';
+ if(typeof value?.enabled!=='boolean'||value.enabled&&!['owner','sponsored','credits'].includes(value.funding)||websiteOnly&&(value.mode!=='live'||value.currency!=='EUR'))throw Error('Invalid capability');
+ return {enabled:value.enabled,funding:value.enabled?value.funding:null,websiteOnly};
+}
+async function pluginGeneration(context){
+ const capability=await videoConfig(context);
+ if(capability.websiteOnly)fail('Gebruik de RIG-website om je bestanden voor te bereiden, de prijs te bekijken en een video te maken. Genereren vanuit ChatGPT volgt later.');
+ return capability;
+}
 
 export function createRigMcp({authenticate,appOrigin,prepareFiles,issueApproval,consumeApproval,qualities=['standard','pro'],workflows=[{id:'motion_control',maxDurationSeconds:30,animalSingingVerified:false}]}={}){
  const origin=new URL(appOrigin);if(origin.origin!==appOrigin||origin.protocol!=='https:'||origin.username||origin.password||typeof authenticate!=='function')throw Error('Invalid MCP dependencies');
@@ -103,11 +112,11 @@ export function createRigMcp({authenticate,appOrigin,prepareFiles,issueApproval,
  async function call(name,a,context){
   if(name==='rig_get_account'){
    if(!empty(a))fail('Controleer je aanvraag.');const gift=await allowance(context),cap=await videoConfig(context);
-   return textResult({userId:context.userId,currency:'EUR',freeCredit:gift,videoEnabled:cap.enabled,funding:cap.funding},gift.state==='eligible'?`Je hebt ${money(gift.remainingCents)} gratis RIG-testtegoed over.`:'Er is nog geen gratis testtegoed aan deze RIG-account gekoppeld.');
+   return textResult({userId:context.userId,currency:'EUR',freeCredit:gift,videoEnabled:cap.enabled,funding:cap.funding},gift.state==='eligible'?`Je hebt ${money(gift.remainingCents)} gratis RIG-testtegoed over.`:cap.websiteOnly?'Je RIG-account is actief. Bekijk je gekochte tegoed en maak een video op de RIG-website.':'Er is nog geen gratis testtegoed aan deze RIG-account gekoppeld.');
   }
   if(name==='rig_get_capabilities'){
    if(!empty(a))fail('Controleer je aanvraag.');const cap=await videoConfig(context);
-   return textResult({videoEnabled:cap.enabled,funding:cap.funding,workflows:workflowData,directFilePreparation:Boolean(prepareFiles),explicitPriceConfirmation:confirmation},'Dit zijn de aangesloten RIG-mogelijkheden. De prijs verschijnt vóór generatie.');
+   return textResult({videoEnabled:cap.enabled,funding:cap.funding,workflows:workflowData,directFilePreparation:!cap.websiteOnly&&Boolean(prepareFiles),explicitPriceConfirmation:!cap.websiteOnly&&confirmation},cap.websiteOnly?'Gebruik de RIG-website om een video te maken en vooraf de prijs te bekijken. Genereren vanuit ChatGPT volgt later.':'Dit zijn de aangesloten RIG-mogelijkheden. De prijs verschijnt vóór generatie.');
   }
   if(name==='rig_activate_invitation'){
    if(!exact(a,['code'])||!CODE.test(a.code||''))fail('Controleer je uitnodiging.');
@@ -124,16 +133,17 @@ export function createRigMcp({authenticate,appOrigin,prepareFiles,issueApproval,
   if(name==='rig_prepare_files'&&prepareFiles){
    if(!exact(a,['reference_file','motion_file','seconds','startSeconds','quality','prompt','steadyCamera','keepSound'])||!file(a.reference_file)||!file(a.motion_file)||!Number.isInteger(a.seconds)||a.seconds<3||a.seconds>30||a.startSeconds!==undefined&&(!Number.isFinite(a.startSeconds)||a.startSeconds<0||a.startSeconds>3600||Math.round(a.startSeconds*1000)/1000!==a.startSeconds)||a.quality!==undefined&&!qualities.includes(a.quality)||a.prompt!==undefined&&(typeof a.prompt!=='string'||a.prompt.length>1900)||a.steadyCamera!==undefined&&typeof a.steadyCamera!=='boolean'||a.keepSound!==undefined&&typeof a.keepSound!=='boolean')fail('Kies een foto, een bewegingsvideo en een fragment van 3 tot 30 seconden.');
    if(a.quality==='edit-standard'&&(!(a.prompt??'').trim()||a.seconds>15))fail('Geef een beschrijving en kies een fragment van 3 tot 15 seconden.');
-   const gift=await allowance(context),cap=await videoConfig(context);if(!cap.enabled||cap.funding==='sponsored'&&!(gift.remainingCents>0))fail('Er is geen beschikbaar RIG-testtegoed voor deze voorbereiding.');
+   const cap=await pluginGeneration(context),gift=await allowance(context);if(!cap.enabled||cap.funding==='sponsored'&&!(gift.remainingCents>0))fail('Er is geen beschikbaar RIG-testtegoed voor deze voorbereiding.');
    const value=await prepareFiles(context,{reference_file:a.reference_file,motion_file:a.motion_file,seconds:a.seconds,startSeconds:a.startSeconds??0,quality:a.quality??qualities[0],prompt:a.prompt??'',steadyCamera:a.steadyCamera??false,keepSound:a.keepSound??true});
    if(!object(value)||!uuid(value.imageId)||!uuid(value.videoId)||!Number.isFinite(value.durationSeconds)||value.durationSeconds<3||value.durationSeconds>30)throw Error('Invalid prepared files');
    return textResult({imageId:value.imageId,videoId:value.videoId,durationSeconds:value.durationSeconds,quality:a.quality??qualities[0],generated:false},'Je bestanden zijn privé voorbereid in RIG. Er is nog geen video gegenereerd; vraag nu de prijsopgave op.');
   }
   if(name==='rig_create_quote'){
    const input=quoteInput(a,qualities);if(!input)fail('Controleer je voorbereide bestanden en instellingen.');
+   const cap=await pluginGeneration(context);
    const value=await api(context,'/api/generation-quotes','POST',input);
    if(!object(value)||value.quality!==input.quality||!uuid(value.id)||!Number.isSafeInteger(value.priceCents)||value.priceCents<1||value.priceCents>10000||value.currency!=='EUR'||!Number.isFinite(value.durationSeconds)||value.durationSeconds<3||value.durationSeconds>30||!Number.isInteger(value.billedSeconds)||value.billedSeconds!==Math.ceil(value.durationSeconds)||!Number.isSafeInteger(value.expiresAt)||value.expiresAt<=Date.now())throw Error('Invalid quote');
-   const gift=await allowance(context),cap=await videoConfig(context),withinFreeCredit=gift.state==='eligible'?gift.remainingCents>=value.priceCents:null;
+   const gift=await allowance(context),withinFreeCredit=gift.state==='eligible'?gift.remainingCents>=value.priceCents:null;
    const quote={quoteId:value.id,quality:input.quality,durationSeconds:value.durationSeconds,billedSeconds:value.billedSeconds,priceCents:value.priceCents,currency:'EUR',expiresAt:value.expiresAt,funding:cap.funding,remainingCents:gift.remainingCents,withinFreeCredit,confirmationRequired:true,confirmationAvailable:false};
    let meta;
    if(confirmation&&cap.enabled&&(cap.funding==='owner'||withinFreeCredit===true)){
@@ -145,6 +155,7 @@ export function createRigMcp({authenticate,appOrigin,prepareFiles,issueApproval,
   }
   if(name==='rig_confirm_generation'&&confirmation){
    if(!exact(a,['quoteId','approvalToken'])||!uuid(a.quoteId)||!TOKEN.test(a.approvalToken||''))fail('Bevestig eerst de prijs met de knop in RIG.');
+   await pluginGeneration(context);
    const approved=await consumeApproval(context,{quoteId:a.quoteId,approvalToken:a.approvalToken});
    if(!object(approved)||!uuid(approved.idempotencyKey))fail('De bevestiging is ongeldig of verlopen. Controleer de prijs opnieuw.');
    const value=await api(context,'/api/generations','POST',{quoteId:a.quoteId,idempotencyKey:approved.idempotencyKey,approvalToken:a.approvalToken});

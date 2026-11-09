@@ -58,7 +58,15 @@
       const hasApproval=Object.hasOwn(data,'approvalToken')||Object.hasOwn(data,'idempotencyKey');
       if(hasApproval&&(!/^[A-Za-z0-9_-]{43}$/.test(data.approvalToken||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(data.idempotencyKey||'')))throw new Error('De prijsbevestiging is niet beschikbaar. Bereid je bestanden opnieuw voor.');
       const approved={...(hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{}),...(edit?{transferPolicy:falTransferPolicy}:{})};
-      if(window.rigVideoFunding==='sponsored'){
+      if(window.rigVideoFunding==='credits'){
+        if(window.rigVideoMode!=='live')throw new Error('Je betaalde tegoed kon niet worden gecontroleerd.');
+        const status=await call('/api/payments/balance');
+        if(status?.mode!=='live'||status.currency!=='EUR'||status.frozen===true||!Number.isSafeInteger(status.balance)||status.balance<0)throw new Error('Je RIG-tegoed kon niet worden gecontroleerd.');
+        if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
+        if(data.priceCents>status.balance){note(`Deze video kost ${currency(data.priceCents)}. Je hebt ${currency(status.balance)} RIG-tegoed. Koop tegoed of kies een korter fragment.`);return;}
+        if(window.rigNativeSite===true&&!hasApproval){note(`Deze video kost ${currency(data.priceCents)}. De prijsbevestiging is momenteel niet beschikbaar. Bereid je bestanden opnieuw voor.`);return;}
+        quote={id:data.id,media,...approved};note(`Als je bevestigt, betaal je ${currency(data.priceCents)} uit je RIG-tegoed. Je hebt ${currency(status.balance)} beschikbaar. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
+      }else if(window.rigVideoFunding==='sponsored'){
         const status=await call('/api/sponsor-invitations/status');
         if(status?.state!=='eligible'||!Number.isSafeInteger(status.remainingCents)||status.remainingCents<0||status.remainingCents>500)throw new Error('Je gratis testtegoed kon niet worden gecontroleerd.');
         if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
@@ -155,6 +163,12 @@
       }
       if(seq!==estimateSequence)return;
       if(data.quality!==quality || data.durationSeconds!==duration)throw Error();
+      if(window.rigVideoFunding==='credits'){
+        const proposed=data.customerProposal;
+        if(window.rigVideoMode!=='live'||proposed?.currency!=='EUR'||proposed.binding!==false||!Number.isSafeInteger(proposed.priceCents)||proposed.priceCents<1)throw Error();
+        lastEstimateKey=key;lastEstimate=data;
+        target.textContent=`Raming: ${currency(proposed.priceCents)}. Je bevestigt de definitieve prijs vóór de video wordt gemaakt.`;target.hidden=false;return;
+      }
       if(window.rigVideoFunding==='sponsored'){
         const proposed=data.customerProposal;
         if(proposed?.currency!=='EUR'||proposed.binding!==false||!Number.isSafeInteger(proposed.priceCents)||proposed.priceCents<1)throw Error();
@@ -170,7 +184,7 @@
       if(proposed?.currency==='EUR' && proposed.binding===false && Number.isSafeInteger(proposed.priceCents) && proposed.priceCents>0)message+=` Voorstel klantprijs: ${currency(proposed.priceCents)} (niet bindend).`;
       else message+=' Een klantprijs is nog niet ingesteld.';
       target.textContent=message;target.hidden=false;
-    }catch(error){if(seq===estimateSequence){target.textContent=error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':window.rigVideoFunding==='sponsored'?'De prijsraming is tijdelijk niet beschikbaar.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
+    }catch(error){if(seq===estimateSequence){target.textContent=error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':['sponsored','credits'].includes(window.rigVideoFunding)?'De prijsraming is tijdelijk niet beschikbaar.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
   }
   function scheduleProviderEstimate(){
     const seq=++estimateSequence;

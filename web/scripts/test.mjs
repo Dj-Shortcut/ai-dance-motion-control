@@ -4,16 +4,16 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 // Explicit regression gates. Operator/deployment scripts are never executed.
 const groups={
  unit:[
-  'edit-mode-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
+  'edit-mode-ui','local-media-security-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui',
   'browser-recording-integrity','browser-frame-padding','browser-edit-dimensions','rig-mcp','rig-chatgpt-files','rig-sites-app','build-rig-sites',
   'generation','rig-inline-inputs','rig-inline-assets','rig-inline-generation','rig-r2-delivery','rig-r2-inputs','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',
   'price-estimate','price-preflight','media-binding','media-redirect','consent-assets','production-bridge-auth',
-  'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay'
+  'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay','production-ingress'
  ],
  workerd:[
   'sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
-  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','gateway-relay-workerd'
+  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-invitation-workerd','production-video-workerd','production-collector-workerd','gateway-relay-workerd'
  ],
  media:['mp4-inspect','mp4-edit-support','video-preparer','cloud-media-service','long-duration','closed-video-service','normalize']
 };

@@ -22,13 +22,15 @@ export async function enableVideoIfAvailable({binding,window,document,loadScript
   if (!binding.isActive() || config?.enabled!==true) return unavailable();
   const qualities=config.qualities===undefined?['standard','pro']:config.qualities;
   if(!Array.isArray(qualities)||!qualities.length||qualities.some(value=>!['standard','pro','edit-standard'].includes(value))||new Set(qualities).size!==qualities.length)return unavailable();
-  window.rigVideoFunding=config.funding==='sponsored'?'sponsored':'owner';
+  if(config.funding==='credits'&&(config.mode!=='live'||config.currency!=='EUR'))return unavailable();
+  window.rigVideoFunding=config.funding==='credits'?'credits':config.funding==='sponsored'?'sponsored':'owner';
+  window.rigVideoMode=config.funding==='credits'?'live':'test';
   window.rigVideoQualities=[...qualities];
   window.rigVideoUnavailableReason=null;
   await loadGenerationUi();
   if (!binding.isActive()) return unavailable();
   window.rigVideoEnabled=true;
-  document.getElementById('videoAvailabilityNote').textContent=window.rigVideoFunding==='sponsored'?'Je testvideo’s worden betaald uit je gratis testtegoed.':'Mollie staat in testmodus. Videogeneratie gebruikt echt fal-tegoed.';
+  document.getElementById('videoAvailabilityNote').textContent=window.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':window.rigVideoFunding==='sponsored'?'Je testvideo’s worden betaald uit je gratis testtegoed.':'Mollie staat in testmodus. Videogeneratie gebruikt echt fal-tegoed.';
   document.dispatchEvent(new window.Event('rig-video-availability'));
   return true;
  } catch {return unavailable();}

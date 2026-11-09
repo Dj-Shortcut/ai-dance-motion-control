@@ -1,3 +1,4 @@
+import {isProductionGenerationContext} from './production-generation-context.mjs';
 import { handlePaymentRoute } from './payment.mjs';
 import { createGenerationHandler } from './generation.mjs';
 
@@ -41,16 +42,18 @@ export function sitesIdentity(request, env) {
   return validUser(id) ? id : null;
 }
 
-// Test-only routing. Caller MUST provide a durable shared limiter, and storage
+// Private routing. Live requires a validated production capability. Caller MUST
+// provide a durable shared limiter and storage
 // adapters only backed by server-verified immutable assets. No mock defaults.
 // Payment and generation implementations are injectable for fixture testing.
-export function createRouter({identity=sitesIdentity,limit,makeGenerationServices,makeAssets,payment=handlePaymentRoute,generationFactory=createGenerationHandler} = {}) {
+export function createRouter({identity=sitesIdentity,limit,makeGenerationServices,makeAssets,payment=handlePaymentRoute,generationFactory=createGenerationHandler,productionContext} = {}) {
   return async function route(req, env) {
     const origin = originOf(env);
     const url = new URL(req.url);
     const kind = endpoint(url.pathname);
     if (!kind) return json(404,{error:'Niet gevonden.'});
-    if (!origin || env.RIG_MODE !== 'test' || env.RIG_MOLLIE_MODE !== 'test') return json(503,{error:'Dienst niet beschikbaar.'});
+    const paid=env.RIG_MODE==='live'&&env.RIG_MOLLIE_MODE==='live'&&isProductionGenerationContext(productionContext,{db:env.DB,origin});
+    if (!origin || !paid&&(env.RIG_MODE!=='test'||env.RIG_MOLLIE_MODE!=='test') || paid&&['payment','webhook'].includes(kind)) return json(503,{error:'Dienst niet beschikbaar.'});
     if (kind === 'webhook') {
       try { const expected = new URL(env.RIG_WEBHOOK_URL); if (expected.protocol !== 'https:' || expected.username || expected.password || expected.search || expected.hash || expected.href !== url.href) return json(503,{error:'Dienst niet beschikbaar.'}); } catch { return json(503,{error:'Dienst niet beschikbaar.'}); }
     } else if (url.origin !== origin) return json(503,{error:'Dienst niet beschikbaar.'});
@@ -87,7 +90,7 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
       const services = await makeGenerationServices(env, user);
       if (!services) return json(503,{error:'Videogeneratie is nog niet beschikbaar.'});
       // Never allow factory input to override the trusted identity or origin.
-      const handler = generationFactory({...services,mode:'test',trustedOrigin:origin,authenticate:async()=>({id:user})});
+      const handler = generationFactory({...services,mode:paid?'live':'test',...(paid?{productionContext}:{}),trustedOrigin:origin,authenticate:async()=>({id:user})});
       const res = await handler(req);
       return res instanceof Response ? secured(res) : json(503,{error:'Dienst niet beschikbaar.'});
     } catch { return json(503,{error:'Dienst niet beschikbaar.'}); }
@@ -97,9 +100,9 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
 // Atomic fixed-window limiter. D1 schema must be provisioned via migrations, not
 // at request time. Reject on missing DB/SQL error. Caller chooses short limits.
 export async function d1Limit({env,category,userId,method}) {
-  if (!env.DB || !['payment','generation','webhook','asset'].includes(category)) throw Error('Missing limiter');
+  if (!env.DB || !['payment','generation','webhook','asset','session','readiness'].includes(category)) throw Error('Missing limiter');
   const now = Math.floor(Date.now()/1000);
-  const limit = category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
+  const limit = category==='readiness'?20:category==='session'?360:category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
   const bucket = `${category}:${userId || 'global'}`;
   const row = await env.DB.prepare(`INSERT INTO rig_rate_limits(bucket,window_start,requests)
     VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET

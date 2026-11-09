@@ -13,6 +13,8 @@ import {createAssets} from './assets.mjs';
 import {handleProviderInput,mintProofProviderInput} from './rig-provider-inputs.mjs';
 import {authorizeGatewayProof,createGatewayVerification,GATEWAY_PROOF_JOB} from './rig-gateway-verification.mjs';
 import {createR2InputVerification,R2_INPUT_VERIFICATION_JOB} from './rig-r2-verification.mjs';
+import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
+import {collectProduction} from './production-collector.mjs';
 
 const ownerId=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const tokenPattern=/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -193,4 +195,15 @@ export function createClosedVideoWorker({serviceFactory=createClosedVideoService
   finally{if(sites)try{await sites.releaseUnused()}catch{}}
  }};
 }
-export default {fetch(req,env){return createClosedVideoWorker().fetch(req,env)}};
+export default {
+ fetch(req,env){
+  const u=new URL(req.url);
+  if(u.origin===env.RIG_PRODUCTION_BRIDGE_ORIGIN)return createProductionCommerceWorker().fetch(req,env);
+  return createClosedVideoWorker().fetch(req,env);
+ },
+ async scheduled(_event,env,ctx){
+  const work=collectProduction(env);
+  if(ctx?.waitUntil)ctx.waitUntil(work);
+  else await work;
+ }
+};

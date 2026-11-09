@@ -8,10 +8,18 @@ const HASH=/^[a-f0-9]{64}$/,SITE=/^appgprj_[a-zA-Z0-9]{20,80}$/;
 const hex=data=>Array.from(new Uint8Array(data),x=>x.toString(16).padStart(2,'0')).join('');
 export const sitesDigest=async data=>hex(await crypto.subtle.digest('SHA-256',data));
 export function sitesOrigin(value){try{const u=new URL(value);return u.protocol==='https:'&&u.origin===value&&!u.username&&!u.password?u.origin:null}catch{return null}}
+// Browser payment routes only. A webhook is never an authenticated customer
+// operation, and reconciliation is a write even though it reads provider state.
+export function sitesPaymentPath(path,method){
+ if(typeof path!=='string'||path.includes('?')||path.includes('#'))return false;
+ if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders','/api/payments/readiness'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}$/.test(path);
+ return method==='POST'&&(path==='/api/payments/create'||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/reconcile$/.test(path));
+}
 export function sitesPath(path,method){
  if(typeof path!=='string'||path.length>1200||!path.startsWith('/')||path.startsWith('//')||/[#\\\r\n]/.test(path)||!['GET','POST'].includes(method))return false;
  let u;try{u=new URL(path,'https://rig.invalid')}catch{return false}
  if(u.origin!=='https://rig.invalid'||u.pathname+u.search!==path)return false;
+ if(sitesPaymentPath(path,method))return true;
  if(method==='GET')return ['/api/session','/api/video-config','/api/sponsor-invitations/status','/api/generations/recent'].includes(path)||u.pathname==='/api/estimate/fal'||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
  return ['/api/sponsor-invitations/redeem','/api/assets','/api/generation-quotes','/api/generations','/api/chatgpt/quote-approvals','/api/chatgpt/quote-approvals/consume','/api/generations/a5db90b7-7558-40bf-a013-2e121d056f2d/verify-gateway'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[0-9a-f-]{36}\/verify-inputs$/.test(path);
 }

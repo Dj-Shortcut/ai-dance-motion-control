@@ -3,7 +3,7 @@
 const SITE='appgprj_6aeec13b50448191b88da670dac8aa98';
 const SITE_ORIGIN='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 const BRIDGE_ORIGIN='https://rig-api.shortcut-computerguy.workers.dev';
-function validWebhook(value){try{const u=new URL(value);return u.protocol==='https:'&&u.pathname==='/api/payments/webhook'&&!u.username&&!u.password&&!u.search&&!u.hash&&u.href===value}catch{return false}}
+function validWebhook(value){try{const u=new URL(value);return u.protocol==='https:'&&u.origin===BRIDGE_ORIGIN&&u.pathname==='/api/payments/webhook'&&!u.username&&!u.password&&!u.search&&!u.hash&&u.href===value}catch{return false}}
 export function productionEnvironment(env){
  if(env?.RIG_PRODUCTION_PAYMENTS_ENABLED!=='yes'||env?.RIG_PRIVATE_SERVICE_ONLY!=='yes'||!env.PRODUCTION_DB||env.PRODUCTION_DB===env.DB||!/^live_[A-Za-z0-9]+$/.test(env.MOLLIE_LIVE_API_KEY||'')||!/^pfl_[A-Za-z0-9]+$/.test(env.RIG_PRODUCTION_MOLLIE_PROFILE||'')||!/^[-_A-Za-z0-9]{8,80}$/.test(env.RIG_PRODUCTION_ENVIRONMENT_ID||'')||env.RIG_PRODUCTION_SITE_ID!==SITE||env.RIG_PRODUCTION_SITE_ORIGIN!==SITE_ORIGIN||env.RIG_PRODUCTION_BRIDGE_ORIGIN!==BRIDGE_ORIGIN||!validWebhook(env.RIG_PRODUCTION_WEBHOOK_URL)||typeof env.RIG_PRODUCTION_PACKAGES!=='string')return null;
  return {...env,DB:env.PRODUCTION_DB,MOLLIE_API_KEY:env.MOLLIE_LIVE_API_KEY,RIG_MOLLIE_PROFILE_ID:env.RIG_PRODUCTION_MOLLIE_PROFILE,RIG_MODE:'live',RIG_MOLLIE_MODE:'live',RIG_PUBLIC_ORIGIN:SITE_ORIGIN,RIG_WEBHOOK_URL:env.RIG_PRODUCTION_WEBHOOK_URL,RIG_PACKAGES:env.RIG_PRODUCTION_PACKAGES};

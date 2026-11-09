@@ -1,5 +1,6 @@
 // Short-lived bearer capabilities for O3 inputs. Never log or expose their URLs.
 import {assetTesting} from './assets.mjs';
+import {isProductionGenerationContext} from './production-generation-context.mjs';
 const MAX=16*1024*1024, TTL=6*60*60*1000;
 const MODEL='fal-ai/kling-video/o3/standard/video-to-video/edit';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -43,11 +44,12 @@ function rangeFor(value,size){
  const m=/^bytes=(\d*)-(\d*)$/.exec(value);if(!m||value.length>128||(!m[1]&&!m[2]))return false;
  let start,end;if(!m[1]){const suffix=Number(m[2]);if(!Number.isSafeInteger(suffix)||suffix<=0)return false;start=Math.max(0,size-suffix);end=size-1}else{start=Number(m[1]);end=m[2]?Number(m[2]):size-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>=size||end<start)return false;end=Math.min(end,size-1)}return {start,end};
 }
-export async function handleProviderInput(req,env,{verifyTenant,authorizeProof,now=Date.now()}={}){
+export async function handleProviderInput(req,env,{verifyTenant,authorizeProof,productionContext,now=Date.now()}={}){
  try{
   const token=await parse(req,env,now);if(!token)return no();
-  if(typeof verifyTenant!=='function'||!await verifyTenant(env)||env.RIG_MODE!=='test'||env.RIG_MOLLIE_MODE!=='test')return no();
-  const row=token.scope==='proof'?await (typeof authorizeProof==='function'?authorizeProof({env,token,now}):null):await env.DB.prepare(`SELECT j.user_id,j.price_cents,q.model,q.input_json FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents WHERE j.id=? AND (j.state IN ('submitting','queued') OR (j.state='unknown' AND j.poll_token='dispatch-authorized' AND j.poll_lease_until=-1)) AND j.price_cents>0 AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='test') AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id) AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='reserve:'||j.id AND l.user_id=j.user_id AND l.delta=-j.price_cents AND l.order_id IS NULL) AND NOT EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id IN ('release:'||j.id,'settle:'||j.id))`).bind(token.jobId).first();
+  const mode=env.RIG_MODE;
+  if(typeof verifyTenant!=='function'||!await verifyTenant(env)||!['test','live'].includes(mode)||env.RIG_MOLLIE_MODE!==mode||mode==='live'&&(!isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN})||token.scope==='proof'))return no();
+  const row=token.scope==='proof'?await (typeof authorizeProof==='function'?authorizeProof({env,token,now}):null):await env.DB.prepare(`SELECT j.user_id,j.price_cents,q.model,q.input_json FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents WHERE j.id=? AND (j.state IN ('submitting','queued') OR (j.state='unknown' AND j.poll_token='dispatch-authorized' AND j.poll_lease_until=-1)) AND j.price_cents>0 AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?) AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id) AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='reserve:'||j.id AND l.user_id=j.user_id AND l.delta=-j.price_cents AND l.order_id IS NULL) AND NOT EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id IN ('release:'||j.id,'settle:'||j.id))`).bind(token.jobId,mode).first();
   if(!row||!USER.test(row.user_id??'')||row.model!==MODEL||typeof row.input_json!=='string'||row.input_json.length>16000)return no();
   const input=JSON.parse(row.input_json),refs=input?.refs;
   if(!Array.isArray(refs)||refs.length!==2||input?.data?.quality!=='edit-standard'||refs[0]?.id!==input.data.imageId||refs[0]?.kind!=='image'||refs[1]?.id!==input.data.videoId||refs[1]?.kind!=='video')return no();
