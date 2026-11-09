@@ -17,7 +17,7 @@ test('a fresh portable build creates its metadata and serves current UI without 
   const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(server).toString('base64'));
   const origin='https://rig.example.chatgpt.site',env={RIG_SITES_PRODUCER_ORIGIN:origin};
   const page=await worker.fetch(new Request(origin+'/'),env);assert.equal(page.status,200);const html=await page.text();
-  assert.match(html,/Persoon laten bewegen/);assert.match(html,/id="briefDialog"/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
+  assert.match(html,/Op je foto/);assert.match(html,/id="briefDialog"/);assert.match(html,/id="tryShortVideo"[^>]*>Eerst een proefje · 5 s<\/button>/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
   const finance=await worker.fetch(new Request(origin+'/multiuser/finance.js'),env);assert.equal(finance.status,200);assert.match(await finance.text(),/\/api\/owner\/finance/);
   const security=await worker.fetch(new Request(origin+'/multiuser/owner-security.js'),env);assert.equal(security.status,200);assert.match(await security.text(),/rigOwnerVerification/);
   const discovery=await worker.fetch(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);

@@ -18,7 +18,7 @@
     if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
   }
-  function showReviewedType(quality){const edit=quality==='edit-standard';el('quoteTitle').textContent=edit?'Video bewerken':'Persoon laten bewegen';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
+  function showReviewedType(quality){const edit=quality==='edit-standard';el('quoteTitle').textContent=edit?'In de video':'Op je foto';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
   async function call(path, options={}) {
     const response=await window.rigRequest(path,{credentials:'same-origin',cache:'no-store',...options});
     let data; try { data=await response.json(); } catch { throw new Error('De dienst is momenteel niet beschikbaar.'); }
