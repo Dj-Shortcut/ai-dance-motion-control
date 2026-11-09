@@ -100,7 +100,7 @@ test('terms distinguish bank payments, reservations and refund requests without 
 
 test('privacy and help describe actual providers, temporary link access and manual request review',async()=>{
  const privacy=await commerceDocument('/privacy').text(),help=await commerceDocument('/hulp').text();
- for(const provider of ['OpenAI','Cloudflare','Mollie','Fal.ai','Accountable'])assert.ok(privacy.includes(provider));
+ for(const provider of ['OpenAI','Cloudflare','Mollie','Fal.ai','Accountable','Zoho Mail'])assert.ok(privacy.includes(provider));
  assert.match(privacy,/accountidentificatie uit je ChatGPT-aanmelding/);
  assert.match(privacy,/buiten de EER/);
  assert.match(privacy,/tijdelijke links bij Fal niet privé/);
