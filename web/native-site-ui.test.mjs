@@ -171,6 +171,19 @@ test('native checkout URL and session are independently checked just before navi
   currentUser=bob;await assert.rejects(w.rigCheckout('https://www.mollie.com/checkout/safe'),/aanmelding is gewijzigd/);assert.equal(app.binding.isActive(),false);
  }finally{app.dispose();dom.window.close();}
 });
+
+test('native final checkout navigation accepts only the verified PPRO route and rechecks the current account',async()=>{
+ const {dom,w,d}=page(),redirects=[],checkout='https://redirect.ppro.com/v0/pages/?redirection_token=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjp0cnVlfQ.c2lnbmF0dXJl';let currentUser=alice,checks=0;
+ const browser={document:d,sessionStorage:w.sessionStorage,Event:w.Event,location:{href:'https://rig.example.chatgpt.site/',assign:url=>redirects.push(url)}};
+ const auth={currentSession:async()=>true,sessionSubject:async()=>{checks++;return currentUser;},watchSession:()=>()=>{},dispose(){},api:async path=>Response.json(path==='/api/session'?{userId:alice}:{enabled:false})};
+ const app=await startNativeSiteApp({window:browser,auth,loadScript:async()=>{}});
+ try{
+  checks=0;await browser.rigCheckout(checkout);assert.deepEqual(redirects,[checkout]);assert.equal(checks,1);
+  for(const url of [checkout.replace('redirect.ppro.com','evil.ppro.com'),checkout.replace('/v0/pages/','/other/'),checkout+'&extra=1',checkout+'#secret',checkout.replace('https:','http:')])await assert.rejects(browser.rigCheckout(url),/Ongeldige betaalpagina/);
+  assert.equal(redirects.length,1);assert.equal(checks,1,'untrusted destinations fail before a navigation or account read');
+  currentUser=bob;await assert.rejects(browser.rigCheckout(checkout),/aanmelding is gewijzigd/);assert.equal(app.binding.isActive(),false);assert.equal(redirects.length,1);
+ }finally{app.dispose();dom.window.close();}
+});
 test('paid quote confirms the exact RIG euro price without a provider-cost requirement',async()=>{
  const {dom,w,d}=page(),store=new Map(),calls=[];let uploaded=0;
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoFunding='credits';w.rigVideoMode='live';w.rigSessionActive=()=>true;

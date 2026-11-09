@@ -43,7 +43,16 @@
     return body;
   }
   function isCheckout(value){
-    try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&!url.hash&&(url.hostname==='mollie.com'||url.hostname.endsWith('.mollie.com'));}catch{return false;}
+    // Keep this classic-script guard in sync with mollie-checkout-url.mjs.
+    if(typeof value!=='string'||value.length>16384||/[\u0000-\u0020\u007f]/.test(value))return false;
+    try{
+      const url=new URL(value);
+      if(url.protocol!=='https:'||url.username||url.password||url.port||url.hash)return false;
+      if(url.hostname==='mollie.com'||url.hostname.endsWith('.mollie.com'))return true;
+      if(url.hostname!=='redirect.ppro.com'||url.pathname!=='/v0/pages/')return false;
+      const query=[...url.searchParams];
+      return query.length===1&&query[0][0]==='redirection_token'&&query[0][1].length<=8192&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(query[0][1]);
+    }catch{return false;}
   }
   async function refreshBalance(){
     const sequence=++balanceRequestSequence,ctx=captureContext(),funding=window.rigVideoFunding,nativeMode=native();

@@ -3,6 +3,19 @@ import {readFile,mkdtemp,rm} from 'node:fs/promises';import {join} from 'node:pa
 import {Miniflare} from 'miniflare';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',hook='https://rig-api.shortcut-computerguy.workers.dev/api/payments/webhook';
 async function migrate(db){const sql=(await readFile(new URL('./production-schema.sql',import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const s of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run()}
+const OWNER='u-12345678-1234-4123-8123-123456789abc',OTHER='u-22345678-1234-4123-8123-123456789abc';
+const PPRO='https://redirect.ppro.com/v0/pages/?redirection_token=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjp0cnVlfQ.c2lnbmF0dXJl';
+async function checkoutFixture(){
+ const dir=await mkdtemp(join(process.cwd(),'.rig-prod-provider-checkout-test-'));let mf;
+ try{
+  await build({entryPoints:['production-payment-workerd-fixture.mjs'],outfile:join(dir,'entry.mjs'),bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
+  mf=new Miniflare({cf:false,workers:[{name:'private',modules:true,scriptPath:join(dir,'entry.mjs'),compatibilityDate:'2026-01-01',d1Databases:{DB:'test-db',PRODUCTION_DB:'prod-db'}}]});
+  const db=await mf.getD1Database('PRODUCTION_DB');await migrate(db);
+  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,'https://rig-api.shortcut-computerguy.workers.dev','pfl_TESTPROFILE',hook).run();
+  const headers=user=>({origin:SITE,'content-type':'application/json','x-fixture-user':user});
+  return {db,call:(path,{user=OWNER,body}={})=>mf.dispatchFetch(SITE+path,{method:body===undefined?'GET':'POST',headers:headers(user),...(body!==undefined?{body:JSON.stringify(body)}:{})}),scenario:value=>mf.dispatchFetch(SITE+'/fixture/scenario?value='+value),stats:()=>mf.dispatchFetch(SITE+'/fixture/stats').then(r=>r.json()),async close(){await mf.dispose();await rm(dir,{recursive:true,force:true})}};
+ }catch(error){if(mf)await mf.dispose();await rm(dir,{recursive:true,force:true});throw error;}
+}
 test('isolated actual D1 live composition: disabled tenant, create, verify, replay',async()=>{
  const dir=await mkdtemp(join(process.cwd(),'.rig-prod-test-'));let mf;
  try{
@@ -53,4 +66,38 @@ test('verified payments survive missing or invalid checkout; unverified amount, 
    }
   }
  }finally{if(mf)await mf.dispose();await rm(dir,{recursive:true,force:true})}
+});
+
+test('verified existing Bancontact payment resumes its PPRO handoff without a second creation or credit',async()=>{
+ const f=await checkoutFixture();try{
+  const requestId='existing-bancontact-handoff',payload={packageId:'unit',requestId};let response=await f.call('/api/payments/create',{body:payload});assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).checkoutUrl,'https://www.mollie.com/checkout/fixture');
+  const original=await f.db.prepare('SELECT id,payment_id,state,amount_cents,credits FROM rig_orders WHERE user_id=?').bind(OWNER).first();assert.equal(original.state,'open');
+  await f.scenario('ppro_recovery');
+  response=await f.call(`/api/payments/orders/${requestId}`);assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).checkoutUrl,PPRO);
+  for(let i=0;i<2;i++){
+   response=await f.call(`/api/payments/orders/${requestId}/reconcile`,{body:{}});assert.equal(response.status,200,await response.clone().text());const recovered=await response.json();assert.equal(recovered.state,'open');assert.equal(recovered.checkoutUrl,PPRO);assert.equal(recovered.amountCents,500);assert.equal(recovered.credits,500);
+  }
+  const before=await f.stats();response=await f.call(`/api/payments/orders/${requestId}`,{user:OTHER});assert.equal(response.status,404);assert.equal((await f.stats()).reads,before.reads);
+  assert.equal((await f.call('/api/payments/create',{body:payload})).status,409);assert.equal((await f.stats()).created,1);
+  assert.deepEqual(await f.db.prepare('SELECT id,payment_id,state,amount_cents,credits FROM rig_orders WHERE user_id=?').bind(OWNER).first(),original);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
+ }finally{await f.close();}
+});
+
+test('verified new checkout may already be a PPRO Bancontact link and remains idempotent',async()=>{
+ const f=await checkoutFixture();try{
+  await f.scenario('ppro_checkout');const payload={packageId:'unit',requestId:'initial-bancontact-provider-link'},response=await f.call('/api/payments/create',{body:payload});assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).checkoutUrl,PPRO);
+  const order=await f.db.prepare('SELECT payment_id,state FROM rig_orders WHERE user_id=?').bind(OWNER).first();assert.match(order.payment_id,/^tr_Pay\d+$/);assert.equal(order.state,'open');
+  assert.equal((await f.call('/api/payments/create',{body:payload})).status,409);assert.equal((await f.stats()).created,1);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
+ }finally{await f.close();}
+});
+
+test('recovery rejects hostile processor URLs and mismatched payment details before exposing any checkout',async()=>{
+ const f=await checkoutFixture();try{
+  const requestId='rejected-provider-redirect',payload={packageId:'unit',requestId};assert.equal((await f.call('/api/payments/create',{body:payload})).status,200);
+  for(const scenario of ['recovery_bad_checkout','recovery_bad_path','recovery_bad_query','recovery_bad_amount','recovery_bad_metadata','recovery_bad_profile']){
+   await f.scenario(scenario);const response=await f.call(`/api/payments/orders/${requestId}`);assert.equal(response.status,503,scenario);const data=await response.json();assert.equal(data.checkoutUrl,undefined);assert.doesNotMatch(JSON.stringify(data),/redirection_token|evil\.invalid|pfl_WRONGPROFILE/);
+  }
+  await f.scenario('ppro_recovery');const response=await f.call(`/api/payments/orders/${requestId}/reconcile`,{body:{}});assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).checkoutUrl,PPRO);
+  assert.equal((await f.stats()).created,1);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_orders').first()).n,1);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
+ }finally{await f.close();}
 });

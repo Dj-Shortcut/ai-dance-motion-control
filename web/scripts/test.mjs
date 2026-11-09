@@ -4,7 +4,7 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 // Explicit regression gates. Operator/deployment scripts are never executed.
 const groups={
  unit:[
-  'edit-mode-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
+  'mollie-checkout-url','edit-mode-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui',
   'browser-recording-integrity','browser-frame-padding','browser-edit-dimensions','rig-mcp','rig-chatgpt-files','rig-sites-app','build-rig-sites',
   'generation','rig-inline-inputs','rig-inline-assets','rig-inline-generation','rig-r2-delivery','rig-r2-inputs','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',
