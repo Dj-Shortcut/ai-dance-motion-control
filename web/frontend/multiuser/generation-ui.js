@@ -120,7 +120,7 @@
       }
       if(data.state==='failed'){
         const providerMessage=providerFailureMessage(data),refundConfirmed=data.refundConfirmed===true;
-        if(!providerMessage||refundConfirmed)window.rigScopedStorage.removeItem('rig-generation-job');
+        if(refundConfirmed)window.rigScopedStorage.removeItem('rig-generation-job');
         el('checkGeneration').hidden=refundConfirmed;
         note(providerMessage||(refundConfirmed?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
       }

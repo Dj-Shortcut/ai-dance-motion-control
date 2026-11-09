@@ -190,6 +190,17 @@ test('public jobs expose only allowlisted terminal failure codes and never imply
   job.state='unknown';assert.equal(Object.hasOwn(await (await f.handler(get('/api/generations/job1'))).json(),'failureCode'),false);
  }
 });
+test('generic failures report only a proven refund and remain recoverable without another provider request',async()=>{
+ const f=fixture();let settled=false,proofReads=0;
+ f.services.jobs.confirmFailureRefund=async(user,id,request)=>{assert.deepEqual([user,id,request],['u1','job1','abc-123']);proofReads++;return settled;};
+ await quote(f);await submit(f);f.setTerminalError('private provider diagnostic');
+ let result=await (await f.handler(get('/api/generations/job1'))).json();
+ assert.equal(result.state,'failed');assert.equal(Object.hasOwn(result,'refundConfirmed'),false);assert.doesNotMatch(JSON.stringify(result),/diagnostic|provider_failed/);
+ const before=f.calls();settled='true';result=await (await f.handler(get('/api/generations/job1'))).json();assert.equal(Object.hasOwn(result,'refundConfirmed'),false);
+ settled=true;result=await (await f.handler(get('/api/generations/job1'))).json();assert.equal(result.refundConfirmed,true);
+ assert.equal(proofReads,3);assert.deepEqual(f.calls(),before);
+ f.setUser('u2');assert.equal((await f.handler(get('/api/generations/job1'))).status,404);assert.equal(proofReads,3);
+});
 test('other HTTP 422s and wrong status request IDs remain queued without refund',async()=>{
  const expected={loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error'};
  const cases=[()=>new Response('<html>422</html>',{status:422,headers:{'content-type':'text/html'}}),()=>Response.json({detail:'bad input'},{status:422}),()=>Response.json({detail:[{...expected,type:'other_error'}]},{status:422}),()=>Response.json({detail:[{...expected,loc:['other']}]},{status:422}),()=>Response.json({request_id:'wrong',detail:[expected]},{status:422}),()=>Response.json({detail:[expected,expected]},{status:422}),()=>Response.json({detail:[expected]},{status:503})];

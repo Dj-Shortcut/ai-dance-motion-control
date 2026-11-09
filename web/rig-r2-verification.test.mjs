@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {Miniflare} from 'miniflare';
-import {mintR2Input} from './rig-r2-inputs.mjs';
+import {mintR2Input,isR2InputUrl,r2InputsConfig} from './rig-r2-inputs.mjs';
+import {createClosedVideoWorker} from './closed-video-worker.mjs';
+import {createCloudMediaService} from './cloud-media-service.mjs';
+import {signSitesBridgeRequest} from './sites-bridge-protocol.mjs';
 import {createR2InputVerification,R2_INPUT_VERIFICATION_JOB as jobId,r2InputVerificationBucket} from './rig-r2-verification.mjs';
 const owner='u-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',other='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const image='11111111-1111-4111-8111-111111111111',video='22222222-2222-4222-8222-222222222222',quote='33333333-3333-4333-8333-333333333333';
@@ -70,4 +75,90 @@ test('another active owner job prevents even claiming the proof',async()=>{
   await f.db.prepare("INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,created_at) VALUES(?,?,?,?,100,'unknown',?)").bind(active,owner,otherQuote,'active-fixture',Date.now()).run();
   assert.equal((await f.create()({userId:owner,jobId})).status,409);assert.equal(f.calls.length,0);assert.equal(await f.db.prepare('SELECT requests FROM rig_rate_limits WHERE bucket=?').bind(r2InputVerificationBucket(jobId)).first(),null);
  }finally{await f.mf.dispose()}
+});
+
+let recoveryMedia;
+function recoveryFiles(){
+ // New local pixels only. Real delivery verification must hold exact bytes,
+ // including a valid O3-sized video, rather than trusting mocked uploadOwned.
+ return recoveryMedia??=Promise.all([
+  readFile(new URL('./test/fixtures/input.jpg',import.meta.url)),
+  promisify(execFile)('ffmpeg',['-hide_banner','-v','error','-nostdin','-f','lavfi','-i','color=c=blue:s=720x720:r=30:d=5','-an','-c:v','libx264','-threads','1','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1'],{encoding:'buffer',maxBuffer:16*1024*1024,timeout:20000}).then(r=>r.stdout)
+ ]);
+}
+const hash=async bytes=>Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+async function workerRecoveryFixture(failure){
+ const f=await fixture();
+ try{
+  for(const name of ['0002_public_identity.sql','0003_closed_tenant.sql','0004_test_media_work_lock.sql','0006_sites_bridge.sql','0007_chatgpt_approvals.sql'])for(const sql of (await readFile('closed-payment-migrations/'+name,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await f.db.prepare(sql).run();
+  const origin='https://rig.local',project='https://abcdefghijklmnopqrst.supabase.co',secret='x'.repeat(40);
+  await f.db.prepare('INSERT INTO rig_closed_test_tenant VALUES(1,?,?,?,?,?,?)').bind('site-test-1','test',origin,project,'','').run();
+  await f.db.prepare('INSERT INTO rig_external_identities(issuer,subject,user_id) VALUES(?,?,?)').bind(project+'/auth/v1','owner',owner).run();
+  const [imageBytes,videoBytes]=await recoveryFiles(),records=new Map(),manifests=new Map(),mediaCalls=[],reads=[];let copies=0;
+  for(const [id,kind,bytes,width,height] of [[image,'image',imageBytes,640,480],[video,'video',videoBytes,720,720]]){
+   const manifest={id,ownerId:owner,kind,mime:kind==='image'?'image/jpeg':'video/mp4',sha256:await hash(bytes),size:bytes.length,width,height,expiresAt:Date.now()+60000,...(kind==='video'?{durationSeconds:5,fps:30}:{})};
+   manifests.set(id,manifest);records.set(`rig-inputs/${owner}/${id}`,{bytes:new Uint8Array(bytes),customMetadata:{manifest:JSON.stringify(manifest)}});
+  }
+  await f.db.prepare('UPDATE rig_generation_quotes SET input_json=? WHERE id=?').bind(JSON.stringify({...f.input,refs:[image,video].map(id=>({id,kind:manifests.get(id).kind,sha256:manifests.get(id).sha256}))}),quote).run();
+  const bucket={
+   async put(key,bytes,options){copies++;assert.match(key,/^rig-inputs\/provider\/[a-f0-9]{64}\.(jpg|mp4)$/);assert.equal(options.onlyIf.get('if-none-match'),'*');if(records.has(key))return null;records.set(key,{bytes:new Uint8Array(bytes),httpMetadata:options.httpMetadata,customMetadata:options.customMetadata});return {key};},
+   async get(key){const item=records.get(key);return item?{body:new Response(item.bytes).body,httpMetadata:item.httpMetadata,customMetadata:item.customMetadata}:null;},
+   async head(){throw Error('Recovery must not store or read a generated result');}
+  };
+  const unused=()=>{throw Error('Recovery must not normalize media');};
+  const service=createCloudMediaService({secret,bucket,images:{input:unused},video:{input:unused},enabled:true});
+  const media={async fetch(req){
+   const u=new URL(req.url);assert.equal(u.origin,'https://rig-media.internal');assert.equal(req.headers.get('authorization'),'Bearer '+secret);assert.equal(req.headers.get('x-rig-user'),owner);assert.equal(req.redirect,'manual');
+   mediaCalls.push({path:u.pathname,method:req.method,body:req.method==='POST'?await req.clone().json():null});return service(req);
+  }};
+  Object.assign(f.env,{RIG_PUBLIC_ORIGIN:origin,SUPABASE_URL:project,RIG_TEST_ENVIRONMENT_ID:'site-test-1',RIG_VIDEO_PRIVATE_SERVICE_ONLY:'yes',RIG_SPONSORED_ENABLED:'yes',RIG_CLOSED_VIDEO_ENABLED:'yes',FAL_KEY:'fixture-no-network',RIG_MEDIA_SECRET:secret,RIG_MEDIA:media,BUCKET:bucket,RIG_PRICE_STANDARD:'20',RIG_PRICE_PRO:'25',RIG_PRICE_VERSION:'fixture',RIG_CLOSED_VIDEO_MAX_CENTS:'800',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000000',RIG_SITES_BRIDGE_ENABLED:'yes',RIG_SITES_BRIDGE_ORIGIN:'https://rig-bridge.example.workers.dev',RIG_SITES_PRODUCER_ORIGIN:'https://rig.example.chatgpt.site',RIG_SITES_PROJECT_ID:'appgprj_12345678901234567890123456789012',RIG_SITES_BRIDGE_KEY:'a'.repeat(64),CLOSED_IDENTITY_SERVICE:{fetch(){throw Error('Signed recovery must not dispatch Google identity');}}});
+  const worker=createClosedVideoWorker(),path='/api/generations/'+jobId+'/verify-inputs';
+  const call=async(subject='native-owner',data={})=>worker.fetch(await signSitesBridgeRequest({env:f.env,subject,path,method:'POST',headers:{'content-type':'application/json'},body:new TextEncoder().encode(JSON.stringify(data))}),f.env);
+  const session=await worker.fetch(await signSitesBridgeRequest({env:f.env,subject:'native-owner',path:'/api/session'}),f.env);assert.equal(session.status,200);
+  await f.db.prepare('UPDATE rig_sites_identities SET user_id=? WHERE user_id=?').bind(owner,(await session.json()).userId).run();
+  const config=r2InputsConfig(f.env);
+  const fetcher=async(url,init={})=>{
+   const u=new URL(url),key=u.pathname.slice(('/'+config.bucket+'/').length),kind=key.endsWith('.jpg')?'image':'video',headers=new Headers(init.headers),range=headers.get('range');
+   assert.equal(isR2InputUrl(url,{config,key,kind}),true,'default worker recovery must wire the R2 factory');assert.equal(init.method,'GET');assert.equal(init.redirect,'manual');assert.deepEqual([...headers.keys()],range?['range']:[],'R2 receives no provider or identity credentials');
+   const item=records.get(key);assert.ok(item);assert.equal(Object.keys(item.customMetadata??{}).length,0);assert.equal(item.httpMetadata.cacheControl,'private, no-store');reads.push({kind,key,range});
+   const bytes=new Uint8Array(item.bytes);
+   if(kind==='video'&&failure===(range?'range-denied':'full-denied'))return new Response(null,{status:403});
+   if(kind==='video'&&failure===(range?'range-corrupt':'full-corrupt'))bytes[0]^=1;
+   const responseHeaders={'content-type':item.httpMetadata.contentType};
+   if(range){const match=/^bytes=0-(\d+)$/.exec(range);assert.ok(match);const count=Number(match[1])+1;responseHeaders['content-length']=String(count);responseHeaders['content-range']=`bytes 0-${count-1}/${bytes.length}`;
+    if(kind==='image'&&failure==='refreeze')await f.db.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,'fixture')").bind(owner).run();
+    return new Response(bytes.slice(0,count),{status:206,headers:responseHeaders});
+   }
+   responseHeaders['content-length']=String(bytes.length);return new Response(bytes,{status:200,headers:responseHeaders});
+  };
+  return {...f,call,fetcher,reads,mediaCalls,manifests,counts:()=>({copies,reads:reads.length,media:mediaCalls.length})};
+ }catch(error){await f.mf.dispose();throw error;}
+}
+test('default signed worker recovery verifies real private-media copies with complete and ranged R2 reads before issuing its receipt',async()=>{
+ const f=await workerRecoveryFixture(),originalFetch=globalThis.fetch;globalThis.fetch=f.fetcher;
+ try{
+  const before=await snapshot(f.db);
+  assert.equal((await f.call('other')).status,403);assert.equal((await f.call('native-owner',{confirmed:true})).status,400);assert.deepEqual(f.counts(),{copies:0,reads:0,media:0});
+  const response=await f.call();assert.equal(response.status,200);const receipt=await response.json();assert.equal(receipt.verified,true);assert.equal(receipt.readbackVerified,true);assert.equal(receipt.rangeVerified,true);assert.equal(receipt.modelQueueCalled,false);
+  assert.deepEqual(f.reads.map(({kind,range})=>[kind,range]),[['image',null],['image','bytes=0-63'],['video',null],['video','bytes=0-63']]);
+  assert.deepEqual(f.mediaCalls.filter(c=>c.method==='POST'),[image,video].map(id=>({path:'/v1/provider-inputs/'+id,method:'POST',body:{jobId,sha256:f.manifests.get(id).sha256}})));
+  assert.equal(f.counts().copies,2);assert.deepEqual(await snapshot(f.db),before);assert.equal((await f.db.prepare('SELECT requests FROM rig_rate_limits WHERE bucket=?').bind(r2InputVerificationBucket(jobId)).first()).requests,2);
+  const count=f.counts();assert.equal((await(await f.call()).json()).alreadyAttempted,true);assert.deepEqual(f.counts(),count);assert.doesNotMatch(JSON.stringify(receipt),/https|X-Amz|secret|Signature/);
+ }finally{globalThis.fetch=originalFetch;await f.mf.dispose();}
+});
+for(const [failure,stage] of [['full-denied','r2_metadata'],['full-corrupt','r2_integrity'],['range-denied','r2_range'],['range-corrupt','r2_range']])test(`worker recovery ${failure} consumes its attempt without issuing a verified receipt`,async()=>{
+ const f=await workerRecoveryFixture(failure),originalFetch=globalThis.fetch;globalThis.fetch=f.fetcher;
+ try{
+  const before=await snapshot(f.db),response=await f.call();assert.equal(response.status,503);const receipt=await response.json();assert.equal(receipt.verified,false);assert.equal(receipt.readbackVerified,false);assert.equal(receipt.rangeVerified,false);assert.equal(receipt.stage,stage);assert.equal(receipt.asset,'video');
+  assert.deepEqual(await snapshot(f.db),before);assert.equal((await f.db.prepare('SELECT requests FROM rig_rate_limits WHERE bucket=?').bind(r2InputVerificationBucket(jobId)).first()).requests,1);
+  const count=f.counts(),replay=await(await f.call()).json();assert.equal(replay.alreadyAttempted,true);assert.equal(replay.verified,false);assert.deepEqual(f.counts(),count);assert.doesNotMatch(JSON.stringify(receipt),/https|X-Amz|secret|Signature/);
+ }finally{globalThis.fetch=originalFetch;await f.mf.dispose();}
+});
+test('refreezing the owner after image readback prevents the video copy and any verified recovery receipt',async()=>{
+ const f=await workerRecoveryFixture('refreeze'),originalFetch=globalThis.fetch;globalThis.fetch=f.fetcher;
+ try{
+  const before=await snapshot(f.db),response=await f.call();assert.equal(response.status,503);assert.equal((await response.json()).verified,false);assert.deepEqual(f.counts(),{copies:1,reads:2,media:4});assert.deepEqual(await snapshot(f.db),before);
+  assert.equal((await f.db.prepare('SELECT requests FROM rig_rate_limits WHERE bucket=?').bind(r2InputVerificationBucket(jobId)).first()).requests,1);assert.equal((await f.call()).status,409);
+  await f.db.prepare('DELETE FROM rig_frozen_accounts WHERE user_id=?').bind(owner).run();const count=f.counts(),replay=await(await f.call()).json();assert.equal(replay.alreadyAttempted,true);assert.equal(replay.verified,false);assert.deepEqual(f.counts(),count);
+ }finally{globalThis.fetch=originalFetch;await f.mf.dispose();}
 });

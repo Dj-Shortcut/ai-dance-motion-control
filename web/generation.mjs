@@ -223,8 +223,12 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       }
     }
     async function publicFailure(job) {
-      if(job.state!=='failed'||!['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)||!REQ_ID.test(job.falRequestId??'')||typeof services.jobs.confirmInputFailureRefund!=='function')return publicJob(job);
-      try {return {...publicJob(job),...(await services.jobs.confirmInputFailureRefund(user.id,job.id,job.falRequestId)?{refundConfirmed:true}:{})};}catch{return publicJob(job);}
+      if(job.state!=='failed')return publicJob(job);
+      const inputFailure=['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode);
+      if(inputFailure&&!REQ_ID.test(job.falRequestId??''))return publicJob(job);
+      const confirm=inputFailure?services.jobs.confirmInputFailureRefund:services.jobs.confirmFailureRefund;
+      if(typeof confirm!=='function')return publicJob(job);
+      try {return {...publicJob(job),...(await confirm.call(services.jobs,user.id,job.id,job.falRequestId??null)===true?{refundConfirmed:true}:{})};}catch{return publicJob(job);}
     }
     const match=path.match(/^\/api\/generations\/([a-zA-Z0-9_-]{1,100})(\/video)?$/);
     if(req.method==='GET' && match) {
@@ -257,7 +261,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           // Network errors, missing results and unrecognised errors remain queued.
           if(typeof s.error!=='string' || !s.error.trim()) return respond({...publicJob(job),state:'needs_review'});
           const failed=await services.jobs.markProviderFailed(user.id,job.id,job.falRequestId,claim.token);
-          return respond(publicJob(failed));
+          return respond(await publicFailure(failed));
         }
         const response=await fetchImpl(url,{signal,redirect:'manual',headers:{Authorization:`Key ${services.falKey}`}});
         if(!response.ok){

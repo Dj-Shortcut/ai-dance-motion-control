@@ -186,6 +186,23 @@ export function createD1GenerationStores(db,{mode,dispatchMode='owner'}={}) {
           AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='release:'||j.id AND l.user_id=j.user_id AND l.delta=j.price_cents AND l.order_id IS NULL)
           AND NOT EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='settle:'||j.id)`).bind(id,userId,falRequestId,mode).first();
         return row?.found===1;
+      },
+      // This only acknowledges a completed return; it never creates credit or
+      // releases a sponsor reservation. An uncertain job stays unconfirmed.
+      async confirmFailureRefund(userId,id,falRequestId=null) {
+        if(falRequestId!==null&&!/^[A-Za-z0-9_-]{1,100}$/.test(falRequestId??''))return false;
+        const sponsorProof=dispatchMode==='sponsored'?`AND (
+          EXISTS(SELECT 1 FROM rig_sponsored_reservations s WHERE s.job_id=j.id AND s.user_id=j.user_id AND s.amount_cents=j.price_cents AND s.released_at IS NOT NULL)
+          OR (j.fal_request_id IS NULL AND NOT EXISTS(SELECT 1 FROM rig_sponsored_reservations s WHERE s.job_id=j.id))
+        )`:'';
+        const row=await db.prepare(`SELECT 1 AS found FROM rig_generation_jobs j
+          WHERE j.id=? AND j.user_id=? AND j.state='failed' AND j.fal_request_id IS ?
+          AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?)
+          AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='reserve:'||j.id AND l.user_id=j.user_id AND l.delta=-j.price_cents AND l.order_id IS NULL)
+          AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='release:'||j.id AND l.user_id=j.user_id AND l.delta=j.price_cents AND l.order_id IS NULL)
+          AND NOT EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='settle:'||j.id) ${sponsorProof}`)
+          .bind(id,userId,falRequestId,mode).first();
+        return row?.found===1;
       }
     }
   };

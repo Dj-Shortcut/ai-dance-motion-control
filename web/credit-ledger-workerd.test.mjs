@@ -62,6 +62,24 @@ test('explicit failure releases only once, ambiguous submission stays reserved',
  assert.deepEqual((await entries(j2.id)).map(x=>Number(x.delta)),[-150]);
  assert.deepEqual((await auditTestCreditLedger({db,user:'ambiguous'})).findings[0].problems,['outcome_requires_review']);
 });
+test('generic refund confirmation reads exact owned ledger proof without creating or releasing credit',async()=>{
+ const user='generic-proof';await fund(user);const q=await quote(user),{job}=await begin(user,q,'attempt');
+ assert.equal(await stores.jobs.authorizeDispatch(user,job.id),true);await stores.jobs.markSubmitted(user,job.id,'generic-request');
+ assert.equal(await stores.jobs.confirmFailureRefund(user,job.id,'generic-request'),false);
+ const claim=await stores.jobs.claimPoll(user,job.id);await stores.jobs.markProviderFailed(user,job.id,'generic-request',claim.token);
+ const before=await entries(job.id);
+ assert.equal(await stores.jobs.confirmFailureRefund(user,job.id,'generic-request'),true);
+ assert.equal(await stores.jobs.confirmFailureRefund('another-owner',job.id,'generic-request'),false);
+ assert.equal(await stores.jobs.confirmFailureRefund(user,job.id,'wrong-request'),false);
+ assert.deepEqual(await entries(job.id),before);
+ await db.prepare('UPDATE rig_ledger SET delta=1 WHERE event_id=?').bind(`release:${job.id}`).run();
+ assert.equal(await stores.jobs.confirmFailureRefund(user,job.id,'generic-request'),false);
+ await db.prepare('UPDATE rig_ledger SET delta=150 WHERE event_id=?').bind(`release:${job.id}`).run();
+ await db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,0)').bind(`settle:${job.id}`,user).run();
+ assert.equal(await stores.jobs.confirmFailureRefund(user,job.id,'generic-request'),false);
+ const prepUser='prep-proof';await fund(prepUser);const prep=(await begin(prepUser,await quote(prepUser),'attempt')).job;
+ await stores.jobs.markPreparationFailed(prepUser,prep.id);assert.equal(await stores.jobs.confirmFailureRefund(prepUser,prep.id,null),true);
+});
 
 test('racing success and failure settle or release once, never both',async()=>{
  await fund('settle');const q=await quote('settle');const {job}=await begin('settle',q,'attempt');
