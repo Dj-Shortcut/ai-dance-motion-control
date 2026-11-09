@@ -151,14 +151,15 @@ test('O3 requires a nonblank prompt before file preparation or quote; motion sti
  f.quote.quality='edit-standard';const q=await f.call('rig_create_quote',{...input,quality:'edit-standard',prompt:'voeg een hond toe'});assert.equal(q.body.result.structuredContent.quality,'edit-standard');
 });
 
-function paidFixture({config={enabled:true,funding:'credits',mode:'live',currency:'EUR'},gift={state:'unavailable'}}={}){
+function paidFixture({config={enabled:true,funding:'credits',mode:'live',currency:'EUR'},gift={state:'unavailable'},wallet={balance:2500,currency:'EUR',mode:'live',frozen:false},job={id:'job-paid',state:'completed',priceCents:100,currency:'EUR',videoPath:'/api/generations/job-paid/video'}}={}){
  const calls=[];let preparations=0,issues=0,consumes=0;
  const handler=createRigMcp({appOrigin:origin,authenticate:async()=>({userId:user,request:async(path,init={})=>{
   calls.push({path,method:init.method||'GET'});
   if(path==='/api/video-config')return Response.json({...config,balanceCents:2500});
   if(path==='/api/sponsor-invitations/status')return Response.json({...gift,purchasedBalanceCents:2500});
-  if(path==='/api/generations/job-paid')return Response.json({id:'job-paid',state:'completed',priceCents:100,currency:'EUR',videoPath:'/api/generations/job-paid/video'});
-  if(path==='/api/generations/recent')return Response.json({job:{id:'job-paid',state:'completed',priceCents:100,currency:'EUR'}});
+  if(path==='/api/payments/balance')return Response.json(wallet);
+  if(path==='/api/generations/'+job.id)return Response.json(job);
+  if(path==='/api/generations/recent')return Response.json({job});
   throw Error('No write adapter is available to paid ChatGPT tools');
  }}),prepareFiles:async()=>{preparations++;throw Error('must not prepare')},issueApproval:async()=>{issues++;throw Error('must not issue')},consumeApproval:async()=>{consumes++;throw Error('must not consume')}});
  const send=async(method,params)=>{const response=await handler(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}));return(await response.json()).result};
@@ -194,4 +195,58 @@ test('credits with absent or mismatched server mode/currency fail closed before 
   for(const [name,args]of [['rig_get_capabilities',{}],['rig_prepare_files',{reference_file:file,motion_file:file,seconds:5}],['rig_create_quote',input],['rig_confirm_generation',{quoteId:'quote-1',approvalToken:token}]])assert.equal((await f.call(name,args)).isError,true,name);
   assert.ok(f.calls.every(x=>x.path==='/api/video-config'&&x.method==='GET'));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
  }
+});
+
+const ownerConfig={enabled:true,funding:'owner-provider',mode:'live',providerCurrency:'USD'};
+const ownerJob={id:'job-owner',state:'completed',funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:700000,videoPath:'/api/generations/job-owner/video'};
+
+test('direct owner account and capabilities are read-only and separate the RIG wallet from the Fal account',async()=>{
+ const f=paidFixture({config:ownerConfig,job:ownerJob}),account=await f.call('rig_get_account');
+ assert.equal(account.isError,undefined);assert.equal(account.structuredContent.funding,'owner-provider');assert.equal(account.structuredContent.providerAccountLabel,'Eigen fal-account');assert.equal(account.structuredContent.providerCurrency,'USD');
+ assert.deepEqual(account.structuredContent.rigCredit,{balanceCents:2500,currency:'EUR',frozen:false});
+ assert.match(account.content[0].text,/Eigen fal-account.*RIG-website.*Fal-raming.*afzonderlijke RIG-tegoed.*25,00.*geen Fal-saldo/);
+ assert.equal(Object.hasOwn(account.structuredContent,'falBalance'),false);
+ const caps=await f.call('rig_get_capabilities');assert.equal(caps.isError,undefined);assert.equal(caps.structuredContent.funding,'owner-provider');assert.equal(caps.structuredContent.directFilePreparation,false);assert.equal(caps.structuredContent.explicitPriceConfirmation,false);assert.match(caps.content[0].text,/RIG-website.*Genereren vanuit ChatGPT volgt later/);
+ const list=(await f.send('tools/list',{})).tools;for(const name of ['rig_get_account','rig_get_capabilities'])assert.ok(list.find(t=>t.name===name).outputSchema.properties.funding.enum.includes('owner-provider'));
+ assert.deepEqual(f.calls,[{path:'/api/sponsor-invitations/status',method:'GET'},{path:'/api/video-config',method:'GET'},{path:'/api/payments/balance',method:'GET'},{path:'/api/video-config',method:'GET'}]);
+ assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+ const zero=paidFixture({config:ownerConfig,wallet:{balance:0,currency:'EUR',mode:'live',frozen:false}});assert.equal((await zero.call('rig_get_account')).structuredContent.rigCredit.balanceCents,0);
+});
+
+test('owner-provider preparation, quoting and confirmation defer to the website before any transfer or approval',async()=>{
+ const file={file_id:'file_owner',download_url:'https://files.oaiusercontent.com/reference'};
+ for(const enabled of [true,false]){
+  const f=paidFixture({config:{...ownerConfig,enabled},job:ownerJob});
+  for(const [name,args]of [['rig_prepare_files',{reference_file:file,motion_file:file,seconds:5}],['rig_create_quote',input],['rig_confirm_generation',{quoteId:'quote-1',approvalToken:token}]]){
+   const result=await f.call(name,args);assert.equal(result.isError,true,name);assert.match(result.content[0].text,/Gebruik de RIG-website.*Genereren vanuit ChatGPT volgt later/);
+  }
+  assert.deepEqual(f.calls,[{path:'/api/video-config',method:'GET'},{path:'/api/video-config',method:'GET'},{path:'/api/video-config',method:'GET'}]);assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+ }
+});
+
+test('owner-provider capability requires live USD and owner account never treats a malformed wallet as Fal credit',async()=>{
+ const file={file_id:'file_owner',download_url:'https://files.oaiusercontent.com/reference'};
+ for(const config of [{enabled:true,funding:'owner-provider'},{...ownerConfig,mode:'test'},{...ownerConfig,providerCurrency:'EUR'}]){
+  const f=paidFixture({config});
+  for(const [name,args]of [['rig_get_capabilities',{}],['rig_prepare_files',{reference_file:file,motion_file:file,seconds:5}],['rig_create_quote',input],['rig_confirm_generation',{quoteId:'quote-1',approvalToken:token}]])assert.equal((await f.call(name,args)).isError,true,name);
+  assert.ok(f.calls.every(x=>x.path==='/api/video-config'&&x.method==='GET'));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+ }
+ for(const wallet of [{balance:-1,currency:'EUR',mode:'live',frozen:false},{balance:100,currency:'USD',mode:'live',frozen:false},{balance:100,currency:'EUR',mode:'test',frozen:false},{balance:100,currency:'EUR',mode:'live'}]){
+  const f=paidFixture({config:ownerConfig,wallet});assert.equal((await f.call('rig_get_account')).isError,true);assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+ }
+});
+
+test('read-only owner status and completed results preserve USD funding without exposing provider URLs or refund claims',async()=>{
+ const f=paidFixture({config:ownerConfig,job:{...ownerJob,providerUrl:'https://private-provider.example/result.mp4',rawProviderKey:'never-expose',refundConfirmed:true}});
+ const result=await f.call('rig_get_generation',{jobId:'job-owner'});
+ assert.deepEqual(result.structuredContent,{jobId:'job-owner',state:'completed',funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:700000,videoUrl:origin+'/api/generations/job-owner/video',requiresAuthentication:true});
+ assert.doesNotMatch(JSON.stringify(result),/private-provider|never-expose|refundConfirmed|priceCents|"currency":"EUR"/);
+ assert.equal((await f.call('rig_get_recent_generation')).structuredContent.job.funding,'owner-provider');
+ const failed=paidFixture({config:ownerConfig,job:{...ownerJob,state:'failed',finalizationConfirmed:true,refundConfirmed:true}});
+ assert.equal((await failed.call('rig_get_generation',{jobId:'job-owner'})).structuredContent.finalizationConfirmed,true);
+ const legacy=paidFixture({config:ownerConfig});assert.equal((await legacy.call('rig_get_generation',{jobId:'job-paid'})).structuredContent.currency,'EUR');
+ for(const patch of [{providerCurrency:'EUR'},{providerEstimateUsdMicros:0},{providerEstimateUsdMicros:Number.MAX_SAFE_INTEGER+1},{priceCents:100},{currency:'EUR'},{videoPath:'/api/generations/another/video'}]){
+  const invalid=paidFixture({config:ownerConfig,job:{...ownerJob,...patch}});assert.equal((await invalid.call('rig_get_generation',{jobId:'job-owner'})).isError,true);
+ }
+ assert.ok(f.calls.every(x=>x.method==='GET'&&x.path.startsWith('/api/generations/')));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
 });

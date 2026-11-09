@@ -2,6 +2,9 @@
 (() => {
   const el = id => document.getElementById(id);
   const currency = n => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n/100);
+  const providerCurrency = micros => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(micros/1000000);
+  const ownerProvider = data => data?.funding==='owner-provider';
+  const failureFinalized = data => ownerProvider(data)?data.finalizationConfirmed===true:data.refundConfirmed===true;
   const falTransferPolicy = 'fal-temporary-links-v1';
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je foto, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null;
@@ -10,6 +13,7 @@
   function providerFailureMessage(data){
     if(data.state!=='failed')return null;
     const reason=data.failureCode==='provider_input_unavailable'?'Fal kon je foto of video niet openen.':data.failureCode==='provider_subject_not_detected'?'Fal herkende geen duidelijk menselijk bovenlichaam op je foto.':null;
+    if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
   }
   function showReviewedType(quality){const edit=quality==='edit-standard';el('quoteTitle').textContent=edit?'Video bewerken':'Persoon laten bewegen';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
@@ -52,13 +56,21 @@
       if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
       const request={imageId,videoId,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{faceId,angleIds,steadyCamera:media.steady})};
       const data=await call('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
-      if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||'')||!Number.isSafeInteger(data.priceCents)||data.priceCents<1||data.currency!=='EUR'||!Number.isFinite(data.durationSeconds)||!Number.isInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(data.durationSeconds))throw new Error('De prijs kon niet worden bevestigd.');
+      if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||'')||!Number.isFinite(data.durationSeconds)||!Number.isInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(data.durationSeconds))throw new Error('De prijs kon niet worden bevestigd.');
+      const ownFal=window.rigVideoFunding==='owner-provider';
+      if(ownFal){
+        if(window.rigVideoMode!=='live'||!ownerProvider(data)||data.providerCurrency!=='USD'||!Number.isSafeInteger(data.providerEstimateUsdMicros)||data.providerEstimateUsdMicros<1||data.durationSeconds<3||Object.hasOwn(data,'priceCents')||Object.hasOwn(data,'currency'))throw new Error('De Fal-raming kon niet worden bevestigd.');
+      }else if(ownerProvider(data)||!Number.isSafeInteger(data.priceCents)||data.priceCents<1||data.currency!=='EUR')throw new Error('De prijs kon niet worden bevestigd.');
       if(data.quality!==undefined&&data.quality!==media.quality||data.durationSeconds>limit)throw new Error('De prijs hoort niet bij je gekozen videobewerking.');
       if(edit&&data.transferPolicy!==falTransferPolicy||!edit&&data.transferPolicy!==undefined)throw new Error('De bestandsoverdracht kon niet worden bevestigd. Bereid je bestanden opnieuw voor.');
       const hasApproval=Object.hasOwn(data,'approvalToken')||Object.hasOwn(data,'idempotencyKey');
       if(hasApproval&&(!/^[A-Za-z0-9_-]{43}$/.test(data.approvalToken||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(data.idempotencyKey||'')))throw new Error('De prijsbevestiging is niet beschikbaar. Bereid je bestanden opnieuw voor.');
-      const approved={...(hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{}),...(edit?{transferPolicy:falTransferPolicy}:{})};
-      if(window.rigVideoFunding==='credits'){
+      const approved={funding:window.rigVideoFunding,...(hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{}),...(edit?{transferPolicy:falTransferPolicy}:{})};
+      if(ownFal){
+        if(window.rigNativeSite===true&&!hasApproval){note('De Fal-raming is beschikbaar, maar je bevestiging kon niet worden voorbereid. Bereid je bestanden opnieuw voor.');return;}
+        quote={id:data.id,media,...approved};
+        note(`Je gebruikt je eigen fal-account. Fal-raming: ${providerCurrency(data.providerEstimateUsdMicros)} voor ${data.billedSeconds} seconden. De werkelijke Fal-kosten kunnen afwijken. Pas na je bevestiging wordt de video gestart.`);
+      }else if(window.rigVideoFunding==='credits'){
         if(window.rigVideoMode!=='live')throw new Error('Je betaalde tegoed kon niet worden gecontroleerd.');
         const status=await call('/api/payments/balance');
         if(status?.mode!=='live'||status.currency!=='EUR'||status.frozen===true||!Number.isSafeInteger(status.balance)||status.balance<0)throw new Error('Je RIG-tegoed kon niet worden gecontroleerd.');
@@ -98,7 +110,7 @@
   }
   async function confirm() {
     if(active||!quote)return;
-    if(window.rigPreparedMedia()!==quote.media||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
+    if(window.rigPreparedMedia()!==quote.media||quote.funding!==window.rigVideoFunding||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
     active=true;el('confirmGeneration').disabled=true;
     const current=quote;quote=null;const requestId=current.idempotencyKey??crypto.randomUUID();
     window.rigScopedStorage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));
@@ -107,7 +119,7 @@
       const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:current.id,idempotencyKey:requestId,...(current.approvalToken?{approvalToken:current.approvalToken}:{}),...(current.transferPolicy===falTransferPolicy?{transferConsent:falTransferPolicy}:{})})});
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
-      if(data.state==='failed'&&data.refundConfirmed===true){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
+      if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
       window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       await follow(data.id);
     } catch(error) {
@@ -127,10 +139,10 @@
         const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');note('Je video is klaar.');return;
       }
       if(data.state==='failed'){
-        const providerMessage=providerFailureMessage(data),refundConfirmed=data.refundConfirmed===true;
-        if(refundConfirmed)window.rigScopedStorage.removeItem('rig-generation-job');
-        el('checkGeneration').hidden=refundConfirmed;
-        note(providerMessage||(refundConfirmed?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
+        const providerMessage=providerFailureMessage(data),finalized=failureFinalized(data);
+        if(finalized)window.rigScopedStorage.removeItem('rig-generation-job');
+        el('checkGeneration').hidden=finalized;
+        note(providerMessage||(finalized?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
       }
       if(['unknown','needs_review'].includes(data.state)){note('De opdracht wordt gecontroleerd. Start niet opnieuw.');return;}
       note('Je video wordt gemaakt…');await delay(5000);
@@ -150,7 +162,7 @@
     if(!el('motionInput').files.length || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<3 || duration>(quality==='edit-standard'?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
     try {
       const params=new URLSearchParams({quality,duration:String(duration)});
-      const key=params.toString();
+      const key=`${window.rigVideoFunding}:${window.rigVideoMode}:${params}`;
       let data;
       if(lastEstimateKey===key && lastEstimate) data=lastEstimate;
       else {
@@ -175,9 +187,14 @@
         lastEstimateKey=key;lastEstimate=data;
         target.textContent=`Raming: ${currency(proposed.priceCents)} uit je gratis testtegoed. De prijs kan veranderen nadat de duur is gecontroleerd.`;target.hidden=false;return;
       }
-      if(data.providerEstimate?.currency!=='USD' || !Number.isSafeInteger(data.providerEstimate?.usdMicros) || data.providerEstimate?.binding!==false)throw Error();
-      lastEstimateKey=key;lastEstimate=data;
+      if(data.providerEstimate?.currency!=='USD' || !Number.isSafeInteger(data.providerEstimate?.usdMicros) || data.providerEstimate?.usdMicros<1 || data.providerEstimate?.binding!==false)throw Error();
       const usd=new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD'}).format(data.providerEstimate.usdMicros/1000000);
+      if(window.rigVideoFunding==='owner-provider'){
+        if(window.rigVideoMode!=='live'||!ownerProvider(data)||!Number.isSafeInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(duration))throw Error();
+        lastEstimateKey=key;lastEstimate=data;
+        target.textContent=`Fal-raming: ${usd} · ${data.billedSeconds} s. Je gebruikt je eigen fal-account. Je bevestigt vóór de video start; de werkelijke kosten kunnen afwijken.`;target.hidden=false;return;
+      }
+      lastEstimateKey=key;lastEstimate=data;
       const proposed=data.customerProposal;
       const checked=/^\d{4}-\d{2}-\d{2}$/.test(data.providerEstimate.rateCheckedOn||'')?` (tarief gecontroleerd op ${data.providerEstimate.rateCheckedOn})`:'';
       let message=`fal.ai-raming: ${usd} · ${data.billedSeconds} s${checked}. De uiteindelijke fal-kost kan afwijken.`;

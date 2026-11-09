@@ -1,4 +1,4 @@
-import {isProductionGenerationContext} from './production-generation-context.mjs';
+import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 // Shared, ledger-funded private composition; test remains the default. Not routed or deployed by this module.
 // The caller must authenticate the subject and provide an actual shared media
 // lease; client identity headers must never be passed as trustedUserId.
@@ -23,10 +23,19 @@ function valid(env,{productionContext}={}){
 // Only provider hosts required by existing transfer/queue code. Redirects are
 // never followed: particularly important for Authorization and signed URLs.
 function providerTransport(fetcher){return async(input,init={})=>{const u=new URL(String(input));if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||!['fal.ai','fal.run','fal.media'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d))||init.redirect!=='manual')throw Error('Untrusted provider endpoint');const r=await fetcher(input,init);if(r.status>=300&&r.status<400)throw Error('Provider redirect refused');return r;};}
-function guard(env,priceFetch,{trustedUserId,accessMode}){return {
- limitMessage:accessMode==='sponsored'?'Je gratis testtegoed is hiervoor niet voldoende. Kies een kortere video of Standaard.':'Je beschikbare RIG-tegoed is hiervoor niet voldoende of je account wordt gecontroleerd.',
- async permits({durationSeconds,priceCents}){
+function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){return {
+ limitMessage:accessMode==='sponsored'?'Je gratis testtegoed is hiervoor niet voldoende. Kies een kortere video of Standaard.':productionFundingKind(productionContext,trustedUserId)==='owner-provider'?'Deze video valt buiten de ingestelde videolimiet of je account wordt gecontroleerd.':'Je beschikbare RIG-tegoed is hiervoor niet voldoende of je account wordt gecontroleerd.',
+ async permits({durationSeconds,priceCents,quote}){
   if(!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>30||!Number.isSafeInteger(priceCents)||priceCents<=0||priceCents>+env.RIG_CLOSED_VIDEO_MAX_CENTS)return false;
+  if(env.RIG_MODE==='live'){
+   const kind=quote?.fundingKind??productionFundingKind(productionContext,trustedUserId);
+   if(!['credits','owner-provider'].includes(kind))return false;
+   if(kind==='owner-provider'){
+    if(productionFundingKind(productionContext,trustedUserId)!=='owner-provider')return false;
+    const row=await env.DB.prepare('SELECT NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS unfrozen').bind(trustedUserId).first();
+    return row?.unfrozen===1;
+   }
+  }
   if(accessMode!=='sponsored'){
    const row=await env.DB.prepare('SELECT COALESCE(SUM(delta),0) AS cents,NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS unfrozen FROM rig_ledger WHERE user_id=?').bind(trustedUserId,trustedUserId).first();
    return row?.unfrozen===1&&Number.isSafeInteger(row.cents)&&row.cents>=priceCents;
@@ -42,6 +51,24 @@ function guard(env,priceFetch,{trustedUserId,accessMode}){return {
    return reservation.state==='reserved'&&reservation.amountCents===quote.priceCents;
   }
   if(!id.test(jobId||'')||!id.test(quote.id||'')||quote.userId!==userId||typeof quote.model!=='string'||typeof quote.pricingVersion!=='string'||!Number.isFinite(quote.durationSeconds))return false;
+  if(env.RIG_MODE==='live'&&quote.fundingKind==='owner-provider'){
+   if(productionFundingKind(productionContext,userId)!=='owner-provider'||!Number.isSafeInteger(quote.providerEstimateUsdMicros)||quote.providerEstimateUsdMicros<=0)return false;
+   const row=await env.DB.prepare(`SELECT 1 AS authorized FROM rig_generation_jobs j
+    JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
+    JOIN rig_owner_provider_usage u ON u.job_id=j.id AND u.quote_id=q.id AND u.user_id=j.user_id
+    WHERE j.id=? AND j.user_id=? AND q.id=? AND q.model=? AND q.price_cents=? AND q.price_cents=j.price_cents
+     AND q.pricing_version=? AND q.duration_seconds=? AND q.expires_at>? AND q.funding_kind='owner-provider'
+     AND u.state='authorized' AND u.estimated_usd_micros=?
+     AND CASE WHEN json_valid(q.input_json) THEN json_type(q.input_json,'$.providerEstimateUsdMicros')='integer' AND json_extract(q.input_json,'$.providerEstimateUsdMicros')=u.estimated_usd_micros ELSE 0 END
+     AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL
+     AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+     AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id)
+     AND NOT EXISTS(SELECT 1 FROM rig_ledger WHERE event_id IN ('reserve:'||j.id,'release:'||j.id,'settle:'||j.id))
+     AND NOT EXISTS(SELECT 1 FROM rig_generation_jobs active WHERE active.user_id=j.user_id AND active.id<>j.id AND active.state IN ('submitting','unknown','queued'))`)
+    .bind(jobId,userId,quote.id,quote.model,quote.priceCents,quote.pricingVersion,quote.durationSeconds,Date.now(),quote.providerEstimateUsdMicros).first();
+   return row?.authorized===1;
+  }
+  if(env.RIG_MODE==='live'&&quote.fundingKind!=='credits')return false;
   // Each explicitly confirmed owner request spends its existing ledger funds.
   // Historical global trial markers are deliberately irrelevant. This check
   // requires the exact reserved job; authorizeDispatch supplies the subsequent
@@ -49,7 +76,7 @@ function guard(env,priceFetch,{trustedUserId,accessMode}){return {
   const row=await env.DB.prepare(`SELECT 1 AS authorized FROM rig_generation_jobs j
    JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
    WHERE j.id=? AND j.user_id=? AND q.id=? AND q.model=? AND q.price_cents=?
-    AND q.price_cents=j.price_cents AND q.pricing_version=? AND q.duration_seconds=? AND q.expires_at>?
+    AND q.price_cents=j.price_cents AND q.pricing_version=? AND q.duration_seconds=? AND q.expires_at>? ${env.RIG_MODE==='live'?"AND q.funding_kind='credits'":''}
     AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL
     AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?)
     AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id)
@@ -99,7 +126,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
     return result;
    };
   }
-  return {...stores,...(paid?{productionContext}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode})};
+  return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
  },generationFactory:s=>createGenerationHandler(s,transport)});
  return async req=>{
   const p=new URL(req.url).pathname;

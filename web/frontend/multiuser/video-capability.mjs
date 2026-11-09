@@ -23,14 +23,15 @@ export async function enableVideoIfAvailable({binding,window,document,loadScript
   const qualities=config.qualities===undefined?['standard','pro']:config.qualities;
   if(!Array.isArray(qualities)||!qualities.length||qualities.some(value=>!['standard','pro','edit-standard'].includes(value))||new Set(qualities).size!==qualities.length)return unavailable();
   if(config.funding==='credits'&&(config.mode!=='live'||config.currency!=='EUR'))return unavailable();
-  window.rigVideoFunding=config.funding==='credits'?'credits':config.funding==='sponsored'?'sponsored':'owner';
-  window.rigVideoMode=config.funding==='credits'?'live':'test';
+  if(config.funding==='owner-provider'&&(config.mode!=='live'||config.providerCurrency!=='USD'))return unavailable();
+  window.rigVideoFunding=['credits','sponsored','owner-provider'].includes(config.funding)?config.funding:'owner';
+  window.rigVideoMode=['credits','owner-provider'].includes(config.funding)?'live':'test';
   window.rigVideoQualities=[...qualities];
   window.rigVideoUnavailableReason=null;
   await loadGenerationUi();
   if (!binding.isActive()) return unavailable();
   window.rigVideoEnabled=true;
-  document.getElementById('videoAvailabilityNote').textContent=window.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':window.rigVideoFunding==='sponsored'?'Je testvideo’s worden betaald uit je gratis testtegoed.':'Mollie staat in testmodus. Videogeneratie gebruikt echt fal-tegoed.';
+  document.getElementById('videoAvailabilityNote').textContent=window.rigVideoFunding==='owner-provider'?'Je gebruikt je eigen fal-account. Je ziet de Fal-raming vóór je bevestigt.':window.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':window.rigVideoFunding==='sponsored'?'Je testvideo’s worden betaald uit je gratis testtegoed.':'Mollie staat in testmodus. Videogeneratie gebruikt echt fal-tegoed.';
   document.dispatchEvent(new window.Event('rig-video-availability'));
   return true;
  } catch {return unavailable();}
