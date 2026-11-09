@@ -2,6 +2,7 @@ import {createNativeSiteAuth} from './native-site-auth.mjs';
 import {prepareGuardedBinding} from './guarded-binding.mjs';
 import {enableVideoIfAvailable} from './video-capability.mjs';
 import {captureSponsorInvitation,mountSponsorInvitation} from './invitation.mjs';
+import {isMollieCheckoutURL} from '../../mollie-checkout-url.mjs';
 
 // Bundle this export as the Site's browser entry and call it once. It shares
 // the existing studio, media editor and account-scoped recovery state.
@@ -25,11 +26,10 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
   // Recheck the bound account immediately before leaving for Mollie. A late
   // checkout response from an ended session must never navigate this tab.
   browser.rigCheckout=async value=>{
-   let url;try{url=new URL(value);}catch{throw Error('Ongeldige betaalpagina.');}
-   if(url.protocol!=='https:'||url.username||url.password||url.port||url.hash||!(url.hostname==='mollie.com'||url.hostname.endsWith('.mollie.com')))throw Error('Ongeldige betaalpagina.');
+   if(!isMollieCheckoutURL(value))throw Error('Ongeldige betaalpagina.');
    if(!binding.isActive()||await auth.sessionSubject()!==binding.userId){endSession();throw Error('Je aanmelding is gewijzigd. Meld je opnieuw aan.');}
    if(!binding.isActive())throw Error('Je aanmelding is gewijzigd. Meld je opnieuw aan.');
-   browser.location.assign(url.href);
+   browser.location.assign(new URL(value).href);
   };
   logout.hidden=false;login.hidden=true;gate.hidden=true;studio.hidden=false;status.textContent='Aangemeld bij RIG.';
   for(const name of ['media.js','app.js']){await loadScript(name);if(!binding.isActive())throw Error('Aanmelding gewijzigd.');}

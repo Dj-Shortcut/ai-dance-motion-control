@@ -70,6 +70,20 @@ external Fal account. Code and CI do not activate live billing or prove a real
 payment settled. See the [launch review](../docs/launch-review.md) for the
 commercial review checklist; its historical test notes are not live receipts.
 
+## Checkout recovery
+
+After a shopper chooses Bancontact, Mollie's verified `_links.checkout` may point
+to its processor at `https://redirect.ppro.com/v0/pages/`. Server and browser
+guards accept only that exact additional host/path with one bounded JWT-shaped
+`redirection_token`, HTTPS and no credentials, nondefault port or fragment.
+Other processor hosts, paths and redirect parameters stay rejected. The API
+transport remains restricted to `api.mollie.com`; payment profile, mode, amount,
+ownership and freeze checks still precede checkout delivery. Recovery reuses the
+existing payment and never creates a second checkout or credits an unpaid order.
+
+References: [Mollie checkout flow](https://docs.mollie.com/docs/accepting-payments)
+and [PPRO Bancontact redirects](https://developerhub.ppro.com/global-api/docs/belgium-local-acquiring).
+
 ## Private five-second input transport
 
 The website's **Video bewerken** flow now offers the ordinary Mac/Fal transfer

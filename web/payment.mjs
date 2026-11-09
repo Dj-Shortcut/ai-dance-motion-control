@@ -1,4 +1,5 @@
 import { enqueueFrozenOrders } from './cancellation.mjs';
+import {isMollieCheckoutURL} from './mollie-checkout-url.mjs';
 // RIG Mollie foundation; import handlePaymentRoute from a Worker. Never run outside
 // an ingress that STRIPS client-supplied identity headers and adds trusted ones.
 const response = (status, data) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -85,14 +86,16 @@ async function start(req, env, cfg, user) {
     await env.DB.prepare("UPDATE rig_orders SET state='unknown' WHERE id=? AND user_id=? AND state='creating' AND payment_id IS NULL").bind(id,user).run();
     return response(503, { error: 'Payment status uncertain; contact support before trying again' });
   }
-  if (!paymentId(payment.id) || payment.mode !== env.RIG_MOLLIE_MODE || !payment._links?.checkout?.href) return response(503, { error: 'Payment status uncertain; contact support' });
-  let checkout; try { checkout = new URL(payment._links.checkout.href); } catch { return response(503, { error: 'Invalid checkout' }); }
-  if (checkout.protocol !== 'https:' || checkout.username || checkout.password || checkout.port || !(checkout.hostname === 'mollie.com' || checkout.hostname.endsWith('.mollie.com'))) return response(503, { error: 'Invalid checkout' });
+  if (!paymentId(payment.id) || payment.mode !== env.RIG_MOLLIE_MODE) return response(503, { error: 'Payment status uncertain; contact support' });
   // If webhook won the race it may have saved the same ID already.
   // Always retain the provider id for recovery. If a freeze happened after the
   // first check, block checkout and keep the order unresolved for review.
   const updates = await env.DB.batch([env.DB.prepare("UPDATE rig_orders SET payment_id=?,state=CASE WHEN state='creating' AND NOT EXISTS (SELECT 1 FROM rig_frozen_accounts WHERE user_id=rig_orders.user_id) THEN 'open' WHEN state='creating' THEN 'unknown' ELSE state END WHERE id=? AND (payment_id IS NULL OR payment_id=?)").bind(payment.id, id, payment.id),enqueueFrozenOrders(env.DB,user)]);
   if (updates[0].meta.changes !== 1) return response(503, { error: 'Payment status uncertain; contact support' });
+  // Keep the attributable payment before refusing its current link. Recovery
+  // verifies the same payment and never creates another checkout attempt.
+  if(!isMollieCheckoutURL(payment._links?.checkout?.href))return response(503,{error:'Invalid checkout'});
+  const checkout=new URL(payment._links.checkout.href);
   const deliverable=await env.DB.prepare("SELECT 1 FROM rig_orders WHERE id=? AND state='open' AND NOT EXISTS (SELECT 1 FROM rig_frozen_accounts WHERE user_id=rig_orders.user_id)").bind(id).first();
   if(!deliverable)return response(503,{error:'Payment requires review; contact support'});
   return response(200, { checkoutUrl: checkout.href });
@@ -169,8 +172,8 @@ async function orderStatus(req, env, cfg, user, requestId, reconcile) {
       // cancellation/reconciliation is still required for already issued links.
       const blocked=await env.DB.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(user).first();
       if(blocked){await env.DB.batch([env.DB.prepare("UPDATE rig_orders SET state='unknown' WHERE id=? AND user_id=? AND state IN ('creating','open')").bind(order.id,user),enqueueFrozenOrders(env.DB,user)]);result.state='unknown';return response(200,result);}
-      let checkout; try {checkout=new URL(p._links.checkout.href);} catch {return response(503,{error:'Invalid checkout'});}
-      if (checkout.protocol !== 'https:' || checkout.username || checkout.password || checkout.port || !(checkout.hostname === 'mollie.com' || checkout.hostname.endsWith('.mollie.com'))) return response(503,{error:'Invalid checkout'});
+      if(!isMollieCheckoutURL(p._links.checkout.href))return response(503,{error:'Invalid checkout'});
+      const checkout=new URL(p._links.checkout.href);
       result.checkoutUrl=checkout.href;
     }
   }
