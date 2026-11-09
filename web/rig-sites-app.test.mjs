@@ -6,7 +6,7 @@ const origin='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 const bridge='https://rig-chatgpt-ingress.shortcut-computerguy.workers.dev';
 const owner='u-63e2e668-eeb1-43af-a35c-6998a1de7879';
 const env={RIG_SITES_PRODUCER_ORIGIN:origin,RIG_SITES_BRIDGE_ORIGIN:bridge,RIG_SITES_PROJECT_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_SITES_BRIDGE_KEY:'a'.repeat(64),RIG_EDIT_ENABLED:'yes'};
-function fixture(){const calls=[];let approvalStatus=201;const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':'<h1>RIG</h1>'},fetchImpl:async req=>{calls.push(req);assert.equal(new URL(req.url).origin,bridge);assert.equal(req.headers.get('authorization'),null);assert.equal(req.headers.get('cookie'),null);assert.equal(req.headers.get('oai-authenticated-user-id'),null);assert.match(req.headers.get('x-rig-sites-signature'),/^[a-f0-9]{64}$/);const path=new URL(req.url).pathname;if(path==='/api/session')return Response.json({userId:owner,balanceCents:500,frozen:false});if(path==='/api/generation-quotes')return Response.json({id:'abc',priceCents:100,currency:'EUR'},{status:201});if(path==='/api/chatgpt/quote-approvals')return Response.json(approvalStatus===201?{approvalToken:'A'.repeat(43),idempotencyKey:'rigchatgpt_abc'}:{error:'Insufficient'},{status:approvalStatus});return Response.json({enabled:true,funding:'owner'})}});return {app,calls,setApprovalStatus:value=>{approvalStatus=value}};}
+function fixture(){const calls=[];let approvalStatus=201;const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':'<h1>RIG</h1>','/multiuser/app.js':'/* RIG app */','/multiuser/style.css':'body{}'},fetchImpl:async req=>{calls.push(req);assert.equal(new URL(req.url).origin,bridge);assert.equal(req.headers.get('authorization'),null);assert.equal(req.headers.get('cookie'),null);assert.equal(req.headers.get('oai-authenticated-user-id'),null);assert.match(req.headers.get('x-rig-sites-signature'),/^[a-f0-9]{64}$/);const path=new URL(req.url).pathname;if(path==='/api/session')return Response.json({userId:owner,balanceCents:500,frozen:false});if(path==='/api/generation-quotes')return Response.json({id:'abc',priceCents:100,currency:'EUR'},{status:201});if(path==='/api/chatgpt/quote-approvals')return Response.json(approvalStatus===201?{approvalToken:'A'.repeat(43),idempotencyKey:'rigchatgpt_abc'}:{error:'Insufficient'},{status:approvalStatus});return Response.json({enabled:true,funding:'owner'})}});return {app,calls,setApprovalStatus:value=>{approvalStatus=value}};}
 const request=(path,options={})=>new Request(origin+path,options);
 const identity={'oai-authenticated-user-id':'native-subject','x-rig-expected-user':owner};
 test('native API refuses anonymous callers and account changes before write dispatch',async()=>{
@@ -65,6 +65,43 @@ test('payment route allowlist excludes webhook, queries and reconciliation by GE
 test('Mollie return query opens the studio without accepting payment claims or arbitrary queries',async()=>{
  const {app,calls}=fixture();const response=await app.fetch(request('/?payment=return'),env);assert.equal(response.status,200);assert.equal(await response.text(),'<h1>RIG</h1>');assert.equal(calls.length,0);
  for(const path of ['/?payment=paid','/?payment=return&amount=500','/?payment=return&payment=return','/multiuser/?payment=return','/api/payments/balance?payment=return'])assert.equal((await app.fetch(request(path),env)).status,404);
+ assert.equal(calls.length,0);
+});
+test('Facebook share links and inert campaign tags open the same studio without backend dispatch',async()=>{
+ const {app,calls}=fixture();
+ const fbclid='synthetic_facebook_click_'+ 'A'.repeat(180)+'_aem_test_only';
+ for(const path of [
+  '/?fbclid='+fbclid,
+  '/multiuser/?fbclid='+fbclid+'&utm_source=facebook',
+  '/?utm_source=facebook&utm_medium=social&utm_campaign=dog_band&utm_term=music&utm_content=shared_reel',
+  '/?fbclid=first&fbclid=second&utm_source=facebook&utm_source=shared',
+  '/?fbclid=%3Cscript%3Ealert(1)%3C%2Fscript%3E'
+ ]){
+  const response=await app.fetch(request(path),env);
+  assert.equal(response.status,200,path);assert.equal(await response.text(),'<h1>RIG</h1>');
+ }
+ assert.equal(calls.length,0);
+});
+test('Mollie return remains an inert hint when a shared link also has tracking tags',async()=>{
+ const {app,calls}=fixture();
+ for(const path of ['/?payment=return&fbclid=shared&utm_source=facebook','/?fbclid=shared&payment=return&utm_campaign=rig']){
+  const response=await app.fetch(request(path),env);assert.equal(response.status,200,path);assert.equal(await response.text(),'<h1>RIG</h1>');
+ }
+ for(const path of ['/?fbclid=shared&payment=paid','/?payment=return&payment=return&fbclid=shared','/?payment=return&amount=500&fbclid=shared','/multiuser/?payment=return&fbclid=shared','/?fbclid=shared&unknown=anything'])assert.equal((await app.fetch(request(path),env)).status,404,path);
+ assert.equal(calls.length,0);
+});
+test('share tags never broaden API, MCP or asset query routing',async()=>{
+ const {app,calls}=fixture();
+ assert.equal((await app.fetch(request('/multiuser/app.js'),env)).status,200);
+ assert.equal((await app.fetch(request('/multiuser/style.css'),env)).status,200);
+ for(const path of ['/api/session?fbclid=shared','/api/video-config?fbclid=shared','/api/payments/packages?fbclid=shared','/api/payments/balance?utm_source=facebook','/mcp?fbclid=shared','/multiuser/app.js?fbclid=shared','/multiuser/style.css?utm_source=facebook'])assert.equal((await app.fetch(request(path,{headers:identity}),env)).status,404,path);
+ assert.equal(calls.length,0);
+});
+test('share query processing stays bounded while ordinary tracking links remain inert',async()=>{
+ const {app,calls}=fixture();
+ for(const path of ['/?fbclid='+ 'A'.repeat(4096),'/?'+Array(16).fill('fbclid=shared').join('&')])assert.equal((await app.fetch(request(path),env)).status,200,path.slice(0,80));
+ for(const path of ['/?fbclid='+ 'A'.repeat(4097),'/?'+Array(17).fill('fbclid=shared').join('&')])assert.equal((await app.fetch(request(path),env)).status,404,path.slice(0,80));
+ assert.equal((await app.fetch(request('/?fbclid=shared',{method:'POST',body:'{}'}),env)).status,404);
  assert.equal(calls.length,0);
 });
 test('MCP discovery exposes real confirmation and editing only when configured',async()=>{
