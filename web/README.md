@@ -43,16 +43,32 @@ configuration, which is not included in this repository.
 
 ## Account and spending boundaries
 
-An owner may explicitly confirm successive videos against the existing RIG
+In the legacy TEST environment, an owner may confirm videos against the RIG
 ledger test budget and the per-video Fal estimate cap. An obsolete global
 one-attempt marker no longer blocks that flow. Each dispatch still requires
 the exact owned quote, reserved funds, an unfrozen account, no other active
 request and the durable one-time dispatch decision. Testers with sponsored
 credit keep their separate bounded grant.
 
-The EUR RIG test budget is not the USD balance of an external Fal account.
-The native Site still does not sell live Mollie packages. See the
-[launch review](../docs/launch-review.md) for the unresolved commercial gates.
+The isolated production composition supports customer credit purchases through
+Mollie. Customer videos reserve and debit their EUR RIG wallet. The server-pinned
+production owner can instead use `owner-provider` funding with no Mollie purchase:
+the website shows the current estimated USD Fal cost before confirmation and
+does not display an invented Fal balance. Ownership comes only from the signed
+Site identity and `RIG_PRODUCTION_OWNER_USER_ID`, never a browser role or request.
+
+Apply `production-migrations/0002_owner_provider_funding.sql` before deploying
+this owner route to an existing production DB. New owner quotes persist their
+funding and confirmed estimate; `rig_owner_provider_usage` records the job
+lifecycle without writing EUR reservations, refunds or credits. Existing quotes
+default to `credits` and retain their original accounting. Owner changes block
+new owner dispatch while previously queued jobs remain recoverable. Both routes
+keep explicit price/transfer confirmation, freezes and the single-dispatch guard.
+
+Neither the EUR RIG wallet nor the owner usage journal is the USD balance of an
+external Fal account. Code and CI do not activate live billing or prove a real
+payment settled. See the [launch review](../docs/launch-review.md) for the
+commercial review checklist; its historical test notes are not live receipts.
 
 ## Private five-second input transport
 
