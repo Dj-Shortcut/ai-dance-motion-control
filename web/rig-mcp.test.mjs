@@ -109,7 +109,7 @@ test('private API failures are bounded errors without upstream data or automatic
 
 test('an ambiguous accepted submission preserves its existing recovery handle without retrying',async()=>{
  let submissions=0;
- const handler=createRigMcp({appOrigin:origin,authenticate:async()=>({userId:user,request:async(path)=>{assert.equal(path,'/api/generations');submissions++;return Response.json({id:'job-unknown',state:'unknown',message:'internal'}, {status:202})}}),issueApproval:async()=>({approvalToken:token}),consumeApproval:async()=>({idempotencyKey:'server-key'})});
+ const handler=createRigMcp({appOrigin:origin,authenticate:async()=>({userId:user,request:async(path)=>{if(path==='/api/video-config')return Response.json({enabled:true,funding:'owner'});assert.equal(path,'/api/generations');submissions++;return Response.json({id:'job-unknown',state:'unknown',message:'internal'}, {status:202})}}),issueApproval:async()=>({approvalToken:token}),consumeApproval:async()=>({idempotencyKey:'server-key'})});
  const response=await handler(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'rig_confirm_generation',arguments:{quoteId:'quote-1',approvalToken:token}}})}));
  const result=(await response.json()).result;assert.deepEqual(result.structuredContent,{jobId:'job-unknown',state:'unknown'});assert.match(result.content[0].text,/gecontroleerd/);assert.equal(submissions,1);
 });
@@ -149,4 +149,49 @@ test('O3 requires a nonblank prompt before file preparation or quote; motion sti
  const motion=await f.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:5,quality:'standard'});assert.equal(motion.body.result.structuredContent.generated,false);
  const edit=await f.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:5,quality:'edit-standard',prompt:'  voeg een hond toe  '});assert.equal(edit.body.result.structuredContent.generated,false);
  f.quote.quality='edit-standard';const q=await f.call('rig_create_quote',{...input,quality:'edit-standard',prompt:'voeg een hond toe'});assert.equal(q.body.result.structuredContent.quality,'edit-standard');
+});
+
+function paidFixture({config={enabled:true,funding:'credits',mode:'live',currency:'EUR'},gift={state:'unavailable'}}={}){
+ const calls=[];let preparations=0,issues=0,consumes=0;
+ const handler=createRigMcp({appOrigin:origin,authenticate:async()=>({userId:user,request:async(path,init={})=>{
+  calls.push({path,method:init.method||'GET'});
+  if(path==='/api/video-config')return Response.json({...config,balanceCents:2500});
+  if(path==='/api/sponsor-invitations/status')return Response.json({...gift,purchasedBalanceCents:2500});
+  if(path==='/api/generations/job-paid')return Response.json({id:'job-paid',state:'completed',priceCents:100,currency:'EUR',videoPath:'/api/generations/job-paid/video'});
+  if(path==='/api/generations/recent')return Response.json({job:{id:'job-paid',state:'completed',priceCents:100,currency:'EUR'}});
+  throw Error('No write adapter is available to paid ChatGPT tools');
+ }}),prepareFiles:async()=>{preparations++;throw Error('must not prepare')},issueApproval:async()=>{issues++;throw Error('must not issue')},consumeApproval:async()=>{consumes++;throw Error('must not consume')}});
+ const send=async(method,params)=>{const response=await handler(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}));return(await response.json()).result};
+ return {calls,send,call:(name,args={})=>send('tools/call',{name,arguments:args}),counts:()=>({preparations,issues,consumes})};
+}
+
+test('paid account and capability reads accept only live EUR credits without labeling purchased money as free',async()=>{
+ const f=paidFixture(),account=await f.call('rig_get_account');
+ assert.equal(account.isError,undefined);assert.equal(account.structuredContent.funding,'credits');assert.equal(account.structuredContent.videoEnabled,true);assert.deepEqual(account.structuredContent.freeCredit,{state:'unavailable',remainingCents:null});assert.match(account.content[0].text,/RIG-website/);assert.doesNotMatch(JSON.stringify(account),/2500/);
+ const caps=await f.call('rig_get_capabilities');assert.equal(caps.structuredContent.funding,'credits');assert.equal(caps.structuredContent.directFilePreparation,false);assert.equal(caps.structuredContent.explicitPriceConfirmation,false);assert.match(caps.content[0].text,/Genereren vanuit ChatGPT volgt later/);
+ const list=(await f.send('tools/list',{})).tools;for(const name of ['rig_get_account','rig_get_capabilities'])assert.ok(list.find(t=>t.name===name).outputSchema.properties.funding.enum.includes('credits'));
+ const gifted=paidFixture({gift:{state:'eligible',remainingCents:200}});assert.deepEqual((await gifted.call('rig_get_account')).structuredContent.freeCredit,{state:'eligible',remainingCents:200});
+ const invalidGift=paidFixture({gift:{state:'eligible',remainingCents:2500}});assert.equal((await invalidGift.call('rig_get_account')).isError,true);
+ assert.ok(f.calls.every(x=>x.method==='GET'));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+});
+
+test('paid preparation, price quoting and confirmation defer to website before any write, file preparation or approval action',async()=>{
+ const file={file_id:'file_paid',download_url:'https://files.oaiusercontent.com/reference'};
+ for(const enabled of [true,false]){
+  const f=paidFixture({config:{enabled,funding:'credits',mode:'live',currency:'EUR'}});
+  for(const [name,args]of [['rig_prepare_files',{reference_file:file,motion_file:file,seconds:5}],['rig_create_quote',input],['rig_confirm_generation',{quoteId:'quote-1',approvalToken:token}]]){
+   const result=await f.call(name,args);assert.equal(result.isError,true,name);assert.match(result.content[0].text,/Gebruik de RIG-website/);
+  }
+  assert.deepEqual(f.calls,[{path:'/api/video-config',method:'GET'},{path:'/api/video-config',method:'GET'},{path:'/api/video-config',method:'GET'}]);assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+  const status=await f.call('rig_get_generation',{jobId:'job-paid'});assert.equal(status.structuredContent.jobId,'job-paid');assert.equal(status.structuredContent.videoUrl,origin+'/api/generations/job-paid/video');assert.equal((await f.call('rig_get_recent_generation')).structuredContent.job.jobId,'job-paid');
+ }
+});
+
+test('credits with absent or mismatched server mode/currency fail closed before paid plugin actions',async()=>{
+ const file={file_id:'file_paid',download_url:'https://files.oaiusercontent.com/reference'};
+ for(const config of [{enabled:true,funding:'credits'},{enabled:true,funding:'credits',mode:'test',currency:'EUR'},{enabled:true,funding:'credits',mode:'live',currency:'USD'}]){
+  const f=paidFixture({config});
+  for(const [name,args]of [['rig_get_capabilities',{}],['rig_prepare_files',{reference_file:file,motion_file:file,seconds:5}],['rig_create_quote',input],['rig_confirm_generation',{quoteId:'quote-1',approvalToken:token}]])assert.equal((await f.call(name,args)).isError,true,name);
+  assert.ok(f.calls.every(x=>x.path==='/api/video-config'&&x.method==='GET'));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
+ }
 });

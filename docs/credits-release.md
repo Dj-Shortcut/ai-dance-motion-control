@@ -23,8 +23,12 @@ This is deliberately conservative; it is not an automated partial-refund policy.
 Paid and test wallets are physically separate. Switching the Site's realm gives
 the same ChatGPT subject a production identity and a clean purchased balance.
 The old owner's fictitious balance and sponsored allowance are not copied.
-The tester's previously promised gift needs its own audited promotional grant
-to his verified production identity if the production realm is enabled.
+The tester's still-unclaimed invitation is preserved as one production
+promotional invitation. Provisioning atomically replaces the exact old TEST
+hash and gives it a historical expiry before seeding the production hash. This
+also blocks legacy claims that captured an earlier clock. The future
+authenticated claimant receives exactly 500 cents once; the owner cannot claim
+it. Purchased money never increases the displayed free-gift allowance.
 
 Generation uses the same production wallet and authenticated identity as checkout.
 The server quotes the price before confirmation, reserves it atomically, and
@@ -68,8 +72,9 @@ a successful video through the live website.
 
 Before opening paid sales, confirm the live key belongs to the pinned RIG profile,
 enabled payment methods and current website; verify scheduler/private deployment;
-then have the owner complete a small real checkout and confirm exact credit once.
-Video acceptance is a separate pending check. Customer terms/privacy information,
+have the owner complete a small real checkout and confirm exact credit once.
+A live Mollie checkout may be prepared without paying it; an open payment is not
+proof of receipt or settlement. Video acceptance is a separate pending check. Customer terms/privacy information,
 refund/support procedure and commercial pricing review remain release work.
 
 Provider references:
@@ -77,3 +82,7 @@ Provider references:
 - <https://docs.mollie.com/reference/create-payment>
 - <https://docs.mollie.com/reference/webhooks>
 - <https://docs.mollie.com/reference/api-idempotency>
+
+The existing ChatGPT tools can read production account/capability state, but paid
+preparation/quoting/confirmation directs users to the website before any action.
+Paid plugin generation is deliberately deferred.

@@ -13,7 +13,7 @@ const groups={
  ],
  workerd:[
   'sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
-  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-video-workerd','production-collector-workerd','gateway-relay-workerd'
+  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-invitation-workerd','production-video-workerd','production-collector-workerd','gateway-relay-workerd'
  ],
  media:['mp4-inspect','mp4-edit-support','video-preparer','cloud-media-service','long-duration','closed-video-service','normalize']
 };

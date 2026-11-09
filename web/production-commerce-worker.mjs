@@ -8,6 +8,7 @@ import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
 import {handleProviderInput} from './rig-provider-inputs.mjs';
 import {d1Limit} from './router.mjs';
+import {handleProductionInvitation} from './production-invitation.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -29,6 +30,7 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    authenticated=await authenticateProductionSites(req,env,{allowGeneration:true,leaseFactory});
    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
    const {userId}=authenticated;
+   if(u.pathname.startsWith('/api/sponsor-invitations/'))return handleProductionInvitation(authenticated.request,env,{userId,productionContext:context});
    if(u.pathname==='/api/session'||u.pathname.startsWith('/api/payments/'))return payments.user(authenticated.request,env,userId);
    const approvals=createChatgptApprovals(mapped.DB,{mode:'live',productionContext:context});
    const issue=u.pathname==='/api/chatgpt/quote-approvals',consume=u.pathname==='/api/chatgpt/quote-approvals/consume';
