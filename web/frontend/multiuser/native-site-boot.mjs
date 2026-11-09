@@ -15,7 +15,7 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
  loadScript??=(name=>new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=`/multiuser/${name}`;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);}));
  let binding=null,unsubscribe=()=>{},invitationUi=null,ended=false;
  browser.rigNativeSite=true;browser.rigVideoEnabled=false;
- function endSession(){if(ended)return;ended=true;browser.rigOwnerVerification?.dispose();browser.rigFinanceDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
+ function endSession(){if(ended)return;ended=true;browser.rigOwnerVerification?.dispose();browser.rigFinanceDispose?.();browser.rigOwnerAdministration?.dispose();browser.rigPaymentsDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
  logout.addEventListener('click',()=>{endSession();});
  const enable=async()=>{const ready=await enableVideoIfAvailable({binding,window:browser,document,loadScript});if(binding?.isActive())el('videoAvailabilityNote').textContent=browser.rigVideoUnavailableReason==='owner_test_limit'?'Je eenmalige eigenaarstest is gebruikt. Je bestaande video-opdracht blijft bereikbaar.':browser.rigVideoFunding==='owner-provider'?'Je gebruikt je eigen fal-account. Je ziet de Fal-raming vóór je bevestigt.':browser.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':browser.rigVideoFunding==='sponsored'?'Je video’s worden betaald uit je gratis testtegoed. Je ziet de prijs vóór je bevestigt.':ready?'Je ziet de prijs vóór je bevestigt. Een bevestigde video gebruikt echt fal-tegoed.':'Activeer je uitnodiging om een video te maken.';return ready;};
  try{
@@ -37,7 +37,7 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
   await enable();if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   await loadScript('payments.js');if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   // Finance is an optional owner view. Its availability never blocks the studio.
-  try{await loadScript('finance.js');}catch{}
+  try{await loadScript('owner-administration.js');await loadScript('finance.js');}catch{}
   if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   invitationUi=mountSponsorInvitation({invitation,binding,document,onRedeemed:enable});
   return {binding,dispose:endSession};

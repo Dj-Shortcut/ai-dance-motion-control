@@ -12,8 +12,8 @@ export function sitesOrigin(value){try{const u=new URL(value);return u.protocol=
 // operation, and reconciliation is a write even though it reads provider state.
 export function sitesPaymentPath(path,method){
  if(typeof path!=='string'||path.includes('?')||path.includes('#'))return false;
- if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders','/api/payments/readiness'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}$/.test(path);
- return method==='POST'&&(path==='/api/payments/create'||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/reconcile$/.test(path));
+ if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders','/api/payments/readiness','/api/payments/support-requests'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}(?:\/receipt)?$/.test(path)||/^\/api\/payments\/support-requests\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/confirmation$/.test(path);
+ return method==='POST'&&(['/api/payments/create','/api/payments/support-requests'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/reconcile$/.test(path));
 }
 // Financial data remains owner-only in the private service. Keep its signed
 // transport surface small and independent of video generation availability.
@@ -21,6 +21,11 @@ export function sitesFinancePath(path,method){
  if(typeof path!=='string')return false;
  if(method==='POST')return ['/api/owner/finance/expenses','/api/owner/finance/policy'].includes(path);
  return method==='GET'&&/^\/api\/owner\/finance(?:\?month=20[0-9]{2}-(?:0[1-9]|1[0-2]))?$/.test(path);
+}
+export function sitesAdministrationPath(path,method){
+ if(typeof path!=='string')return false;
+ if(method==='GET')return /^\/api\/owner\/accounting(?:\/export\/(?:purchases|credit-events|costs|estimates)\.csv)?(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path)||['/api/owner/recovery','/api/owner/support'].includes(path);
+ return method==='POST'&&(['/api/owner/accounting/documents','/api/owner/recovery/notes'].includes(path)||/^\/api\/owner\/recovery\/payments\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/adopt$/.test(path));
 }
 export function sitesOwnerSecurityPath(path,method){
  if(typeof path!=='string')return false;
@@ -33,6 +38,7 @@ export function sitesPath(path,method){
  if(u.origin!=='https://rig.invalid'||u.pathname+u.search!==path)return false;
  if(sitesPaymentPath(path,method))return true;
  if(sitesFinancePath(path,method))return true;
+ if(sitesAdministrationPath(path,method))return true;
  if(sitesOwnerSecurityPath(path,method))return true;
  if(method==='GET')return ['/api/session','/api/video-config','/api/sponsor-invitations/status','/api/generations/recent'].includes(path)||u.pathname==='/api/estimate/fal'||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
  return ['/api/sponsor-invitations/redeem','/api/assets','/api/generation-quotes','/api/generations','/api/chatgpt/quote-approvals','/api/chatgpt/quote-approvals/consume','/api/generations/a5db90b7-7558-40bf-a013-2e121d056f2d/verify-gateway'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[0-9a-f-]{36}\/verify-inputs$/.test(path);

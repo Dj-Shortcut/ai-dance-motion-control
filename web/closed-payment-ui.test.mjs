@@ -35,7 +35,7 @@ async function checkoutScreen({multiuser,checkoutUrl,resume=false}){
   calls.push([path,init]);const details={mode:'live',currency:'EUR',purchasesEnabled:true};
   return Response.json(path==='/api/payments/packages'?{...details,packages:[{id:'credits-25',credits:2500,amountCents:2500}]}:path==='/api/payments/orders'?{orders:resume?[{state:'open',requestId:'owned_request_123456'}]:[]}:path==='/api/payments/create'?{checkoutUrl}:path.endsWith('/reconcile')?{state:'open',checkoutUrl}:{...details,balance:0,frozen:false});
  };
- const browser={rigNativeSite:true,rigVideoFunding:'credits',rigVideoMode:'live',rigSessionActive:()=>true,rigScopedStorage:storage,rigRequest:request,rigCheckout:async url=>redirects.push(url)};
+ const browser={addEventListener:w.addEventListener.bind(w),setTimeout:w.setTimeout.bind(w),rigNativeSite:true,rigVideoFunding:'credits',rigVideoMode:'live',rigSessionActive:()=>true,rigScopedStorage:storage,rigRequest:request,rigCheckout:async url=>redirects.push(url)};
  const location={href:'https://rig.local/',assign:url=>redirects.push(url)};
  runInNewContext(multiuser?script:standaloneScript,{document:d,window:browser,sessionStorage:storage,fetch:request,location,URL,Intl,crypto:{randomUUID:()=> '11111111-1111-4111-8111-111111111111'}});
  d.getElementById('creditsButton').click();

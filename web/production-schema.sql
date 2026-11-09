@@ -288,3 +288,107 @@ CREATE TABLE rig_preparation_reservations (
  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0)
 );
 CREATE INDEX rig_preparation_user_day ON rig_preparation_reservations(budget_day,user_id);
+
+-- Additive owner-operation scope; preserve old challenges and all credentials.
+CREATE TABLE rig_owner_security_challenges_v2 (
+ id TEXT PRIMARY KEY,
+ owner_id TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(length(operation) BETWEEN 1 AND 64 AND operation NOT GLOB '*[^a-z-]*'),
+ challenge TEXT NOT NULL UNIQUE,
+ payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
+ payload_json TEXT NOT NULL,
+ label TEXT,
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL,
+ attempted_at INTEGER,
+ used_at INTEGER,
+ use_token TEXT UNIQUE,
+ credential_id TEXT,
+ verified_counter INTEGER
+);
+CREATE INDEX rig_owner_security_challenges_v2_expiry ON rig_owner_security_challenges_v2(owner_id,expires_at);
+INSERT INTO rig_owner_security_challenges_v2 SELECT * FROM rig_owner_security_challenges;
+
+-- Manual handoff evidence only. No invoice is issued, payment sent or ledger
+-- changed by this migration. Accountable remains the external source document.
+CREATE TABLE rig_accounting_documents (
+ id TEXT PRIMARY KEY CHECK(length(id)=36),
+ idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key)=36),
+ order_id TEXT NOT NULL REFERENCES rig_orders(id),
+ provider TEXT NOT NULL CHECK(provider='accountable'),
+ external_invoice_reference TEXT NOT NULL,
+ reference_key TEXT NOT NULL,
+ document_date TEXT NOT NULL CHECK(length(document_date)=10),
+ record_type TEXT NOT NULL CHECK(record_type IN ('invoice','accounting-entry')),
+ delivery_status TEXT NOT NULL CHECK(delivery_status IN ('prepared','recorded-in-accountable','peppol-sent-manually')),
+ note TEXT NOT NULL,
+ replaces_document_id TEXT UNIQUE REFERENCES rig_accounting_documents(id),
+ request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+ recorded_by TEXT NOT NULL,
+ created_at INTEGER NOT NULL CHECK(created_at>=0)
+);
+CREATE UNIQUE INDEX rig_accounting_initial_document_order ON rig_accounting_documents(order_id) WHERE replaces_document_id IS NULL;
+CREATE INDEX rig_accounting_documents_order ON rig_accounting_documents(order_id,created_at);
+-- Preserve every reference ever used, including corrected ones. A reference
+-- cannot silently migrate to another customer's purchase.
+CREATE TABLE rig_accounting_references (
+ reference_key TEXT PRIMARY KEY,
+ order_id TEXT NOT NULL REFERENCES rig_orders(id),
+ created_at INTEGER NOT NULL CHECK(created_at>=0)
+);
+
+-- Immutable operator investigation records. They do not release funds or
+-- claim that an unknown provider request did not happen.
+CREATE TABLE rig_owner_recovery_events (
+ id TEXT PRIMARY KEY,
+ idempotency_key TEXT NOT NULL UNIQUE,
+ owner_id TEXT NOT NULL,
+ case_kind TEXT NOT NULL CHECK(case_kind IN ('payment','generation')),
+ case_id TEXT NOT NULL,
+ action TEXT NOT NULL CHECK(action IN ('note','payment-adopted')),
+ status TEXT NOT NULL CHECK(status IN ('investigating','waiting-provider','reviewed','provider-linked')),
+ note TEXT NOT NULL,
+ provider_id TEXT,
+ request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+ evidence_json TEXT NOT NULL,
+ created_at INTEGER NOT NULL CHECK(created_at>=0)
+);
+CREATE INDEX rig_owner_recovery_case ON rig_owner_recovery_events(case_kind,case_id,created_at);
+
+-- Immutable receipt of a customer's request. This table never changes money.
+CREATE TABLE rig_customer_support_requests (
+ id TEXT PRIMARY KEY CHECK(length(id)=36),
+ user_id TEXT NOT NULL CHECK(length(user_id)=38),
+ order_id TEXT NOT NULL REFERENCES rig_orders(id),
+ order_request_id TEXT NOT NULL,
+ idempotency_key TEXT NOT NULL CHECK(length(idempotency_key)=36),
+ kind TEXT NOT NULL CHECK(kind IN ('withdrawal','payment-help')),
+ message TEXT NOT NULL CHECK(length(message)<=1000),
+ request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+ order_state_at_request TEXT NOT NULL,
+ amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents)='integer' AND amount_cents>0),
+ credits INTEGER NOT NULL CHECK(typeof(credits)='integer' AND credits>0),
+ created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
+ UNIQUE(user_id,idempotency_key)
+);
+CREATE INDEX rig_customer_support_by_user ON rig_customer_support_requests(user_id,created_at,id);
+CREATE INDEX rig_customer_support_queue ON rig_customer_support_requests(created_at,id);
+
+-- Immutable evidence of the price/terms and buyer's stated country before checkout.
+-- This does not assign a VAT treatment or issue a fiscal invoice.
+CREATE TABLE rig_purchase_acceptances (
+ user_id TEXT NOT NULL CHECK(typeof(user_id)='text' AND length(user_id)=38),
+ request_id TEXT NOT NULL CHECK(typeof(request_id)='text' AND length(request_id)=36),
+ version TEXT NOT NULL CHECK(typeof(version)='text' AND length(version) BETWEEN 1 AND 100),
+ buyer_country TEXT NOT NULL CHECK(buyer_country IN ('BE','NL')),
+ customer_type TEXT NOT NULL CHECK(customer_type='consumer'),
+ package_id TEXT NOT NULL CHECK(typeof(package_id)='text' AND length(package_id) BETWEEN 1 AND 40),
+ amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents)='integer' AND amount_cents BETWEEN 1 AND 1000000),
+ credits INTEGER NOT NULL CHECK(typeof(credits)='integer' AND credits BETWEEN 1 AND 100000000),
+ currency TEXT NOT NULL CHECK(currency='EUR'),
+ request_hash TEXT NOT NULL CHECK(length(request_hash)=64 AND request_hash NOT GLOB '*[^0-9a-f]*'),
+ seller_json TEXT NOT NULL CHECK(json_valid(seller_json) AND json_type(seller_json)='object'),
+ terms_text TEXT NOT NULL CHECK(typeof(terms_text)='text' AND length(terms_text) BETWEEN 1 AND 65536),
+ created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
+ PRIMARY KEY(user_id,request_id)
+);
