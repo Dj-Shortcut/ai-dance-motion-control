@@ -2,6 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRigSitesApp} from './rig-sites-app.mjs';
 import {sitesCanonical,sitesHmac,sitesPaymentPath} from './sites-bridge-protocol.mjs';
+
+test('owner finance routes use native identity, a signed exact month and no browser-supplied role',async()=>{
+ const origin='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',bridge='https://rig-api.shortcut-computerguy.workers.dev',project='appgprj_6aeec13b50448191b88da670dac8aa98',key='a'.repeat(64),owner='u-11111111-1111-4111-8111-111111111111',calls=[];
+ const env={RIG_SITES_PROJECT_ID:project,RIG_SITES_PRODUCER_ORIGIN:origin,RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRODUCTION_BRIDGE_ORIGIN:bridge,RIG_PRODUCTION_SITES_BRIDGE_KEY:key};
+ const app=createRigSitesApp({fetchImpl:async req=>{
+  calls.push(req);const url=new URL(req.url),h=req.headers;
+  const signature=await sitesHmac(key,sitesCanonical({env:{RIG_SITES_PROJECT_ID:project,RIG_SITES_PRODUCER_ORIGIN:origin,RIG_SITES_BRIDGE_ORIGIN:bridge},method:req.method,path:url.pathname+url.search,subjectHash:h.get('x-rig-sites-subject'),time:h.get('x-rig-sites-time'),nonce:h.get('x-rig-sites-nonce'),digest:h.get('x-rig-sites-body-sha256'),headers:h}));
+  assert.equal(h.get('x-rig-sites-signature'),signature);
+  for(const name of ['authorization','cookie','x-rig-owner','x-rig-user'])assert.equal(h.get(name),null);
+  if(url.pathname==='/api/session')return Response.json({userId:owner,balanceCents:0,currency:'EUR',mode:'live',purchasesEnabled:true,funding:'credits'});
+  assert.equal(url.pathname+url.search,'/api/owner/finance?month=2026-11');return Response.json({currency:'EUR',income:{cashReceivedCents:2500}},{headers:{'set-cookie':'forbidden=value'}});
+ }});
+ const url=origin+'/api/owner/finance?month=2026-11';
+ assert.equal((await app.fetch(new Request(url),env)).status,401);assert.equal(calls.length,0);
+ const response=await app.fetch(new Request(url,{headers:{'oai-authenticated-user-id':'native-owner-subject',authorization:'Bearer forged',cookie:'private=forged','x-rig-owner':'true'}}),env);
+ assert.equal(response.status,200);assert.equal(calls.length,2);assert.equal(response.headers.get('set-cookie'),null);assert.equal(response.headers.get('cache-control'),'private, no-store');assert.equal((await response.json()).income.cashReceivedCents,2500);
+ const forbidden=await app.fetch(new Request(origin+'/api/owner/finance/expenses',{method:'POST',headers:{origin,'oai-authenticated-user-id':'native-owner-subject','x-rig-expected-user':'u-22222222-2222-4222-8222-222222222222','content-type':'application/json'},body:'{}'}),env);assert.equal(forbidden.status,403);assert.equal(calls.length,3);
+ const wrongRealm=await app.fetch(new Request(url,{headers:{'oai-authenticated-user-id':'native-owner-subject'}}),{...env,RIG_PRODUCTION_PAYMENTS_ENABLED:'no'});assert.equal(wrongRealm.status,404);
+});
 const origin='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 const bridge='https://rig-chatgpt-ingress.shortcut-computerguy.workers.dev';
 const owner='u-63e2e668-eeb1-43af-a35c-6998a1de7879';

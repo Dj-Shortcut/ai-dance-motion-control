@@ -10,3 +10,14 @@ test('missing, duplicate, unrelated or differently billed edit price fails close
   const f=fixture(x=>x.endpoint_id===edit?patch(x):[x]);await assert.rejects(getFalPricePreflight('fixture-key',f.fetch,{includeEdit:true}));assert.equal(f.endpoints[2],edit);
  }
 });
+test('a selected fixed quality reads exactly one bounded endpoint and keeps full default behavior intact',async()=>{
+ for(const [quality,endpoint]of [['standard','fal-ai/kling-video/v3/standard/motion-control'],['pro','fal-ai/kling-video/v3/pro/motion-control'],['edit-standard',edit]]){
+  const f=fixture(x=>[x]);const p=await getFalPricePreflight('fixture-key',async(url,options)=>{assert.ok(options.signal instanceof AbortSignal);return f.fetch(url,options)},{includeEdit:true,quality});
+  assert.deepEqual(f.endpoints,[endpoint]);assert.deepEqual(Object.keys(p.prices),[quality]);
+ }
+});
+test('the quality selector cannot choose an arbitrary model, URL or disabled edit endpoint',async()=>{
+ for(const quality of ['https://attacker.invalid','fal-ai/unrelated','__proto__',null,{},'edit-standard']){
+  const f=fixture(x=>[x]);await assert.rejects(getFalPricePreflight('fixture-key',f.fetch,{quality}));assert.equal(f.endpoints.length,0);
+ }
+});

@@ -6,6 +6,7 @@ import {createClosedVideoService,closedVideoTesting} from './closed-video-servic
 import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {getFalPricePreflight} from './price-preflight.mjs';
 import {d1Limit} from './router.mjs';
+import {loadProfitPolicy,retailPriceCents,createProfitSnapshot,profitable} from './profit-policy.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const reply=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
@@ -23,7 +24,7 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
  };
  if(!closedVideoTesting.valid(mapped,{productionContext:context}))return unavailable;
  const sharedLease=lease??createDurableMediaLease(mapped.DB,{mode:'live',productionContext:context});
- const currentPrice=priceFetch??(key=>getFalPricePreflight(key,closedVideoTesting.providerTransport(providerFetch),{includeEdit:editEnabled(mapped)}));
+ const currentPrice=priceFetch??((key,quality)=>getFalPricePreflight(key,closedVideoTesting.providerTransport(providerFetch),{includeEdit:editEnabled(mapped),quality}));
  const service=await createClosedVideoService(mapped,{trustedUserId,lease:sharedLease,verifyTenant,providerFetch,gatewayFetch,priceFetch:currentPrice,accessMode:'paid',productionContext:context});
  return async req=>{
   const url=new URL(req.url);
@@ -38,13 +39,16 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     if(req.method!=='GET')return reply({error:'Methode niet toegestaan.'},405);
     const p=url.searchParams,quality=p.get('quality'),raw=p.get('duration');
     if([...p.keys()].some(k=>!['quality','duration'].includes(k))||p.getAll('quality').length!==1||p.getAll('duration').length!==1||!(['standard','pro'].includes(quality)||quality==='edit-standard'&&editEnabled(mapped))||!/^(?:[0-9]{1,2})(?:\.[0-9]{1,6})?$/.test(raw||''))return reply({error:'Kies een geldig fragment.'},400);
-    const duration=Number(raw),billedSeconds=Math.ceil(duration),rate=Number(quality==='edit-standard'?mapped.RIG_PRICE_EDIT:quality==='pro'?mapped.RIG_PRICE_PRO:mapped.RIG_PRICE_STANDARD),cents=rate*billedSeconds;
-    if(!Number.isFinite(duration)||duration<3||duration>(quality==='edit-standard'?15:30)||!Number.isSafeInteger(cents)||cents<=0||cents>+mapped.RIG_CLOSED_VIDEO_MAX_CENTS)return reply({error:'Kies een geldig fragment binnen de videolimiet.'},400);
+    const duration=Number(raw),billedSeconds=Math.ceil(duration),rate=Number(quality==='edit-standard'?mapped.RIG_PRICE_EDIT:quality==='pro'?mapped.RIG_PRICE_PRO:mapped.RIG_PRICE_STANDARD);
+    if(!Number.isFinite(duration)||duration<3||duration>(quality==='edit-standard'?15:30))return reply({error:'Kies een geldig fragment binnen de videolimiet.'},400);
+    const policy=await loadProfitPolicy(mapped.DB);
     if(await d1Limit({env:mapped,category:'generation',userId:trustedUserId,method:'GET'})!==true)return reply({error:'Te veel aanvragen.'},429);
-    const prices=await currentPrice(mapped.FAL_KEY),providerRate=prices?.prices?.[quality];
+    const prices=await currentPrice(mapped.FAL_KEY,quality),providerRate=prices?.prices?.[quality];
     if(prices?.currency!=='USD'||prices?.unit!=='second'||!Number.isFinite(providerRate)||providerRate<=0||providerRate>1000)return unavailable();
     const rateUsdMicrosPerSecond=Math.ceil(providerRate*1e6),usdMicros=rateUsdMicrosPerSecond*billedSeconds;
     if(!Number.isSafeInteger(usdMicros)||usdMicros<=0||usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return unavailable();
+    const cents=retailPriceCents(policy,{quality,billedSeconds,rateCents:rate,providerEstimateUsdMicros:usdMicros,fundingKind:funding,maxPriceCents:+mapped.RIG_CLOSED_VIDEO_MAX_CENTS});
+    if(!profitable(createProfitSnapshot({policy,fundingKind:funding,retailPriceCents:cents,providerEstimateUsdMicros:usdMicros})))return unavailable();
     // Provider costs are private business information. Customers receive only
     // their own EUR estimate; the trusted owner retains the direct-Fal view.
     return reply({quality,durationSeconds:duration,billedSeconds,...(funding==='owner-provider'?{funding,providerEstimate:{currency:'USD',usdMicros,rateUsdMicrosPerSecond,rateCheckedOn:new Date().toISOString().slice(0,10),binding:false}}:{customerProposal:{currency:'EUR',priceCents:cents,version:mapped.RIG_PRICE_VERSION,binding:false,testOnly:false}})});

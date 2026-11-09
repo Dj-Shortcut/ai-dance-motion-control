@@ -1,12 +1,12 @@
 // Production Sites identity: private payment Worker only, validated BEFORE
 // trusting a subject or request. Uses the same nonce and identity tables as
 // production video; never share these tables with the test database.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesPath,SITES_BODY_MAX} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesPath,SITES_BODY_MAX} from './sites-bridge-protocol.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const equals=(a,b)=>{if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0};
-function allowed(path,method,allowGeneration){
- return path==='/api/session'&&method==='GET'||sitesPaymentPath(path,method)||allowGeneration&&sitesPath(path,method);
+function allowed(path,method,allowGeneration,allowFinance){
+ return path==='/api/session'&&method==='GET'||sitesPaymentPath(path,method)||allowFinance&&sitesFinancePath(path,method)||allowGeneration&&sitesPath(path,method);
 }
 async function bytes(req,max){
  const len=req.headers.get('content-length');
@@ -23,12 +23,12 @@ async function bytes(req,max){
 // Generation access is opt-in for the combined private video composition. Its
 // leaseFactory must be bound to this same validated production database.
 export async function authenticateProductionSites(req,env,options={}){
- const now=typeof options==='number'?options:options.now??Date.now(),allowGeneration=options?.allowGeneration===true,leaseFactory=options?.leaseFactory;
+ const now=typeof options==='number'?options:options.now??Date.now(),allowGeneration=options?.allowGeneration===true,allowFinance=options?.allowFinance===true,leaseFactory=options?.leaseFactory;
  let lease,claim,transferred=false;
  try{
   const mapped=await validateProductionTenant(env);if(!mapped||!HASH.test(env.RIG_PRODUCTION_SITES_BRIDGE_KEY||'')||!Number.isSafeInteger(now))return null;
   const u=new URL(req.url),path=u.pathname+u.search;
-  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
+  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration,allowFinance)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
   const v=Object.fromEntries(Object.entries(SITE_HEADER_NAMES).map(([k,n])=>[k,req.headers.get(n)]));
   if(v.site!==env.RIG_PRODUCTION_SITE_ID||!HASH.test(v.subject||'')||!HASH.test(v.digest||'')||!HASH.test(v.signature||'')||!NONCE.test(v.nonce||'')||!/^\d{13}$/.test(v.time||'')||Math.abs(now-Number(v.time))>60000)return null;
   const headers=new Headers();for(const name of SIGNED_CONTENT_HEADERS){const value=req.headers.get(name);if(value!==null){if(value.length>256)return null;headers.set(name,value)}}

@@ -90,7 +90,7 @@ test('free-credit indicator ignores purchases, follows generation reservations/r
   await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES(?,?,?,1000)').bind('credit:'+order,ALICE,order).run();
   assert.equal(await f.balance(ALICE),1500);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:500});
   const stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:f.context});
-  const reserve=async amount=>{const made=await stores.quotes.create({userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:amount,pricingVersion:'fixture',durationSeconds:4,input:{data:{quality:'pro'}}}),q=await stores.quotes.getOwned(ALICE,made.id);return stores.jobs.begin({userId:ALICE,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:q})};
+  const reserve=async amount=>{const made=await stores.quotes.create({userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:amount,pricingVersion:'fixture',durationSeconds:4,input:{data:{quality:'pro'},providerEstimateUsdMicros:400000}}),q=await stores.quotes.getOwned(ALICE,made.id);return stores.jobs.begin({userId:ALICE,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:q})};
   let job=await reserve(200);assert.equal(job.kind,'created');assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:300});
   await stores.jobs.markPreparationFailed(ALICE,job.job.id);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:500});
   job=await reserve(800);assert.equal(job.kind,'created');assert.equal(await f.balance(ALICE),700);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:0});

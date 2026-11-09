@@ -121,11 +121,16 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if (video.durationVerified!==true || !Number.isFinite(video.durationSeconds) || video.durationSeconds<3 || video.durationSeconds>30) return fail('De videoduur kon niet veilig worden vastgesteld.',400);
       if (data.quality==='edit-standard' && !validEditVideo(video)) return fail('Kies voor deze videobewerking 3 tot 15 seconden, minstens 720 pixels breed en hoog, met 23 tot 60 beelden per seconde.',400);
       if (data.quality==='edit-standard' && data.transferPolicy!==TEMPORARY_FAL_LINKS && services.inlineO3Owner===user.id && !inlineFiveSeconds(video.durationSeconds)) return fail('Kies voor deze privéproef een fragment van 5 seconden.',400);
-      const cents=Math.ceil(video.durationSeconds)*configuredRate(services,data.quality);
+      let cents,providerEstimateUsdMicros=null;
+      try{
+        if(services.mode==='live'){
+          providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds);
+          cents=await services.trialGuard.retailPrice(data.quality,video.durationSeconds,providerEstimateUsdMicros);
+        }else cents=Math.ceil(video.durationSeconds)*configuredRate(services,data.quality);
+      }catch{return fail('Prijs is tijdelijk niet beschikbaar.',503)}
       if (!Number.isSafeInteger(cents) || cents<=0) return fail('Prijs is niet beschikbaar.',503);
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:video.durationSeconds,priceCents:cents}))return fail(services.trialGuard.limitMessage||'Deze video past niet binnen het beschikbare testbudget.',400);
-      let providerEstimateUsdMicros=null;
-      if(services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
+      if(services.mode!=='live'&&services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
       // Store only owned asset identifiers and hashes; sending bytes to fal is
       // deferred until the customer confirms the quote and funds are reserved.
       const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
@@ -149,6 +154,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(Object.hasOwn(data,'transferPolicy')||(temporaryLinks?data.transferConsent!==TEMPORARY_FAL_LINKS:Object.hasOwn(data,'transferConsent')))return fail('Bevestig opnieuw de prijs en de tijdelijke Fal-bestandslinks.',400);
       const inlineEdit=!temporaryLinks&&quote.model===MODEL['edit-standard']&&services.inlineO3Owner===user.id;
       if(inlineEdit&&!inlineFiveSeconds(quote.durationSeconds))return fail('Kies voor deze privéproef 5 seconden en vraag de prijs opnieuw op.',409);
+      if(services.mode==='live'){
+        try{if(!await services.trialGuard.quoteCurrent(quote))return fail('Vraag de prijs opnieuw op en bevestig die opnieuw.',409);}catch{return fail('De prijs kon tijdelijk niet worden gecontroleerd.',503)}
+      }
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents,quote}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
       if(quote.input.data.quality!=='edit-standard'){
         const imageRef=quote.input.refs[0];
@@ -157,7 +165,8 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       }
       const authorizationError=quote.fundingKind==='owner-provider'?'Je fal-opdracht kon niet veilig worden vastgelegd.':'Tegoed kon niet worden gereserveerd.';
       let started; try {started=await services.jobs.begin({userId:user.id,quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,quote});} catch {return fail(authorizationError,503);}
-      if (!started || !['created','existing','conflict','insufficient','pending','subject_rejected'].includes(started.kind)) return fail(authorizationError,503);
+      if (!started || !['created','existing','conflict','insufficient','pending','subject_rejected','pricing'].includes(started.kind)) return fail(authorizationError,503);
+      if (started.kind==='pricing') return fail('Vraag de prijs opnieuw op en bevestig die opnieuw.',409);
       if (started.kind==='subject_rejected') return rejectSubject(409);
       if (started.kind==='conflict') return fail('Deze aanvraagcode of prijsopgave is al gebruikt.',409);
       if (started.kind==='insufficient') return fail(quote.fundingKind==='owner-provider'?'Je fal-opdracht is niet beschikbaar of je account wordt gecontroleerd.':'Onvoldoende tegoed.',402);
@@ -166,9 +175,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if (started.kind==='existing') return respond(publicJob(started.job));
       const jobId=started.job.id;
       const acceptedJob={...started.job,priceCents:quote.priceCents,fundingKind:quote.fundingKind,providerEstimateUsdMicros:quote.input.providerEstimateUsdMicros};
-      let providerInput,providerBody;
+      let providerInput,providerBody,preparationFailure='Bestanden konden niet worden voorbereid.';
       try {
-        if(services.trialGuard){const estimate=quote.input.providerEstimateUsdMicros;if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Missing confirmed provider estimate');const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);if(current>estimate)throw Error('Provider price increased');}
+        if(services.trialGuard){if(services.mode==='live')preparationFailure='De prijs moet opnieuw worden gecontroleerd. Vraag een nieuwe prijsopgave.';const estimate=quote.input.providerEstimateUsdMicros;if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Missing confirmed provider estimate');const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);if(current>estimate)throw Error('Provider price increased');preparationFailure='Bestanden konden niet worden voorbereid.';}
         if(services.trialGuard && !await services.trialGuard.claimOnce({userId:user.id,jobId,quote}))throw Error('Trial allowance unavailable');
         // Quotes bind immutable content hashes, so replacing an owned asset
         // after pricing cannot alter the bytes sent to fal.
@@ -204,11 +213,18 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         // fallback upload, public link or paid retry is permitted on overflow.
         providerBody=JSON.stringify(providerInput);
         if(inlineEdit&&new TextEncoder().encode(providerBody).byteLength>INLINE_REQUEST_MAX_BYTES)throw Error('Inline request too large');
+        // Uploads may take time. Recheck the selected model immediately before
+        // the atomic dispatch decision without changing the confirmed price.
+        if(services.mode==='live'){
+          preparationFailure='De prijs moet opnieuw worden gecontroleerd. Vraag een nieuwe prijsopgave.';
+          const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);
+          if(current>quote.input.providerEstimateUsdMicros)throw Error('Provider price increased during preparation');
+        }
       } catch {
         // No generation request has been sent yet. Release once, transactionally.
         try {
           const failed=await services.jobs.markPreparationFailed(user.id,jobId);
-          return respond(failedPreparation(failed,'Bestanden konden niet worden voorbereid.'));
+          return respond(failedPreparation(failed,preparationFailure));
         } catch {
           try {await services.jobs.markUnknown(user.id,jobId);} catch {}
           return respond({...publicJob(acceptedJob),state:'unknown',message:quote.fundingKind==='owner-provider'?'Je fal-opdracht wordt gecontroleerd. Start niet opnieuw.':'Het tegoed wordt gecontroleerd.'},202);

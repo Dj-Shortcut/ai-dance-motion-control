@@ -11,6 +11,7 @@ import {createRouter,d1Limit} from './router.mjs';
 import {getFalPricePreflight} from './price-preflight.mjs';
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
 import {r2InputsConfig} from './rig-r2-inputs.mjs';
+import {loadProfitPolicy,retailPriceCents,validProfitSnapshot,profitable} from './profit-policy.mjs';
 const id=/^[A-Za-z0-9_-]{1,100}$/;
 const version=/^[A-Za-z0-9_.-]{1,40}$/;
 const integer=(s,max)=>typeof s==='string'&&/^[1-9][0-9]*$/.test(s)&&Number.isSafeInteger(+s)&&+s<=max;
@@ -18,18 +19,31 @@ const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&integer(env.RIG_PRICE_EDIT,
 const unavailable=()=>Response.json({error:'Videogeneratie is nog niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store'}});
 function valid(env,{productionContext}={}){
  const modeOk=env?.RIG_MODE==='test'&&env.RIG_MOLLIE_MODE==='test'||env?.RIG_MODE==='live'&&env.RIG_MOLLIE_MODE==='live'&&isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN});
- try{return env.RIG_CLOSED_VIDEO_ENABLED==='yes'&&modeOk&&new URL(env.RIG_PUBLIC_ORIGIN).origin===env.RIG_PUBLIC_ORIGIN&&env.RIG_PUBLIC_ORIGIN.startsWith('https://')&&typeof env.DB?.prepare==='function'&&typeof env.DB?.batch==='function'&&typeof env.RIG_MEDIA?.fetch==='function'&&typeof env.RIG_MEDIA_SECRET==='string'&&env.RIG_MEDIA_SECRET.length>=32&&typeof env.BUCKET?.get==='function'&&typeof env.BUCKET?.put==='function'&&typeof env.BUCKET?.head==='function'&&typeof env.FAL_KEY==='string'&&env.FAL_KEY.length>0&&env.FAL_KEY.length<1024&&!/[\r\n]/.test(env.FAL_KEY)&&integer(env.RIG_PRICE_STANDARD,250)&&integer(env.RIG_PRICE_PRO,250)&&version.test(env.RIG_PRICE_VERSION||'')&&integer(env.RIG_CLOSED_VIDEO_MAX_CENTS,800)&&integer(env.RIG_CLOSED_VIDEO_MAX_USD_MICROS,6000000)}catch{return false}
+ try{return env.RIG_CLOSED_VIDEO_ENABLED==='yes'&&modeOk&&new URL(env.RIG_PUBLIC_ORIGIN).origin===env.RIG_PUBLIC_ORIGIN&&env.RIG_PUBLIC_ORIGIN.startsWith('https://')&&typeof env.DB?.prepare==='function'&&typeof env.DB?.batch==='function'&&typeof env.RIG_MEDIA?.fetch==='function'&&typeof env.RIG_MEDIA_SECRET==='string'&&env.RIG_MEDIA_SECRET.length>=32&&typeof env.BUCKET?.get==='function'&&typeof env.BUCKET?.put==='function'&&typeof env.BUCKET?.head==='function'&&typeof env.FAL_KEY==='string'&&env.FAL_KEY.length>0&&env.FAL_KEY.length<1024&&!/[\r\n]/.test(env.FAL_KEY)&&integer(env.RIG_PRICE_STANDARD,250)&&integer(env.RIG_PRICE_PRO,250)&&version.test(env.RIG_PRICE_VERSION||'')&&integer(env.RIG_CLOSED_VIDEO_MAX_CENTS,env.RIG_MODE==='live'?1200:800)&&integer(env.RIG_CLOSED_VIDEO_MAX_USD_MICROS,6000000)}catch{return false}
 }
 // Only provider hosts required by existing transfer/queue code. Redirects are
 // never followed: particularly important for Authorization and signed URLs.
 function providerTransport(fetcher){return async(input,init={})=>{const u=new URL(String(input));if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||!['fal.ai','fal.run','fal.media'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d))||init.redirect!=='manual')throw Error('Untrusted provider endpoint');const r=await fetcher(input,init);if(r.status>=300&&r.status<400)throw Error('Provider redirect refused');return r;};}
 function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){return {
+ async quoteCurrent(quote){
+  const policy=await loadProfitPolicy(env.DB),snapshot=quote?.input?.profitSnapshot;
+  return validProfitSnapshot(snapshot,{policy,fundingKind:quote?.fundingKind,retailPriceCents:quote?.priceCents,providerEstimateUsdMicros:quote?.input?.providerEstimateUsdMicros})&&profitable(snapshot);
+ },
+ async retailPrice(quality,durationSeconds,providerEstimateUsdMicros){
+  const rate=quality==='edit-standard'?+env.RIG_PRICE_EDIT:quality==='pro'?+env.RIG_PRICE_PRO:+env.RIG_PRICE_STANDARD;
+  return retailPriceCents(await loadProfitPolicy(env.DB),{quality,billedSeconds:Math.ceil(durationSeconds),rateCents:rate,providerEstimateUsdMicros,
+   fundingKind:productionFundingKind(productionContext,trustedUserId),maxPriceCents:+env.RIG_CLOSED_VIDEO_MAX_CENTS});
+ },
  limitMessage:accessMode==='sponsored'?'Je gratis testtegoed is hiervoor niet voldoende. Kies een kortere video of Standaard.':productionFundingKind(productionContext,trustedUserId)==='owner-provider'?'Deze video valt buiten de ingestelde videolimiet of je account wordt gecontroleerd.':'Je beschikbare RIG-tegoed is hiervoor niet voldoende of je account wordt gecontroleerd.',
  async permits({durationSeconds,priceCents,quote}){
   if(!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>30||!Number.isSafeInteger(priceCents)||priceCents<=0||priceCents>+env.RIG_CLOSED_VIDEO_MAX_CENTS)return false;
   if(env.RIG_MODE==='live'){
    const kind=quote?.fundingKind??productionFundingKind(productionContext,trustedUserId);
    if(!['credits','owner-provider'].includes(kind))return false;
+   if(quote){
+    const policy=await loadProfitPolicy(env.DB),snapshot=quote.input?.profitSnapshot;
+    if(!validProfitSnapshot(snapshot,{policy,fundingKind:kind,retailPriceCents:priceCents,providerEstimateUsdMicros:quote.input?.providerEstimateUsdMicros})||!profitable(snapshot))return false;
+   }
    if(kind==='owner-provider'){
     if(productionFundingKind(productionContext,trustedUserId)!=='owner-provider')return false;
     const row=await env.DB.prepare('SELECT NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS unfrozen').bind(trustedUserId).first();
@@ -42,7 +56,7 @@ function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){retu
   }
   try{const state=await createSponsoredInvitationStore(env.DB).eligibility(trustedUserId);return state.state==='eligible'&&state.remainingCents>=priceCents}catch{return false}
  },
- async estimate(quality,durationSeconds){if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env)))||!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>(quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY),rate=p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
+ async estimate(quality,durationSeconds){if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env)))||!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>(quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY,quality),rate=p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
  async claimOnce({userId,jobId,quote}={}){
   if(userId!==trustedUserId||!quote||!Number.isSafeInteger(quote.priceCents)||quote.priceCents<=0)return false;
   if(accessMode==='sponsored'){
@@ -97,7 +111,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
  const r2Inputs=env.RIG_R2_INPUTS_ENABLED==='yes'?r2InputsConfig(env):null;
  if(env.RIG_R2_INPUTS_ENABLED==='yes'&&!r2Inputs)return unavailable;
  const inlineO3Owner=env.RIG_O3_INLINE_INPUTS_ENABLED==='yes'&&accessMode==='owner'&&trustedUserId===env.RIG_VIDEO_OWNER_USER_ID?trustedUserId:undefined;
- const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env)}));
+ const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key,quality)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env),quality}));
  const makeAssets=()=>createAssets({mode:env.RIG_MODE,...(paid?{productionContext}:{}),origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
  const router=createRouter({...(paid?{productionContext}:{}),identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
   const stores=createD1GenerationStores(env.DB,{mode:env.RIG_MODE,dispatchMode:accessMode,...(paid?{productionContext}:{})});

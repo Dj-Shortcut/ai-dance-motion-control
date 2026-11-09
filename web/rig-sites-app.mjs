@@ -1,7 +1,7 @@
 import ui from './rig-sites-ui-bundle.mjs';
 import {createRigMcp} from './rig-mcp.mjs';
 import {createChatgptFilePreparer} from './rig-chatgpt-files.mjs';
-import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,SITES_BODY_MAX,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
+import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,SITES_BODY_MAX,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
@@ -87,6 +87,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    if(url.pathname.startsWith('/api/chatgpt/'))return reject(404);
    const paymentRead=req.method==='GET'&&['/api/payments/balance','/api/payments/packages','/api/payments/orders'].includes(url.pathname)&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
+   if(!production&&sitesFinancePath(url.pathname+url.search,req.method))return reject(404);
    if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead)return reject(404);
    if(!paymentRead&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
    let ctx;try{ctx=await context(req,env)}catch{return json({error:'RIG is tijdelijk niet beschikbaar.'},503)}

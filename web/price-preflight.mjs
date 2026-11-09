@@ -34,11 +34,13 @@ async function smallJson(response) {
   return JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
 }
 
-export async function getFalPricePreflight(key, fetchImpl=fetch, {includeEdit=false}={}) {
+export async function getFalPricePreflight(key, fetchImpl=fetch, {includeEdit=false,quality}={}) {
   if (typeof key !== 'string' || !key || key.length > 1024 || /[\r\n]/.test(key)) throw Error('unavailable');
   if (typeof includeEdit!=='boolean') throw Error('unavailable');
   const prices = {};
-  const models=includeEdit?{...MODELS,'edit-standard':EDIT_ENDPOINT}:MODELS;
+  const allowed=includeEdit?{...MODELS,'edit-standard':EDIT_ENDPOINT}:MODELS;
+  if(quality!==undefined&&(typeof quality!=='string'||!Object.hasOwn(allowed,quality)))throw Error('unavailable');
+  const models=quality===undefined?allowed:{[quality]:allowed[quality]};
   for (const [quality, endpoint] of Object.entries(models)) {
     const url = new URL(PRICING);
     url.searchParams.set('endpoint_id', endpoint);
