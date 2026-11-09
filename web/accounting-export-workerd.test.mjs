@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {Miniflare} from 'miniflare';
+import {JSDOM} from 'jsdom';
+import {commerceDocument} from './commerce-documents.mjs';
 import {handleOwnerAccounting,handleOwnedPaymentReceipt,accountingCSV} from './accounting-export.mjs';
 import {verificationFor,installTestOwnerCredential} from './owner-security-test-helper.mjs';
 import {loadProfitPolicy,createProfitSnapshot} from './profit-policy.mjs';
@@ -156,8 +158,32 @@ test('commercial payment proof uses the immutable seller and accepted terms snap
   const paid=await f.order(),seller={legalName:'Verkoper vóór profielwijziging <img src=x>',enterpriseNumber:'0123.456.789',vatNumber:'BE0123456789',address:'Oud adres 1, België',email:'old@example.invalid',phone:'+32 400 00 00 00'},snapshot='<html><head><style>PRIVATE_STYLE</style></head><body><h1>Oude verkoopvoorwaarden</h1><p>Prijs &amp; rechten blijven bewaard. &lt;img src=x onerror=alert(1)&gt;</p><script>PRIVATE_SCRIPT</script></body></html>';
   f.env.RIG_COMMERCIAL_CHECKOUT_REQUIRED='yes';assert.equal((await f.receipt(paid.requestId)).status,503);
   await f.db.prepare('INSERT INTO rig_purchase_acceptances(user_id,request_id,version,buyer_country,customer_type,request_hash,seller_json,terms_text,created_at,package_id,amount_cents,credits,currency) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(BUYER,paid.requestId,'terms-original-v1','BE','consumer','b'.repeat(64),JSON.stringify(seller),snapshot,NOW-1000,'five',500,500,'EUR').run();
-  const response=await f.receipt(paid.requestId);assert.equal(response.status,200);const html=await response.text();assert.match(html,/Geen btw-factuur/);assert.match(html,/Verkoper vóór profielwijziging &lt;img src=x&gt;/);assert.match(html,/Oude verkoopvoorwaarden/);assert.match(html,/Prijs &amp; rechten blijven bewaard/);assert.match(html,/terms-original-v1/);assert.match(html,/BE \(klantverklaring; geen geverifieerde fiscale beoordeling\)/);assert.match(html,/old@example.invalid/);assert.doesNotMatch(html,/<script>|<img |PRIVATE_SCRIPT|PRIVATE_STYLE|Andy Arys|info@andyarijs.dev/);assert.equal(await(await f.receipt(paid.requestId)).text(),html);assert.match(response.headers.get('content-security-policy'),/default-src 'none'/);
+  const response=await f.receipt(paid.requestId);assert.equal(response.status,200);const html=await response.text();assert.match(html,/Geen btw-factuur/);assert.match(html,/Verkoper vóór profielwijziging &lt;img src=x&gt;/);assert.match(html,/Oude verkoopvoorwaarden/);assert.match(html,/Prijs &amp; rechten blijven bewaard/);assert.match(html,/terms-original-v1/);assert.match(html,/BE \(klantverklaring; geen geverifieerde fiscale beoordeling\)/);assert.match(html,/old@example.invalid/);assert.match(html,/PRIVATE_SCRIPT/);assert.doesNotMatch(html,/<script>|<img |PRIVATE_STYLE|Andy Arys|info@andyarijs.dev/);assert.equal(await(await f.receipt(paid.requestId)).text(),html);assert.match(response.headers.get('content-security-policy'),/default-src 'none'/);
   await f.db.prepare("UPDATE rig_purchase_acceptances SET amount_cents=501 WHERE user_id=? AND request_id=?").bind(BUYER,paid.requestId).run();assert.equal((await f.receipt(paid.requestId)).status,503);
   await f.db.prepare("UPDATE rig_purchase_acceptances SET seller_json='{}',amount_cents=500 WHERE user_id=? AND request_id=?").bind(BUYER,paid.requestId).run();assert.equal((await f.receipt(paid.requestId)).status,503);
+ }finally{await f.mf.dispose();}
+});
+
+test('receipt terms are formatted as escaped text before malformed tags or entities can create browser elements',async()=>{
+ const f=await fixture();try{
+  const seller={legalName:'Verkoper <svg onload=alert(1)>',enterpriseNumber:'0123.456.789',vatNumber:'BE0123456789',address:'Adres 1, België',email:'test@example.invalid',phone:'+32 400 00 00 00'};
+  const cases=[
+   '<body><h1>Verkoopvoorwaarden</h1><p>Prijs &amp; rechten. &quot;Tegoed&quot; &#39;RIG&#39;.</p></body>',
+   '<body><scr<script>ipt>window.__rigProofExecuted=1</scr<script>ipt><img src=x onerror="window.__rigProofExecuted=1"><p>Rechten blijven behouden.</p></body>',
+   '<body>&lt;script&gt;window.__rigProofExecuted=1&lt;/script&gt; &#x3c;img src=x onerror="window.__rigProofExecuted=1"&#x3e; &amp;lt;svg onload=alert(1)&amp;gt;</body>',
+   '<body><svg><style><img src=x onerror="window.__rigProofExecuted=1"></style></svg><iframe srcdoc="<script>window.__rigProofExecuted=1</script>"></iframe></body>',
+   '<body><IMG SRC=x ONERROR=alert(1)><p onclick="window.__rigProofExecuted=1">Tekst</p><img src=x onerror=alert(1)</body>',
+   '<body><math><mtext><table><mglyph><style><!--</style><img title="--><img src=x onerror=alert(1)>"></math></body>',
+   await commerceDocument('/voorwaarden').text()
+  ];
+  for(const [index,terms]of cases.entries()){
+   const paid=await f.order();await f.db.prepare('INSERT INTO rig_purchase_acceptances(user_id,request_id,version,buyer_country,customer_type,request_hash,seller_json,terms_text,created_at,package_id,amount_cents,credits,currency) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(BUYER,paid.requestId,'escaped-text-'+index,'BE','consumer','c'.repeat(64),JSON.stringify(seller),terms,NOW-1000,'five',500,500,'EUR').run();
+   const response=await f.receipt(paid.requestId);assert.equal(response.status,200);const html=await response.text(),dom=new JSDOM(html,{runScripts:'dangerously',beforeParse(window){window.__rigProofExecuted=0;window.alert=()=>{window.__rigProofExecuted=1;};}});
+   try{
+    const document=dom.window.document,pre=document.querySelector('pre');assert.ok(pre);assert.equal(dom.window.__rigProofExecuted,0);assert.equal(document.querySelectorAll('script,img,iframe,svg,math,style,object,embed').length,0);assert.equal(document.querySelectorAll('[onclick],[onerror],[onload]').length,0);assert.equal(pre.querySelectorAll('*').length,0);assert.doesNotMatch(pre.innerHTML,/</);
+    if(index===cases.length-1){assert.match(pre.textContent,/Tegoed en prijzen/);assert.match(pre.textContent,/RIG maakt een video/);assert.doesNotMatch(pre.textContent,/<body|<style|system-ui|&amp;/);}
+    if(index===0){assert.equal(pre.textContent,'Verkoopvoorwaarden\n\nPrijs & rechten. "Tegoed" \'RIG\'.');assert.doesNotMatch(pre.textContent,/<body|<h1|&amp;/);}
+   }finally{dom.window.close();}
+  }
  }finally{await f.mf.dispose();}
 });
