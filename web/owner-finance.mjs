@@ -13,6 +13,7 @@ const names=['eurPerUsdMicros','providerVatBps','paymentFeeBps','failureBufferBp
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const error=(message,status)=>json({error:message},status);
 const whole=(n,min=0,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(n)&&n>=min&&n<=max;
+const optionalRate=value=>typeof value==='string'&&/^[1-9][0-9]*$/.test(value)&&whole(Number(value),1,250)?Number(value):null;
 const dateValid=value=>typeof value==='string'&&/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(value)&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 const timeZone='Europe/Brussels';
 function localDate(now){const p=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);const get=t=>p.find(x=>x.type===t).value;return `${get('year')}-${get('month')}-${get('day')}`;}
@@ -120,7 +121,7 @@ async function summary(mapped,period,now){
   margin:{estimatedContributionCents,estimatedMarginBps:estimatedContributionCents!==null&&earned.earned?Math.floor(estimatedContributionCents*10000/earned.earned):null,estimatedOperatingResultCents:estimatedContributionCents===null?null:estimatedContributionCents-fixedRecordedCents},
   videoCounts:{total:sum('count'),completed:groups.filter(row=>row.state==='completed').reduce((n,row)=>n+row.count,0),unknown:groups.filter(row=>row.state==='unknown').reduce((n,row)=>n+row.count,0),ownerUse:groups.filter(row=>row.funding_kind==='owner-provider').reduce((n,row)=>n+row.count,0)},
   dailyBudget:{budgetDay,timeZone:'UTC',usedUsdMicros:used,limitUsdMicros:policy.dailyProviderLimitUsdMicros,remainingUsdMicros:Math.max(0,policy.dailyProviderLimitUsdMicros-used)},
-  prices:{standardCentsPerSecond:Number(mapped.RIG_PRICE_STANDARD),proCentsPerSecond:Number(mapped.RIG_PRICE_PRO),editCentsPerSecond:Number(mapped.RIG_PRICE_EDIT)},policy,jobs,
+  prices:{standardCentsPerSecond:optionalRate(mapped.RIG_PRICE_STANDARD),proCentsPerSecond:optionalRate(mapped.RIG_PRICE_PRO),editCentsPerSecond:optionalRate(mapped.RIG_PRICE_EDIT)},policy,jobs,
   expenses:result(9).map(row=>({id:row.id,category:row.category,date:row.expense_date,amountCents:row.amount_cents,note:row.note,jobId:row.job_id,replacesExpenseId:row.replaces_expense_id,createdAt:new Date(row.created_at).toISOString()})),warnings};
  for(const key of ['income','credits','costs','margin','videoCounts','dailyBudget','prices','policy'])checkedRow(report[key]);
  return report;
