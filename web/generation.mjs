@@ -164,7 +164,8 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         try{if(typeof services.jobs.hasKnownSubjectRejection!=='function')throw Error('Subject check unavailable');if(await services.jobs.hasKnownSubjectRejection(user.id,imageRef.sha256))return rejectSubject(409)}catch{return fail('De fotocontrole is tijdelijk niet beschikbaar.',503)}
       }
       const authorizationError=quote.fundingKind==='owner-provider'?'Je fal-opdracht kon niet veilig worden vastgelegd.':'Tegoed kon niet worden gereserveerd.';
-      let started; try {started=await services.jobs.begin({userId:user.id,quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,quote});} catch {return fail(authorizationError,503);}
+      let started; try {started=await services.jobs.begin({userId:user.id,quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,quote,verification:data.verification,verificationPayload:{quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(Object.hasOwn(data,'transferConsent')?{transferConsent:data.transferConsent}:{})}});} catch {return fail(authorizationError,503);}
+      if(started?.kind==='verification'&&started.response instanceof Response)return started.response;
       if (!started || !['created','existing','conflict','insufficient','pending','subject_rejected','pricing'].includes(started.kind)) return fail(authorizationError,503);
       if (started.kind==='pricing') return fail('Vraag de prijs opnieuw op en bevestig die opnieuw.',409);
       if (started.kind==='subject_rejected') return rejectSubject(409);

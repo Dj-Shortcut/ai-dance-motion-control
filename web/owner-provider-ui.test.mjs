@@ -13,12 +13,13 @@ function page(){
  for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;};}
  return {dom,w,d,el};
 }
-function fixture({quote:quoteOverride={},quality='pro',create,status,store=new Map()}={}){
- const f=page(),{w,el}=f,calls=[];let uploads=0;
+function fixture({quote:quoteOverride={},quality='pro',create,status,store=new Map(),verificationHandler}={}){
+ const f=page(),{w,el}=f,calls=[],verifications=[];let uploads=0,cancelled=0;
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoFunding='owner-provider';w.rigVideoMode='live';w.rigVideoQualities=['standard','pro','edit-standard'];w.rigSessionActive=()=>true;
  w.rigScopedStorage={getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
  const media={image:{blob:new Blob(['image'],{type:'image/jpeg'})},video:{blob:new Blob(['video'],{type:'video/mp4'})},face:null,angles:[],quality,keepSound:true,steady:false,prompt:'Vervang alle honden in het orkest door mijn hond.'};
  w.rigPreparedMedia=()=>media;w.rigGenerationQuality=()=>quality;w.rigOpenVideo=async()=> 'blob:private-result';
+ w.rigOwnerVerification={cancel(){cancelled++;},async prepare(operation,payload){verifications.push({operation,payload:JSON.parse(JSON.stringify(payload))});return verificationHandler?verificationHandler(operation,payload):{challengeId:'test-only-challenge-'+verifications.length,credential:{id:'test-only-assertion-'+verifications.length}};}};
  el('duration').value='5';
  const quote={id:'q1',funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:700000,durationSeconds:5,billedSeconds:5,quality,approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_q1',...(quality==='edit-standard'?{transferPolicy:'fal-temporary-links-v1'}:{}),...quoteOverride};
  const failed={id:'job1',state:'failed',funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:700000,finalizationConfirmed:true};
@@ -33,7 +34,7 @@ function fixture({quote:quoteOverride={},quality='pro',create,status,store=new M
   throw Error('Unexpected request '+path);
  };
  w.eval(generation);
- return {...f,calls,store,media};
+ return {...f,calls,store,media,verifications,cancelled:()=>cancelled};
 }
 async function price(f){
  f.d.dispatchEvent(new f.w.Event('rig-prepared-ready'));
@@ -48,7 +49,7 @@ test('native owner boot enables direct Fal without replacing its account note wi
  const app=await startNativeSiteApp({window:f.w,auth,loadScript:async name=>loaded.push(name)});
  try{
   assert.equal(f.w.rigVideoEnabled,true);assert.equal(f.w.rigVideoFunding,'owner-provider');assert.equal(f.w.rigVideoMode,'live');
-  assert.deepEqual(loaded,['media.js','app.js','generation-ui.js','payments.js','finance.js']);
+  assert.deepEqual(loaded,['media.js','app.js','owner-security.js','generation-ui.js','payments.js','finance.js']);
   assert.match(f.el('videoAvailabilityNote').textContent,/eigen fal-account.*Fal-raming.*vóór je bevestigt/);
   assert.doesNotMatch(f.el('videoAvailabilityNote').textContent,/RIG-tegoed|uitnodiging|testtegoed|Mollie/);
  }finally{app.dispose();f.dom.window.close();}
@@ -82,7 +83,8 @@ test('owner sees USD estimate without a RIG balance check and explicitly consent
   assert.equal(f.calls.some(([path])=>path.startsWith('/api/payments/')||path==='/api/generations'),false);
   f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.includes('afgesloten'));
   const posts=f.calls.filter(([path])=>path==='/api/generations');assert.equal(posts.length,1);
-  assert.deepEqual(JSON.parse(posts[0][1].body),{quoteId:'q1',idempotencyKey:'rigchatgpt_q1',approvalToken:'t'.repeat(43),transferConsent:'fal-temporary-links-v1'});
+  assert.deepEqual(f.verifications,[{operation:'owner-generation',payload:{quoteId:'q1',idempotencyKey:'rigchatgpt_q1',transferConsent:'fal-temporary-links-v1'}}]);
+  assert.deepEqual(JSON.parse(posts[0][1].body),{quoteId:'q1',idempotencyKey:'rigchatgpt_q1',approvalToken:'t'.repeat(43),transferConsent:'fal-temporary-links-v1',verification:{challengeId:'test-only-challenge-1',credential:{id:'test-only-assertion-1'}}});
   assert.equal(f.store.has('rig-generation-pending'),false);assert.equal(f.store.has('rig-generation-job'),false);
   assert.doesNotMatch(f.el('quoteMessage').textContent,/teruggezet|terugbetaald|RIG-tegoed/);
  }finally{f.dom.window.close();}
@@ -137,6 +139,55 @@ test('owner recovery clears only a proven finalization, while historical credit 
    assert.equal(store.has('rig-generation-job'),!cleared);assert.equal(f.el('checkGeneration').hidden,cleared);
    if(job.funding==='owner-provider')assert.doesNotMatch(f.el('quoteMessage').textContent,/tegoed|teruggezet|terugbetaald/i);
    assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  }finally{f.dom.window.close();}
+ }
+});
+
+test('owner verification finishes before a generation intent is persisted or submitted',async()=>{
+ let finish;const f=fixture({quality:'edit-standard',verificationHandler:()=>new Promise(resolve=>{finish=resolve;})});try{
+  await price(f);assert.equal(f.verifications.length,0);f.el('confirmGeneration').click();await waitFor(()=>typeof finish==='function');
+  assert.equal(f.store.size,0);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.el('confirmGeneration').disabled,true);f.el('confirmGeneration').click();assert.equal(f.verifications.length,1);
+  finish({challengeId:'test-only-bound-challenge',credential:{id:'test-only-bound-assertion'}});await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
+  const body=JSON.parse(f.calls.find(([path])=>path==='/api/generations')[1].body);assert.equal(body.verification.challengeId,'test-only-bound-challenge');assert.equal(body.approvalToken,'t'.repeat(43));assert.equal(body.transferConsent,'fal-temporary-links-v1');
+  assert.equal([...f.store.values()].some(value=>String(value).includes('test-only-bound-assertion')),false);
+ }finally{f.dom.window.close();}
+});
+
+test('cancelling owner verification leaves the quote reusable without a pending generation',async()=>{
+ let attempts=0;const f=fixture({verificationHandler:()=>{if(++attempts===1)throw Object.assign(Error('Bevestiging geannuleerd. De video is niet gestart.'),{code:'verification_cancelled'});return {challengeId:'test-only-new-challenge',credential:{id:'test-only-new-assertion'}};}});try{
+  await price(f);f.el('confirmGeneration').click();await waitFor(()=>!f.el('confirmGeneration').disabled);assert.equal(f.el('confirmGeneration').hidden,false);assert.equal(f.el('checkGeneration').hidden,true);assert.equal(f.store.size,0);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.match(f.el('quoteMessage').textContent,/geannuleerd/);
+  f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));assert.equal(f.verifications.length,2);assert.deepEqual(f.verifications[0].payload,f.verifications[1].payload);assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,1);
+ }finally{f.dom.window.close();}
+});
+
+test('missing, unconfigured or empty owner verification cannot create or persist a generation',async()=>{
+ for(const type of ['missing','setup-required','empty']){
+  const f=fixture({verificationHandler:()=>{if(type==='setup-required')throw Object.assign(Error('Stel eerst je apparaat in.'),{code:'owner_security_setup_required',status:428});return null;}});try{
+   await price(f);if(type==='missing')delete f.w.rigOwnerVerification;f.el('confirmGeneration').click();await waitFor(()=>!f.el('confirmGeneration').disabled);
+   assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.store.size,0);assert.equal(f.el('confirmGeneration').hidden,false);assert.equal(f.el('checkGeneration').hidden,true);
+  }finally{f.dom.window.close();}
+ }
+});
+
+test('changed media, quality or funding during owner verification cannot submit the approved old quote',async()=>{
+ for(const change of ['media','quality','funding']){
+  let finish;const f=fixture({verificationHandler:()=>new Promise(resolve=>{finish=resolve;})});try{
+   await price(f);f.el('confirmGeneration').click();await waitFor(()=>typeof finish==='function');
+   if(change==='media'){f.w.rigPreparedMedia=()=>({...f.media});f.d.dispatchEvent(new f.w.Event('rig-prepared-change'));assert.equal(f.cancelled(),1);}
+   else if(change==='quality')f.w.rigGenerationQuality=()=> 'standard';else{f.w.rigVideoFunding='credits';f.d.dispatchEvent(new f.w.Event('rig-generation-mode-change'));assert.equal(f.cancelled(),1);}
+   finish({challengeId:'test-only-stale-challenge',credential:{id:'test-only-stale-assertion'}});await waitFor(()=>!f.el('confirmGeneration').disabled);
+   assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.store.size,0);assert.equal(f.el('confirmGeneration').hidden,true);assert.match(f.el('quoteMessage').textContent,/instellingen zijn gewijzigd/);
+  }finally{f.dom.window.close();}
+ }
+});
+
+test('ending or replacing the owner session during verification discards a late assertion',async()=>{
+ for(const replace of [false,true]){
+  let finish,newRequests=0;const f=fixture({verificationHandler:()=>new Promise(resolve=>{finish=resolve;})});try{
+   await price(f);f.el('confirmGeneration').click();await waitFor(()=>typeof finish==='function');
+   if(replace)f.w.rigRequest=async()=>{newRequests++;return Response.json({});};else f.w.rigSessionActive=()=>false;
+   finish({challengeId:'test-only-other-session',credential:{id:'test-only-other-session-assertion'}});await new Promise(resolve=>setTimeout(resolve,10));
+   assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(newRequests,0);assert.equal(f.store.size,0);
   }finally{f.dom.window.close();}
  }
 });

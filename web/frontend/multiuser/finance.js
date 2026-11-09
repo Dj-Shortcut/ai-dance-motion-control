@@ -29,6 +29,7 @@
 
   function dispose(){
     if(disposed)return;disposed=true;loadSequence++;data=null;expensePending=null;policyPending=null;correction=null;
+    window.rigOwnerVerification?.cancel?.();
     button.hidden=true;button.closest('header')?.classList.remove('has-finance');button.removeEventListener('click',open);window.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
     if(dialog?.open)dialog.close();dialog?.remove();dialog=null;ui=null;
     if(window.rigFinanceDispose===dispose)delete window.rigFinanceDispose;
@@ -41,10 +42,10 @@
     if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}
     const response=await context.request(path,{cache:'no-store',...init});
     if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}
+    if(response.status===401||response.status===403){dispose();throw Error('Dit overzicht is alleen beschikbaar voor de eigenaar.');}
     let body;try{body=await response.json();}catch{throw Error('Je financieel overzicht is tijdelijk niet beschikbaar.');}
     if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}
-    if(response.status===401||response.status===403){dispose();throw Error('Dit overzicht is alleen beschikbaar voor de eigenaar.');}
-    if(!response.ok){const message=typeof body?.error==='string'?body.error.slice(0,240):'Opslaan is niet gelukt. Probeer opnieuw.';const error=Error(message);error.status=response.status;throw error;}
+    if(!response.ok){const message=typeof body?.error==='string'?body.error.slice(0,240):'Opslaan is niet gelukt. Probeer opnieuw.';const error=Error(message);error.status=response.status;if(typeof body?.code==='string')error.code=body.code;throw error;}
     return body;
   }
   function validSummary(value){
@@ -65,6 +66,9 @@
     const close=element('button','×','close');close.type='button';close.setAttribute('aria-label','Financiën sluiten');close.addEventListener('click',()=>dialog.close());head.append(heading,close);dialog.append(head);
     const toolbar=element('div',undefined,'finance-toolbar'),month=field(toolbar,'Periode','financeMonth','month'),refresh=element('button','Vernieuwen'),all=element('button','Alles');refresh.type=all.type='button';toolbar.append(refresh,all);dialog.append(toolbar);
     const message=element('p','', 'finance-status');message.id='financeStatus';message.setAttribute('role','status');message.setAttribute('aria-live','polite');dialog.append(message);
+    const security=element('section');security.id='financeSecurity';dialog.append(security);
+    if(typeof window.rigOwnerVerification?.mount==='function')window.rigOwnerVerification.mount(security);
+    else security.append(element('p','De extra beveiliging is tijdelijk niet beschikbaar. Vernieuw RIG om gevoelige handelingen te bevestigen.','finance-note'));
     const cards=element('div',undefined,'finance-cards');dialog.append(cards);
     const cash=card(cards,'Ontvangen betalingen','financeCash','Betaalde tegoedaankopen, vóór kosten.'),earned=card(cards,'Gebruikt voor video’s','financeEarned','Afgerond klanttegoed voor video’s.'),liability=card(cards,'Openstaand RIG-tegoed','financeLiability','Beschikbaar en gereserveerd, over alle periodes.'),margin=card(cards,'Geraamde marge','financeMargin','Na kostenreserves, vóór vaste kosten en belasting.');
     const warning=element('p','', 'finance-warning');warning.hidden=true;dialog.append(warning);
@@ -85,7 +89,7 @@
     const policyDetails=details(dialog,'Aannames en uitgavenlimiet'),policyForm=element('form',undefined,'finance-form'),inputs=new Map();policyDetails.append(policyForm);
     for(const [key,label,scale,min,max,step]of policyFields){const input=field(policyForm,label,'financePolicy-'+key,'number');input.required=true;input.min=String(min);input.max=String(max);input.step=String(step);inputs.set(key,{input,scale});}
     const policyNote=element('p','Deze instellingen bewaken nieuwe video’s. De btw- en kostenreserves zijn begrotingsaannames, geen vaststelling van je facturen. De margecontrole kan de basisprijs verhogen; je klant ziet altijd zijn exacte prijs vóór bevestiging. Een eerder bevestigde klantprijs wordt nooit stilzwijgend verhoogd. De daglimiet wordt per kalenderdag in UTC bijgehouden.','finance-policy-note finance-wide');policyForm.append(policyNote);
-    const policySubmit=element('button','Aannames bewaren');policySubmit.type='submit';policySubmit.className='finance-wide';policyForm.append(policySubmit);
+    const policySubmit=element('button','Bevestigen en bewaren');policySubmit.type='submit';policySubmit.className='finance-wide';policyForm.append(policySubmit);
     document.body.append(dialog);
     ui={month,refresh,all,status:message,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
     refresh.addEventListener('click',()=>void reload());all.addEventListener('click',()=>{month.value='';void reload();});month.addEventListener('change',()=>void reload());
@@ -150,13 +154,20 @@
   }
   function formBusy(form,busy){for(const control of form.querySelectorAll('input,select,textarea,button'))control.disabled=busy;if(!busy&&form===ui.expenseForm&&correction){ui.category.disabled=true;ui.expenseDate.disabled=true;ui.job.disabled=true;}}
   function pendingRecord(previous,payload){const signature=JSON.stringify(payload);return previous?.signature===signature?previous:{signature,body:{idempotencyKey:crypto.randomUUID(),...payload}};}
+  async function verifiedWrite(operation,path,payload){
+    if(typeof window.rigOwnerVerification?.prepare!=='function')throw Error('Vernieuw RIG om deze handeling veilig te bevestigen.');
+    const verification=await window.rigOwnerVerification.prepare(operation,payload);if(!current())return false;
+    if(operation!=='finance-policy'&&!verification)throw Error('De beveiligingscontrole is niet afgerond. Er is niets gewijzigd.');
+    if(operation==='finance-policy'&&data?.policy.version!==payload.expectedVersion){const error=Error('De aannames zijn ondertussen gewijzigd. Controleer ze opnieuw.');error.status=409;throw error;}
+    await request(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...payload,...(verification?{verification}:{})})});return true;
+  }
   async function saveExpense(event){
     event.preventDefault();if(!current()||!data||ui.expenseSubmit.disabled)return;
     const amountCents=parseAmount(ui.amount.value),category=ui.category.value,date=ui.expenseDate.value,note=ui.note.value.trim(),jobId=ui.job.value;
     if(amountCents===null||(!amountCents&&category!=='fal-charge'&&!correction)||!Object.hasOwn(categories,category)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!note||note.length>240||category==='fal-charge'&&!jobId){status('Vul een geldige datum, bedrag, omschrijving en zo nodig een video-opdracht in.',true);return;}
     expensePending=pendingRecord(expensePending,{category,date,amountCents,note,...(category==='fal-charge'?{jobId}:{}),...(correction?{replacesExpenseId:correction.id}:{})});formBusy(ui.expenseForm,true);status('Kosten bewaren…');
     try{
-      await request('/api/owner/finance/expenses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(expensePending.body)});if(!current())return;
+      if(!await verifiedWrite('finance-expense','/api/owner/finance/expenses',expensePending.body)||!current())return;
       const corrected=Boolean(correction);resetExpense();await reload();if(current())status(corrected?'Correctie vastgelegd. De oorspronkelijke kost wordt niet dubbel geteld.':'Kosten vastgelegd.');
     }catch(error){status(error.message,true);}finally{if(current())formBusy(ui.expenseForm,false);}
   }
@@ -166,7 +177,7 @@
     for(const [key,{input,scale}]of ui.inputs){const raw=Number(input.value),value=Math.round(raw*scale);if(!input.value||!Number.isFinite(raw)||!integer(value)||raw<Number(input.min)||raw>Number(input.max)||Math.abs(raw*scale-value)>0.00001){status('Controleer de aannames en uitgavenlimiet.',true);return;}payload[key]=value;}
     const signature=JSON.stringify(payload);if(policyPending?.signature!==signature)policyPending={signature,payload};formBusy(ui.policyForm,true);status('Aannames bewaren…');
     try{
-      await request('/api/owner/finance/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(policyPending.payload)});if(!current())return;
+      if(!await verifiedWrite('finance-policy','/api/owner/finance/policy',policyPending.payload)||!current())return;
       policyPending=null;await reload();if(current())status('Aannames opgeslagen. Nieuwe video’s worden hiermee gecontroleerd.');
     }catch(error){if(error.status===409&&current()){policyPending=null;await reload();if(current())status('De aannames zijn ondertussen gewijzigd. Controleer de huidige waarden vóór je opnieuw bewaart.',true);}else status(error.message,true);}finally{if(current())formBusy(ui.policyForm,false);}
   }

@@ -22,12 +22,18 @@ export function sitesFinancePath(path,method){
  if(method==='POST')return ['/api/owner/finance/expenses','/api/owner/finance/policy'].includes(path);
  return method==='GET'&&/^\/api\/owner\/finance(?:\?month=20[0-9]{2}-(?:0[1-9]|1[0-2]))?$/.test(path);
 }
+export function sitesOwnerSecurityPath(path,method){
+ if(typeof path!=='string')return false;
+ if(method==='GET')return path==='/api/owner/security'||/^\/api\/owner\/security\/registration\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(path);
+ return method==='POST'&&['/api/owner/security/registration/options','/api/owner/security/registration/verify','/api/owner/security/verification/options'].includes(path);
+}
 export function sitesPath(path,method){
  if(typeof path!=='string'||path.length>1200||!path.startsWith('/')||path.startsWith('//')||/[#\\\r\n]/.test(path)||!['GET','POST'].includes(method))return false;
  let u;try{u=new URL(path,'https://rig.invalid')}catch{return false}
  if(u.origin!=='https://rig.invalid'||u.pathname+u.search!==path)return false;
  if(sitesPaymentPath(path,method))return true;
  if(sitesFinancePath(path,method))return true;
+ if(sitesOwnerSecurityPath(path,method))return true;
  if(method==='GET')return ['/api/session','/api/video-config','/api/sponsor-invitations/status','/api/generations/recent'].includes(path)||u.pathname==='/api/estimate/fal'||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
  return ['/api/sponsor-invitations/redeem','/api/assets','/api/generation-quotes','/api/generations','/api/chatgpt/quote-approvals','/api/chatgpt/quote-approvals/consume','/api/generations/a5db90b7-7558-40bf-a013-2e121d056f2d/verify-gateway'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[0-9a-f-]{36}\/verify-inputs$/.test(path);
 }

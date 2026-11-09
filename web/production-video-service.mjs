@@ -7,13 +7,14 @@ import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {getFalPricePreflight} from './price-preflight.mjs';
 import {d1Limit} from './router.mjs';
 import {loadProfitPolicy,retailPriceCents,createProfitSnapshot,profitable} from './profit-policy.mjs';
+import {createPreparationBudget,consumePreparationReservation,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const reply=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>reply({error:'Videogeneratie is tijdelijk niet beschikbaar.'},503);
 const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&/^[1-9][0-9]*$/.test(env.RIG_PRICE_EDIT||'')&&Number.isSafeInteger(+env.RIG_PRICE_EDIT)&&+env.RIG_PRICE_EDIT<=250;
 
-export async function createProductionVideoService(env,{trustedUserId,lease,providerFetch=fetch,gatewayFetch=fetch,priceFetch,productionContext}={}){
+export async function createProductionVideoService(env,{trustedUserId,lease,providerFetch=fetch,gatewayFetch=fetch,priceFetch,productionContext,preparationReservation}={}){
  const context=productionContext??await createProductionGenerationContext(env);
  if(!USER.test(trustedUserId||'')||!isProductionGenerationContext(context,{db:env.PRODUCTION_DB})||context.env.PRODUCTION_DB!==env.PRODUCTION_DB)return unavailable;
  const funding=productionFundingKind(context,trustedUserId);
@@ -57,6 +58,13 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     const wallet=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance,EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();
     if(wallet?.frozen===1)return reply({error:'Je tegoed wordt gecontroleerd.'},403);
     if(funding!=='owner-provider'&&(!Number.isSafeInteger(wallet?.balance)||wallet.balance<=0))return reply({error:'Koop eerst RIG-tegoed om bestanden voor te bereiden.'},402);
+    const bytes=preparationRequestBytes(req);
+    if(bytes===null)return reply({error:'Controleer de bestandsgrootte.'},400);
+    // The signed ingress normally reserves before its lease and body read.
+    // Private direct callers take the same quota here before transformation.
+    const reserved=preparationReservation?{state:'reserved',reservation:preparationReservation}:await createPreparationBudget(mapped.DB,{productionContext:context}).reserve({userId:trustedUserId,bytes});
+    if(reserved.state!=='reserved')return preparationDeniedResponse(reserved.state);
+    if(!consumePreparationReservation(reserved.reservation,{db:mapped.DB,userId:trustedUserId,bytes:req.headers.has('content-length')?bytes:reserved.reservation.bytes}))return unavailable();
    }
    // Existing dispatched jobs may still be polled and stored after a freeze.
    // Their result cannot trigger a new reserve or another provider submission.

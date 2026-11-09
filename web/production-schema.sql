@@ -227,3 +227,64 @@ CREATE TABLE rig_finance_expenses (
 );
 CREATE UNIQUE INDEX rig_finance_initial_job_charge ON rig_finance_expenses(job_id) WHERE category='fal-charge' AND replaces_expense_id IS NULL;
 CREATE INDEX rig_finance_expenses_date ON rig_finance_expenses(expense_date);
+
+-- Owner passkeys and one-use, exact-operation verification. No money changes.
+CREATE TABLE rig_owner_credentials (
+ candidate_id TEXT PRIMARY KEY,
+ owner_id TEXT NOT NULL,
+ credential_id TEXT NOT NULL UNIQUE,
+ public_key TEXT NOT NULL,
+ user_handle TEXT NOT NULL,
+ counter INTEGER NOT NULL CHECK(counter>=0 AND counter<=9007199254740991),
+ device_type TEXT NOT NULL CHECK(device_type IN ('singleDevice','multiDevice')),
+ backed_up INTEGER NOT NULL CHECK(backed_up IN (0,1)),
+ transports_json TEXT NOT NULL,
+ label TEXT NOT NULL,
+ fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+ state TEXT NOT NULL CHECK(state IN ('pending','active','revoked','rejected')),
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL,
+ activated_at INTEGER,
+ last_verified_at INTEGER,
+ revoked_at INTEGER
+);
+CREATE INDEX rig_owner_credentials_owner_state ON rig_owner_credentials(owner_id,state);
+CREATE TABLE rig_owner_security_challenges (
+ id TEXT PRIMARY KEY,
+ owner_id TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(operation IN ('registration','finance-policy','finance-expense','owner-generation')),
+ challenge TEXT NOT NULL UNIQUE,
+ payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
+ payload_json TEXT NOT NULL,
+ label TEXT,
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL,
+ attempted_at INTEGER,
+ used_at INTEGER,
+ use_token TEXT UNIQUE,
+ credential_id TEXT,
+ verified_counter INTEGER
+);
+CREATE INDEX rig_owner_security_challenges_expiry ON rig_owner_security_challenges(owner_id,expires_at);
+CREATE TABLE rig_owner_security_audit (
+ id TEXT PRIMARY KEY,
+ owner_id TEXT NOT NULL,
+ event TEXT NOT NULL,
+ operation TEXT NOT NULL,
+ payload_hash TEXT,
+ credential_id TEXT,
+ candidate_id TEXT,
+ created_at INTEGER NOT NULL
+);
+CREATE INDEX rig_owner_security_audit_owner ON rig_owner_security_audit(owner_id,created_at);
+
+-- An admitted media preparation is an attempt, never a refundable wallet cost.
+-- No automatic deletion/release: failed and uncertain work stays counted.
+CREATE TABLE rig_preparation_reservations (
+ id TEXT PRIMARY KEY CHECK(length(id)=36),
+ user_id TEXT NOT NULL CHECK(length(user_id)=38),
+ budget_day TEXT NOT NULL CHECK(length(budget_day)=10),
+ bytes INTEGER NOT NULL CHECK(typeof(bytes)='integer' AND bytes BETWEEN 1 AND 16777216),
+ created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0)
+);
+CREATE INDEX rig_preparation_user_day ON rig_preparation_reservations(budget_day,user_id);

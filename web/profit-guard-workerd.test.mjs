@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {Miniflare} from 'miniflare';
 import {createD1GenerationStores} from './d1.mjs';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
+import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 const USERS=['u-12345678-1234-4123-8123-123456789abc','u-22345678-1234-4123-8123-123456789abc','u-32345678-1234-4123-8123-123456789abc'];
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 async function fixture({owner=false,daily=1000000}={}){
@@ -16,11 +17,12 @@ async function fixture({owner=false,daily=1000000}={}){
  for(const user of USERS)await db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,2000)').bind('paid:'+user,user).run();
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FIXTURE',RIG_PRODUCTION_ENVIRONMENT_ID:'guard-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',...(owner?{RIG_PRODUCTION_OWNER_USER_ID:USERS[0]}:{})};
  const productionContext=await createProductionGenerationContext(env),stores=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext});
+ if(owner)await installTestOwnerCredential(db,USERS[0]);
  async function quote(user=USERS[0],{price=175,usd=700000}={}){
   const made=await stores.quotes.create({userId:user,model:'fal-ai/kling-video/o3/standard/video-to-video/edit',input:{data:{quality:'edit-standard'},providerEstimateUsdMicros:usd},priceCents:price,pricingVersion:'approved-prices-v1',durationSeconds:5});
   return stores.quotes.getOwned(user,made.id);
  }
- async function begin(q){return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:q});}
+ async function begin(q){const idempotencyKey=crypto.randomUUID(),payload={quoteId:q.id,idempotencyKey},verification=q.fundingKind==='owner-provider'?await verificationFor(db,q.userId,'owner-generation',payload,Date.now(),{env}):undefined;return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey,quote:q,verification,verificationPayload:payload});}
  const balance=async(user=USERS[0])=>(await db.prepare('SELECT SUM(delta) amount FROM rig_ledger WHERE user_id=?').bind(user).first()).amount;
  const costs=async()=>(await db.prepare('SELECT * FROM rig_generation_costs').all()).results;
  return {mf,db,env,stores,quote,begin,balance,costs};

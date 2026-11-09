@@ -1,6 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';
 import {authenticateProductionSites} from './production-bridge-auth.mjs';import {sitesCanonical,sitesHmac,sitesDigest,sitesFinancePath,sitesPath} from './sites-bridge-protocol.mjs';
 import {productionEnvironment} from './production-tenant.mjs';
+import {createProductionGenerationContext} from './production-generation-context.mjs';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ab'.repeat(32),OWNER='subject example';
 function db(){const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('./production-schema.sql',import.meta.url),'utf8'));return{prepare(s){let a=[];return{bind(...v){a=v;return this},async first(){return sql.prepare(s).get(...a)||null},async run(){return{meta:{changes:Number(sql.prepare(s).run(...a).changes)}}}}},async batch(st){for(const item of st)await item.run()}}}
 async function environment(){const p=db(),testdb=db();await p.prepare("INSERT INTO rig_payment_environment VALUES (1,'live')").run();await p.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live',PROJECT,SITE,BRIDGE,'pfl_TESTPROFILE','https://rig-api.shortcut-computerguy.workers.dev/api/payments/webhook').run();return {DB:testdb,PRODUCTION_DB:p,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_TESTPROFILE',RIG_PRODUCTION_ENVIRONMENT_ID:'prod-fixture',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:'https://rig-api.shortcut-computerguy.workers.dev/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY}}
@@ -33,12 +34,14 @@ test('production bridge rejects account credential spoofing, changed audience an
  assert.equal(await authenticateProductionSites(await sign(env,'25'.repeat(16)),{...env,RIG_PRODUCTION_WEBHOOK_URL:'https://evil.invalid/api/payments/webhook'}),null);
 });
 test('production assets require opt-in generation and acquire the validated DB lease before buffering',async()=>{
- const env=await environment();let acquired=false,completed=0,seenUser;
+ const env=await environment();env.RIG_PRODUCTION_VIDEO_ENABLED='yes';
+ const identity=await authenticateProductionSites(await sign(env,'29'.repeat(16),'',{path:'/api/session',method:'GET'}),env);env.RIG_PRODUCTION_OWNER_USER_ID=identity.userId;
+ const productionContext=await createProductionGenerationContext(env);let acquired=false,completed=0,seenUser;
  const factory=db=>{assert.equal(db,env.PRODUCTION_DB);return{async acquire(id){acquired=true;seenUser=id;return{state:'acquired',token:'fixture-production-lease'}},async complete(token,outcome){assert.equal(token,'fixture-production-lease');assert.equal(outcome,'settled');completed++}}};
  const signed=await sign(env,'30'.repeat(16),'abc',{path:'/api/assets'});
  const stream=new ReadableStream({pull(controller){assert.equal(acquired,true);controller.enqueue(new TextEncoder().encode('abc'));controller.close()}},{highWaterMark:0});
- const context=await authenticateProductionSites(new Request(signed,{body:stream,duplex:'half'}),env,{allowGeneration:true,leaseFactory:factory});assert.equal(context.userId,seenUser);assert.equal(await context.request.text(),'abc');await context.releaseUnused();assert.equal(completed,1);
- const bad=await sign(env,'31'.repeat(16),'abc',{path:'/api/assets'});assert.equal(await authenticateProductionSites(new Request(bad,{body:'changed'}),env,{allowGeneration:true,leaseFactory:factory}),null);assert.equal(completed,2);
+ const context=await authenticateProductionSites(new Request(signed,{body:stream,duplex:'half'}),env,{allowGeneration:true,leaseFactory:factory,productionContext});assert.equal(context.userId,seenUser);assert.equal(await context.request.text(),'abc');await context.releaseUnused();assert.equal(completed,1);
+ const bad=await sign(env,'31'.repeat(16),'abc',{path:'/api/assets'});assert.equal(await authenticateProductionSites(new Request(bad,{body:'changed'}),env,{allowGeneration:true,leaseFactory:factory,productionContext}),null);assert.equal(completed,2);
  assert.equal(await authenticateProductionSites(await sign(env,'32'.repeat(16),'abc',{path:'/api/assets'}),env,{allowGeneration:true}),null);
  assert.equal(await authenticateProductionSites(await sign(env,'33'.repeat(16),'abc',{path:'/api/assets'}),env,{leaseFactory:factory}),null);
 });
@@ -65,4 +68,16 @@ test('signed finance routes need independent opt-in and never acquire a video le
  const expense=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'{}',{path:'/api/owner/finance/expenses'}),env,{allowFinance:true});assert.equal(expense.userId,authorized.userId);
  assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'{}',{path:'/api/generations'}),env,{allowFinance:true}),null);
  const forged=await sign(env,crypto.randomUUID().replaceAll('-',''),'{}',{path:'/api/owner/finance/policy'});forged.headers.set('origin','https://evil.invalid');assert.equal(await authenticateProductionSites(forged,env,{allowFinance:true}),null);
+});
+
+test('owner security transport is explicit and cannot extend to recovery, key deletion or query tricks',async()=>{
+ const {sitesOwnerSecurityPath}=await import('./sites-bridge-protocol.mjs');
+ const id='12345678-1234-4123-8123-123456789abc';
+ for(const [path,method]of[['/api/owner/security','GET'],['/api/owner/security/registration/'+id,'GET'],['/api/owner/security/registration/options','POST'],['/api/owner/security/registration/verify','POST'],['/api/owner/security/verification/options','POST']]){
+  assert.equal(sitesOwnerSecurityPath(path,method),true);assert.equal(sitesPath(path,method),true);
+ }
+ for(const [path,method]of[['/api/owner/security?owner=true','GET'],['/api/owner/security/recovery','POST'],['/api/owner/security/credentials/'+id,'POST'],['/api/owner/security/registration/'+id+'/approve','POST'],['/api/owner/security/registration/options','GET']]){assert.equal(sitesOwnerSecurityPath(path,method),false);assert.equal(sitesPath(path,method),false);}
+ const env=await environment();
+ for(const opts of [{},{allowFinance:true},{allowGeneration:true}])assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/owner/security',method:'GET'}),env,opts),null);
+ const auth=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/owner/security',method:'GET'}),env,{allowSecurity:true});assert.match(auth.userId,/^u-/);
 });

@@ -11,6 +11,7 @@ import {d1Limit} from './router.mjs';
 import {handleProductionInvitation} from './production-invitation.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {handleOwnerFinance} from './owner-finance.mjs';
+import {handleOwnerSecurity} from './owner-security.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -28,6 +29,12 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    const u=new URL(req.url);
    // Financial reporting stays available while generation is paused, and the
    // signed identity is checked again against the exact pinned owner inside.
+   if(u.pathname.startsWith('/api/owner/security')){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowSecurity:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleOwnerSecurity(authenticated.request,env,{userId:authenticated.userId});
+   }
    if(u.pathname.startsWith('/api/owner/finance')){
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
@@ -53,7 +60,8 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    const mapped={...context.env,RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN};
    if(u.pathname.startsWith('/provider-inputs/'))return handleProviderInput(req,mapped,{productionContext:context,verifyTenant:async()=>Boolean(await createProductionGenerationContext(env))});
    const leaseFactory=db=>createDurableMediaLease(db,{mode:'live',productionContext:context});
-   authenticated=await authenticateProductionSites(req,env,{allowGeneration:true,leaseFactory});
+   authenticated=await authenticateProductionSites(req,env,{allowGeneration:true,leaseFactory,productionContext:context});
+   if(authenticated?.deniedResponse)return authenticated.deniedResponse;
    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
    const {userId}=authenticated;
    if(u.pathname.startsWith('/api/sponsor-invitations/'))return handleProductionInvitation(authenticated.request,env,{userId,productionContext:context});
@@ -69,11 +77,11 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    }
    if(u.pathname==='/api/generations'&&req.method==='POST'){
     const data=await readJSON(authenticated.request),required=['quoteId','idempotencyKey','approvalToken'];
-    if(!data||required.some(k=>typeof data[k]!=='string')||Object.keys(data).some(k=>!required.includes(k)&&k!=='transferConsent')||Object.hasOwn(data,'transferConsent')&&data.transferConsent!=='fal-temporary-links-v1')return json({error:'Bevestig eerst de prijs.'},403);
+    if(!data||required.some(k=>typeof data[k]!=='string')||Object.keys(data).some(k=>!required.includes(k)&&k!=='transferConsent'&&k!=='verification')||Object.hasOwn(data,'transferConsent')&&data.transferConsent!=='fal-temporary-links-v1')return json({error:'Bevestig eerst de prijs.'},403);
     const approval=await approvals.consume(userId,data);if(!approval||approval.idempotencyKey!==data.idempotencyKey)return json({error:'Bevestig eerst de prijs.'},403);
-    authenticated.request=new Request(authenticated.request.url,{method:'POST',headers:authenticated.request.headers,body:JSON.stringify({quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(data.transferConsent?{transferConsent:data.transferConsent}:{})})});
+    authenticated.request=new Request(authenticated.request.url,{method:'POST',headers:authenticated.request.headers,body:JSON.stringify({quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(data.transferConsent?{transferConsent:data.transferConsent}:{}),...(Object.hasOwn(data,'verification')?{verification:data.verification}:{})})});
    }
-   const handler=await videoFactory(env,{trustedUserId:userId,productionContext:context,lease:authenticated.lease??leaseFactory(mapped.DB),providerFetch:network,gatewayFetch:network});
+   const handler=await videoFactory(env,{trustedUserId:userId,productionContext:context,lease:authenticated.lease??leaseFactory(mapped.DB),preparationReservation:authenticated.preparationReservation,providerFetch:network,gatewayFetch:network});
    return await handler(authenticated.request);
   }catch{return unavailable()}
   finally{try{await authenticated?.releaseUnused?.()}catch{}}

@@ -19,6 +19,7 @@ test('a fresh portable build creates its metadata and serves current UI without 
   const page=await worker.fetch(new Request(origin+'/'),env);assert.equal(page.status,200);const html=await page.text();
   assert.match(html,/Persoon laten bewegen/);assert.match(html,/id="briefDialog"/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
   const finance=await worker.fetch(new Request(origin+'/multiuser/finance.js'),env);assert.equal(finance.status,200);assert.match(await finance.text(),/\/api\/owner\/finance/);
+  const security=await worker.fetch(new Request(origin+'/multiuser/owner-security.js'),env);assert.equal(security.status,200);assert.match(await security.text(),/rigOwnerVerification/);
   const discovery=await worker.fetch(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);
   assert.ok((await discovery.json()).result.tools.some(tool=>tool.name==='rig_create_quote'));
   for(let index=0;index<sourceFiles.length;index++)assert.deepEqual(await readFile(join(root,sourceFiles[index])),before[index]);
