@@ -6,6 +6,7 @@ import {handleOwnerFinance} from './owner-finance.mjs';
 import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
 import {createProfitSnapshot,loadProfitPolicy} from './profit-policy.mjs';
 import {signSitesBridgeRequest,sitesDigest} from './sites-bridge-protocol.mjs';
+import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98';
 const OWNER='u-12345678-1234-4123-8123-123456789abc',CUSTOMER='u-22345678-1234-4123-8123-123456789abc',OTHER='u-32345678-1234-4123-8123-123456789abc',KEY='de'.repeat(32);
@@ -18,8 +19,17 @@ async function fixture(){
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('finance-fixture','live',PROJECT,SITE,BRIDGE,'pfl_FINANCE',BRIDGE+'/api/payments/webhook').run();
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRODUCTION_VIDEO_ENABLED:'no',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FINANCE',RIG_PRODUCTION_ENVIRONMENT_ID:'finance-fixture',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY,RIG_PRODUCTION_OWNER_USER_ID:OWNER,RIG_PRICE_STANDARD:'30',RIG_PRICE_PRO:'40',RIG_PRICE_EDIT:'35'};
+ await installTestOwnerCredential(db,OWNER,{now:NOW});
  const request=(path='/api/owner/finance',data,headers={})=>new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:{...(data===undefined?{}:{origin:SITE,'content-type':'application/json'}),...headers},...(data===undefined?{}:{body:JSON.stringify(data)})});
- const call=(path,data,{userId=OWNER,extraEnv={},headers={}}={})=>handleOwnerFinance(request(path,data,headers),{...env,...extraEnv},{userId,now:NOW});
+ const call=async(path,data,{userId=OWNER,extraEnv={},headers={}}={})=>{
+  let payload=data;
+  const prior=data?.idempotencyKey&&path==='/api/owner/finance/expenses'?await db.prepare('SELECT 1 FROM rig_finance_expenses WHERE idempotency_key=?').bind(data.idempotencyKey).first():null;
+  if(data&&userId===OWNER&&!Object.hasOwn(data,'verification')&&!prior){
+   try{const verification=await verificationFor(db,OWNER,path.endsWith('/policy')?'finance-policy':'finance-expense',data,NOW,{env});if(verification)payload={...data,verification};}
+   catch(error){if(![400,409].includes(error.status))throw error;}
+  }
+  return handleOwnerFinance(request(path,payload,headers),{...env,...extraEnv},{userId,now:NOW});
+ };
  const report=async(path='/api/owner/finance')=>{const response=await call(path);assert.equal(response.status,200,await response.clone().text());return response.json();};
  const ledger=async(event,user,delta,{orderId=null,at=NOW}={})=>db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta,created_at) VALUES(?,?,?,?,?)').bind(event,user,orderId,delta,timestamp(at)).run();
  async function paid(user=CUSTOMER,amount=1000,at=NOW,state='paid'){
@@ -42,6 +52,16 @@ async function fixture(){
  return {mf,db,env,call,report,ledger,paid,job,request};
 }
 const expense=(options={})=>({idempotencyKey:crypto.randomUUID(),category:'hosting',date:'2026-11-09',amountCents:500,note:'Invoice including non-deductible purchase tax',...options});
+
+test('an owner session without a fresh device proof cannot increase spend or create an expense',async()=>{
+ const f=await fixture();try{
+  const before=await f.report(),{version,updatedAt,...values}=before.policy;
+  for(const [path,payload]of [['/api/owner/finance/expenses',expense()],['/api/owner/finance/policy',{expectedVersion:version,...values,dailyProviderLimitUsdMicros:values.dailyProviderLimitUsdMicros+1000000}]]){
+   const response=await handleOwnerFinance(f.request(path,payload),f.env,{userId:OWNER,now:NOW});assert.equal(response.status,428,await response.clone().text());assert.match((await response.json()).code,/security_setup_required|step_up_required/);
+  }
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_expenses').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_policy_history').first()).n,0);assert.equal((await loadProfitPolicy(f.db)).version,version);
+ }finally{await f.mf.dispose();}
+});
 
 test('owner finance: signed identity gate is independent from generation; customer and forged owner headers reveal no data',async()=>{
  const f=await fixture();try{

@@ -126,3 +126,11 @@ test('share query processing stays bounded while ordinary tracking links remain 
 test('MCP discovery exposes real confirmation and editing only when configured',async()=>{
  const {app,calls}=fixture();const response=await app.fetch(request('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);const value=await response.json();assert.ok(value.result.tools.some(t=>t.name==='rig_confirm_generation'));assert.ok(value.result.tools.find(t=>t.name==='rig_create_quote').inputSchema.properties.quality.enum.includes('edit-standard'));assert.equal(calls.length,0);
 });
+
+test('standalone studio cannot be framed and permits passkeys only at its own origin',async()=>{
+ const f=fixture(),response=await f.app.fetch(new Request(origin+'/'),env);
+ assert.equal(response.status,200);
+ assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+ assert.equal(response.headers.get('x-frame-options'),'DENY');
+ assert.equal(response.headers.get('permissions-policy'),'publickey-credentials-create=(self), publickey-credentials-get=(self)');
+});

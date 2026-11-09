@@ -10,6 +10,7 @@ if(output===root)throw Error('Choose a separate build output directory.');
 if(values['project-id']&&!/^appgprj_[A-Za-z0-9]{20,80}$/.test(values['project-id']))throw Error('Invalid optional Site project ID.');
 // Build in memory: source bundles and sibling checkouts are never overwritten.
 const browser=await build({entryPoints:[join(root,'frontend/multiuser/native-site-boot.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
+const security=await build({entryPoints:[join(root,'frontend/multiuser/owner-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const names=['index.html','style.css','media.js','app.js','payments.js','generation-ui.js','finance.js'];
 const files=Object.fromEntries(await Promise.all(names.map(async name=>[`/multiuser/${name}`,await readFile(join(root,'frontend/multiuser',name),'utf8')])));
 files['/multiuser/index.html']=files['/multiuser/index.html']
@@ -17,6 +18,7 @@ files['/multiuser/index.html']=files['/multiuser/index.html']
  .replace('<button id="authLogout" class="account auth-logout" type="button" hidden>Afmelden</button>','<a id="authLogout" class="account auth-logout" href="/signout-with-chatgpt?return_to=%2F" target="_top" hidden>Afmelden</a>');
 if(files['/multiuser/index.html'].includes('Inloggen met Google'))throw Error('Native sign-in replacement failed.');
 files['/multiuser/auth-bundle.js']=browser.outputFiles[0].text;
+files['/multiuser/owner-security.js']=security.outputFiles[0].text;
 await mkdir(join(output,'dist/server'),{recursive:true});
 await mkdir(join(output,'.openai'),{recursive:true});
 await build({entryPoints:[join(root,'rig-sites-app.mjs')],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:join(output,'dist/server/index.js'),logLevel:'silent',plugins:[{

@@ -2,6 +2,7 @@
 import {validateProductionTenant} from './production-tenant.mjs';
 import {parseProfitPolicy,profitPolicyRow,validProfitSnapshot} from './profit-policy.mjs';
 import {d1Limit} from './router.mjs';
+import {prepareOwnerMutation} from './owner-security.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -127,31 +128,37 @@ async function summary(mapped,period,now){
  return report;
 }
 async function saveExpense(req,mapped,user,now){
- const data=await body(req),required=['idempotencyKey','category','date','amountCents','note'],optional=['jobId','replacesExpenseId'];
+ const data=await body(req),required=['idempotencyKey','category','date','amountCents','note'],optional=['jobId','replacesExpenseId','verification'];
  if(!data||required.some(key=>!Object.hasOwn(data,key))||Object.keys(data).some(key=>!required.includes(key)&&!optional.includes(key))||!UUID.test(data.idempotencyKey||'')||!categories.has(data.category)||!dateValid(data.date)||data.date>localDate(now)||!whole(data.amountCents,0,100000000)||(data.amountCents===0&&data.category!=='fal-charge'&&data.replacesExpenseId==null)||typeof data.note!=='string'||Array.from(data.note.trim()).length<1||Array.from(data.note).length>240||/[\u0000-\u001f\u007f]/.test(data.note)||(data.category==='fal-charge'?!ID.test(data.jobId||''):Object.hasOwn(data,'jobId')))return error('Controleer de datum, het bedrag en de kostensoort.',400);
  if(Object.hasOwn(data,'replacesExpenseId')&&!UUID.test(data.replacesExpenseId||''))return error('Controleer de correctie.',400);
  const normalized={category:data.category,date:data.date,amountCents:data.amountCents,note:data.note.trim(),jobId:data.jobId??null,replacesExpenseId:data.replacesExpenseId??null};
  const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(normalized)))),n=>n.toString(16).padStart(2,'0')).join('');
  const db=mapped.DB,prior=await db.prepare('SELECT id,request_hash FROM rig_finance_expenses WHERE idempotency_key=?').bind(data.idempotencyKey).first();
  if(prior)return prior.request_hash===hash?json({id:prior.id,recorded:true,replayed:true}):error('Deze aanvraagcode is al gebruikt voor een andere kost.',409);
+ const {verification,...payload}=data;
+ const security=await prepareOwnerMutation(db,{ownerId:user,operation:'finance-expense',payload,verification,now});if(!security.ok)return security.response;
  const id=crypto.randomUUID(),insert=db.prepare(`INSERT INTO rig_finance_expenses(id,idempotency_key,category,expense_date,amount_cents,note,job_id,replaces_expense_id,request_hash,created_by,created_at)
- SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+ SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE (${security.gate.sql}) AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
  AND (?<>'fal-charge' OR EXISTS(SELECT 1 FROM rig_generation_jobs j WHERE j.id=? AND (j.fal_request_id IS NOT NULL OR EXISTS(SELECT 1 FROM rig_generation_costs c WHERE c.job_id=j.id))))
  AND (? IS NULL OR EXISTS(SELECT 1 FROM rig_finance_expenses e WHERE e.id=? AND e.category=? AND e.job_id IS ? AND e.expense_date=? AND NOT EXISTS(SELECT 1 FROM rig_finance_expenses r WHERE r.replaces_expense_id=e.id)))`)
- .bind(id,data.idempotencyKey,data.category,data.date,data.amountCents,data.note.trim(),data.jobId??null,data.replacesExpenseId??null,hash,user,now,data.category,data.jobId??null,data.replacesExpenseId??null,data.replacesExpenseId??null,data.category,data.jobId??null,data.date);
- try{const result=await insert.run();if(result.meta?.changes===1)return json({id,recorded:true,replayed:false},201);}catch{}
+ .bind(id,data.idempotencyKey,data.category,data.date,data.amountCents,data.note.trim(),data.jobId??null,data.replacesExpenseId??null,hash,user,now,...security.gate.params,data.category,data.jobId??null,data.replacesExpenseId??null,data.replacesExpenseId??null,data.category,data.jobId??null,data.date);
+ try{const results=await db.batch([...security.before,insert]);const result=results.at(-1);if(result.meta?.changes===1)return json({id,recorded:true,replayed:false},201);}catch{}
  const concurrent=await db.prepare('SELECT id,request_hash FROM rig_finance_expenses WHERE idempotency_key=?').bind(data.idempotencyKey).first();
  if(concurrent?.request_hash===hash)return json({id:concurrent.id,recorded:true,replayed:true});
  return error('Deze kost is niet opgeslagen. Controleer de video of de bestaande kost.',409);
 }
 async function savePolicy(req,mapped,user,now){
  const data=await body(req);
- if(!data||Object.keys(data).length!==names.length+1||!VERSION.test(data.expectedVersion||'')||names.some(name=>!Object.hasOwn(data,name))||Object.keys(data).some(key=>key!=='expectedVersion'&&!names.includes(key)))return error('Controleer de kosteninstellingen.',400);
+ if(!data||Object.keys(data).filter(key=>key!=='verification').length!==names.length+1||!VERSION.test(data.expectedVersion||'')||names.some(name=>!Object.hasOwn(data,name))||Object.keys(data).some(key=>key!=='expectedVersion'&&key!=='verification'&&!names.includes(key)))return error('Controleer de kosteninstellingen.',400);
  const version=`profit-${now}-${crypto.randomUUID().slice(0,8)}`;let row;
  try{row=profitPolicyRow({...data,version});}catch{return error('Een kosteninstelling valt buiten het toegestane bereik.',400);}
- const update=mapped.DB.prepare(`UPDATE rig_finance_policy SET version=?,${columns.map(column=>column+'=?').join(',')},updated_at=? WHERE id=1 AND version=? AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')`).bind(version,...columns.map(column=>row[column]),now,data.expectedVersion);
+ const current=await mapped.DB.prepare('SELECT version FROM rig_finance_policy WHERE id=1').first();
+ if(current?.version!==data.expectedVersion)return error('De instellingen zijn ondertussen gewijzigd. Vernieuw het overzicht en controleer ze opnieuw.',409);
+ const {verification,...payload}=data;
+ const security=await prepareOwnerMutation(mapped.DB,{ownerId:user,operation:'finance-policy',payload,verification,now});if(!security.ok)return security.response;
+ const update=mapped.DB.prepare(`UPDATE rig_finance_policy SET version=?,${columns.map(column=>column+'=?').join(',')},updated_at=? WHERE id=1 AND version=? AND (${security.gate.sql}) AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')`).bind(version,...columns.map(column=>row[column]),now,data.expectedVersion,...security.gate.params);
  const history=mapped.DB.prepare('INSERT INTO rig_finance_policy_history(version,policy_json,changed_by,created_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM rig_finance_policy WHERE id=1 AND version=?)').bind(version,JSON.stringify(parseProfitPolicy(row)),user,now,version);
- const result=await mapped.DB.batch([update,history]);if(result[0]?.meta?.changes!==1||result[1]?.meta?.changes!==1)return error('De instellingen zijn ondertussen gewijzigd. Vernieuw het overzicht en controleer ze opnieuw.',409);
+ const result=await mapped.DB.batch([...security.before,update,history]);if(result.at(-2)?.meta?.changes!==1||result.at(-1)?.meta?.changes!==1)return error('De instellingen zijn ondertussen gewijzigd. Vernieuw het overzicht en controleer ze opnieuw.',409);
  return json({saved:true,policy:{...parseProfitPolicy(row),updatedAt:now}});
 }
 // userId must come from authenticateProductionSites, never from request data.

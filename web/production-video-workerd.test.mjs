@@ -8,6 +8,7 @@ import {createProductionPayment} from './production-payment.mjs';
 import {createD1GenerationStores} from './d1.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
+import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 const BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
@@ -18,6 +19,7 @@ async function fixture({owner=false}={}){
  const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'test',PRODUCTION_DB:'production'},r2Buckets:['BUCKET']});
  const db=await mf.getD1Database('PRODUCTION_DB'),legacy=await mf.getD1Database('DB'),bucket=await mf.getR2Bucket('BUCKET');
  await migrate(db,'./production-schema.sql');await migrate(legacy,'./cloudflare-migrations/0001_test_baseline.sql');await migrate(legacy,'./closed-payment-migrations/0004_test_media_work_lock.sql');
+ if(!await db.prepare("SELECT name FROM sqlite_master WHERE name='rig_preparation_reservations'").first())await migrate(db,'./production-migrations/0005_preparation_budget.sql');
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_TESTPROFILE',BRIDGE+'/api/payments/webhook').run();
  await legacy.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1000)').bind('legacy-only',ALICE).run();
@@ -29,7 +31,7 @@ async function fixture({owner=false}={}){
   if(req.method==='POST'&&u.pathname==='/v1/normalize/image'){const user=req.headers.get('x-rig-user'),id=await source('image',user),a=assets.get(id);return Response.json({id,ownerId:user,kind:'image',mime:'image/jpeg',sha256:a.sha256,size:a.bytes.length,width:360,height:360},{status:201})}
   const id=u.pathname.split('/').at(-1),a=assets.get(id);if(!a||req.headers.get('x-rig-user')!==a.owner)return new Response(null,{status:404});return new Response(a.bytes.slice(),{headers:{'content-type':a.kind==='image'?'image/jpeg':'video/mp4','content-length':String(a.bytes.length),'x-rig-asset-kind':a.kind,'x-rig-sha256':a.sha256,'x-rig-width':'360','x-rig-height':'360',...(a.kind==='video'?{'x-rig-duration-seconds':'4','x-rig-fps':'30'}:{})}})}};
  const env={DB:legacy,PRODUCTION_DB:db,BUCKET:{get:(...args)=>bucket.get(...args),head:(...args)=>bucket.head(...args),put:(key,bytes,options)=>{assert.equal(options.onlyIf.get('If-None-Match'),'*');return bucket.put(key,bytes,{...options,onlyIf:{etagDoesNotMatch:'*'}})}},RIG_MEDIA:media,RIG_MEDIA_SECRET:'x'.repeat(40),FAL_KEY:'fake-provider-key',RIG_CLOSED_VIDEO_ENABLED:'yes',RIG_PRICE_STANDARD:'20',RIG_PRICE_PRO:'25',RIG_PRICE_EDIT:'20',RIG_EDIT_ENABLED:'yes',RIG_PRICE_VERSION:'paid-v1',RIG_CLOSED_VIDEO_MAX_CENTS:'800',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000000',RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_TESTPROFILE',RIG_PRODUCTION_ENVIRONMENT_ID:'prod-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[{"id":"five","amountCents":500,"credits":500}]'};
- if(owner)env.RIG_PRODUCTION_OWNER_USER_ID=ALICE;
+ if(owner){env.RIG_PRODUCTION_OWNER_USER_ID=ALICE;await installTestOwnerCredential(db,ALICE);}
  const provider=async(input,init={})=>{const u=new URL(String(input)),h=new Headers(init.headers);
   if(u.origin==='https://rest.fal.ai'&&u.pathname==='/storage/upload/initiate'){const id=crypto.randomUUID(),url='https://v3b.fal.media/files/b/fixture/'+id;cdn.set(url,null);return Response.json({upload_url:'https://v3b.fal.media/upload/'+id,file_url:url})}
   if(u.origin==='https://v3b.fal.media'&&u.pathname.startsWith('/upload/')&&init.method==='PUT'){const value='https://v3b.fal.media/files/b/fixture/'+u.pathname.split('/').at(-1);cdn.set(value,{bytes:new Uint8Array(await init.body.arrayBuffer()),mime:h.get('content-type')});if(uploadPrice!==null)priceRate=uploadPrice;return new Response('OK')}
@@ -46,7 +48,14 @@ async function fixture({owner=false}={}){
  };
  const priceFetch=async()=>({currency:'USD',unit:'second',prices:{standard:priceRate,pro:priceRate,'edit-standard':.14}});
  const service=async(user=ALICE,extra={})=>createProductionVideoService({...env,...extra},{trustedUserId:user,providerFetch:provider,priceFetch});
- const call=async(handler,path,data)=>handler(new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{origin:SITE,'content-type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})}));
+ const call=async(handler,path,data)=>{
+  if(owner&&path==='/api/generations'&&data&&!data.verification){
+   const q=await db.prepare('SELECT funding_kind FROM rig_generation_quotes WHERE id=? AND user_id=?').bind(data.quoteId,ALICE).first();
+   const prior=await db.prepare('SELECT id FROM rig_generation_jobs WHERE user_id=? AND idempotency_key=?').bind(ALICE,data.idempotencyKey).first();
+   if(q?.funding_kind==='owner-provider'&&!prior)data={...data,verification:await verificationFor(db,ALICE,'owner-generation',data,Date.now(),{env})};
+  }
+  return handler(new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{origin:SITE,'content-type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})}));
+ };
  const balance=async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) AS cents FROM rig_ledger WHERE user_id=?').bind(ALICE).first()).cents;
  async function fund(user=ALICE){let payment;
   const transport=async(input,init={})=>{const u=new URL(input);if(u.pathname==='/v2/profiles/me')return Response.json({id:'pfl_TESTPROFILE'});if(u.pathname==='/v2/payments'&&init.method==='POST'){const data=JSON.parse(init.body);payment={id:'tr_Fixture001',mode:'live',profileId:'pfl_TESTPROFILE',amount:data.amount,metadata:data.metadata,status:'open',_links:{checkout:{href:'https://www.mollie.com/checkout/fixture'}}};return Response.json(payment)}if(u.pathname.endsWith('/refunds'))return Response.json({_embedded:{refunds:[]}});if(u.pathname.endsWith('/chargebacks'))return Response.json({_embedded:{chargebacks:[]}});return Response.json(payment)};
@@ -76,6 +85,24 @@ test('fresh paid wallet: verified purchase, owned quote, one reserve, private re
   assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id LIKE 'reserve:%'").first()).n,1);assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id LIKE 'settle:%'").first()).n,1);
   assert.equal((await f.legacy.prepare('SELECT SUM(delta) cents FROM rig_ledger WHERE user_id=?').bind(ALICE).first()).cents,1000);
  }finally{await f.mf.dispose()}
+});
+
+test('one cent cannot fund unlimited preparation: cumulative quota stops work without a wallet debit or Fal generation',async()=>{
+ const f=await fixture();try{
+  await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1)').bind('preparation-fixture-only',ALICE).run();
+  const h=await f.service(),before=f.stats();
+  // Absent length is conservatively charged at 16 MiB, giving eight attempts
+  // under the 128 MiB allowance, even though these fixture images are small.
+  for(let i=0;i<8;i++){
+   const r=await h(new Request(SITE+'/api/assets',{method:'POST',headers:{origin:SITE,'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:f.image.slice()}));
+   assert.equal(r.status,201,await r.clone().text());
+   // Advance only the burst limiter's fixture window; the persisted daily
+   // quota must still stop attempts made across otherwise quiet minutes.
+   await f.db.prepare('UPDATE rig_rate_limits SET window_start=0').run();
+  }
+  const denied=await h(new Request(SITE+'/api/assets',{method:'POST',headers:{origin:SITE,'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:f.image.slice()}));
+  assert.equal(denied.status,429);assert.equal(f.stats().mediaCalls-before.mediaCalls,8);assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),1);
+ }finally{await f.mf.dispose();}
 });
 
 test('production capability cannot be forged or moved to test storage; live release requires exact durable reservation',async()=>{

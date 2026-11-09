@@ -5,6 +5,7 @@ import {Miniflare} from 'miniflare';
 import {createD1GenerationStores} from './d1.mjs';
 import {createProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {closedVideoTesting} from './closed-video-service.mjs';
+import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 
 const OWNER='u-12345678-1234-4123-8123-123456789abc',CUSTOMER='u-22345678-1234-4123-8123-123456789abc';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
@@ -16,15 +17,28 @@ async function fixture(){
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('provider-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FIXTURE',RIG_PRODUCTION_ENVIRONMENT_ID:'provider-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',RIG_PRODUCTION_OWNER_USER_ID:OWNER,RIG_CLOSED_VIDEO_MAX_CENTS:'800',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000000'};
  const context=await createProductionGenerationContext(env);assert.ok(context);
+ await installTestOwnerCredential(db,OWNER);
  const stores=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext:context});
  const args={model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:100,pricingVersion:'owner-v1',durationSeconds:5,input:{data:{quality:'pro'},providerEstimateUsdMicros:700000}};
  async function quote(user=OWNER,overrides={}){const created=await stores.quotes.create({...args,userId:user,...overrides});return stores.quotes.getOwned(user,created.id);}
- const begin=(q,key=crypto.randomUUID(),adapter=stores)=>adapter.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey:key,quote:q});
+ const begin=async(q,key=crypto.randomUUID(),adapter=stores,proof)=>{
+  const payload={quoteId:q.id,idempotencyKey:key};let verification=proof;
+  if(q.fundingKind==='owner-provider'&&verification===undefined){try{verification=await verificationFor(db,OWNER,'owner-generation',payload,Date.now(),{env});}catch(error){if(![400,409].includes(error.status))throw error;}}
+  return adapter.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey:key,quote:q,verification,verificationPayload:payload});
+ };
  const ledger=()=>db.prepare('SELECT * FROM rig_ledger ORDER BY event_id').all().then(r=>r.results);
  const usage=id=>db.prepare('SELECT * FROM rig_owner_provider_usage WHERE job_id=?').bind(id).first();
  const guard=closedVideoTesting.guard(context.env,async()=>({currency:'USD',unit:'second',prices:{pro:.14}}),{trustedUserId:OWNER,accessMode:'paid',productionContext:context});
- return {mf,db,env,context,stores,quote,begin,ledger,usage,guard};
+ const proof=(q,key)=>verificationFor(db,OWNER,'owner-generation',{quoteId:q.id,idempotencyKey:key},Date.now(),{env});
+ return {mf,db,env,context,stores,quote,begin,ledger,usage,guard,proof};
 }
+
+test('a bare owner session cannot reserve provider use without a fresh operation-bound assertion',async()=>{
+ const f=await fixture();try{
+  const q=await f.quote(),result=await f.stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey:'unverified-owner-attempt',quote:q});assert.equal(result.kind,'verification');assert.equal(result.response.status,428);assert.match((await result.response.json()).code,/security_setup_required|step_up_required/);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);assert.deepEqual(await f.ledger(),[]);
+ }finally{await f.mf.dispose();}
+});
 
 test('owner provider funding: zero cash wallet, one durable authorization, ambiguity never resubmits',async()=>{
  const f=await fixture();try{
@@ -60,7 +74,7 @@ test('owner completion and failure finalize only the provider journal, with poll
 test('owner cannot bypass freeze, expiry, canceled intent, exact estimate or another active job',async()=>{
  const f=await fixture();try{
   let q=await f.quote();assert.equal((await f.begin({...q,providerEstimateUsdMicros:1})).kind,'insufficient');
-  await f.db.prepare('UPDATE rig_generation_quotes SET expires_at=? WHERE id=?').bind(Date.now()-1,q.id).run();assert.equal((await f.begin(q)).kind,'insufficient');
+  const expiryKey='verified-before-expiry',expiryProof=await f.proof(q,expiryKey);await f.db.prepare('UPDATE rig_generation_quotes SET expires_at=? WHERE id=?').bind(Date.now()-1,q.id).run();assert.equal((await f.begin(q,expiryKey,f.stores,expiryProof)).kind,'insufficient');
   q=await f.quote();await f.db.prepare('INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,?)').bind(OWNER,'freeze').run();assert.equal((await f.begin(q)).kind,'insufficient');assert.equal(await f.guard.permits({durationSeconds:5,priceCents:100,quote:q}),false);await f.db.prepare('DELETE FROM rig_frozen_accounts').run();
   assert.equal((await f.stores.jobs.reconcileIntent(OWNER,'canceled-key',q.id)).kind,'canceled');assert.equal((await f.begin(q,'canceled-key')).kind,'conflict');
   const qa=await f.quote(),qb=await f.quote(),outcomes=await Promise.all([f.begin(qa),f.begin(qb)]);assert.deepEqual(outcomes.map(x=>x.kind).sort(),['created','pending']);
@@ -108,4 +122,14 @@ test('migration preserves historical funding and creates no purchased-credit ent
   await migrate(db,'./production-migrations/0002_owner_provider_funding.sql');assert.equal((await db.prepare("SELECT funding_kind FROM rig_generation_quotes WHERE id='old-quote'").first()).funding_kind,'credits');assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);
   await assert.rejects(db.prepare("UPDATE rig_generation_quotes SET funding_kind='free' WHERE id='old-quote'").run());
  }finally{await mf.dispose();}
+});
+
+test('owner verification payload cannot authorize different actual quote or request arguments',async()=>{
+ const f=await fixture();try{
+  const quote=await f.quote(),key='future-private-caller';
+  for(const payload of [{quoteId:crypto.randomUUID(),idempotencyKey:key},{quoteId:quote.id,idempotencyKey:'other-key'},{quoteId:quote.id,idempotencyKey:key,transferConsent:'fal-temporary-links-v1'}]){
+   await assert.rejects(f.stores.jobs.begin({userId:OWNER,quoteId:quote.id,idempotencyKey:key,quote,verificationPayload:payload}),/Verification operation does not match generation/);
+  }
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
+ }finally{await f.mf.dispose();}
 });

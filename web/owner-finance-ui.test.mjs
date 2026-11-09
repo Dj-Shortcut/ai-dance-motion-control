@@ -16,14 +16,15 @@ const summary=()=>({
  policy:{version:'profit-v1',eurPerUsdMicros:1000000,providerVatBps:2100,paymentFeeBps:1000,failureBufferBps:1000,preparationCents:5,minMarginBps:3000,dailyProviderLimitUsdMicros:10000000,minPriceCents:100,minProPriceCents:125,updatedAt:'2026-11-09T12:00:00Z'},
  jobs:[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',createdAt:'2026-11-09T12:00:00Z',state:'completed',fundingKind:'credits',priceCents:175,estimatedCostCents:117,actualCostCents:null,estimatedMarginCents:58,canRecordFalCost:true}],expenses:[],warnings:[]
 });
-function fixture({handler,native=true,active=true}={}){
+function fixture({handler,native=true,active=true,verificationHandler}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),win=dom.window,d=win.document,calls=[];
  for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;};}
  win.HTMLDialogElement.prototype.showModal=function(){this.open=true;};win.HTMLDialogElement.prototype.close=function(){this.open=false;};
  let live=active;win.rigNativeSite=native;win.rigSessionActive=()=>live;
+ const verifications=[];win.rigOwnerVerification={mount(){},cancel(){},async prepare(operation,payload){verifications.push({operation,payload:JSON.parse(JSON.stringify(payload))});return verificationHandler?verificationHandler(operation,payload):{challengeId:'11111111-1111-4111-8111-'+String(verifications.length).padStart(12,'0'),credential:{id:'test-only-assertion-'+verifications.length}};}};
  win.rigRequest=async(path,init={})=>{calls.push([path,init]);return handler?handler(path,init,calls):Response.json(summary());};
  win.eval(script);
- return {dom,win,d,calls,stop(){live=false;},close(){win.rigFinanceDispose?.();dom.window.close();}};
+ return {dom,win,d,calls,verifications,stop(){live=false;},close(){win.rigFinanceDispose?.();dom.window.close();}};
 }
 async function ready(f){await waitFor(()=>!f.d.getElementById('financeButton').hidden);return f;}
 function submit(f,id){f.d.getElementById(id).dispatchEvent(new f.win.Event('submit',{bubbles:true,cancelable:true}));}
@@ -86,7 +87,7 @@ test('expense retry retains one idempotency key and prevents duplicate requests 
   f.d.getElementById('financeExpenseCategory').value='hosting';f.d.getElementById('financeExpenseDate').value='2026-11-09';f.d.getElementById('financeExpenseAmount').value='5,49';f.d.getElementById('financeExpenseNote').value='Cloudflare november';
   const form=f.d.getElementById('financeExpenseAmount').form;assert.ok(form);form.id='expenseForm';submit(f,'expenseForm');await waitFor(()=>posts===1);submit(f,'expenseForm');assert.equal(posts,1);
   first.resolve(Response.json({error:'Tijdelijk niet beschikbaar.'},{status:503}));await waitFor(()=>!form.querySelector('button').disabled);assert.match(f.d.getElementById('financeStatus').textContent,/Tijdelijk/);submit(f,'expenseForm');await waitFor(()=>posts===2);await waitFor(()=>!form.querySelector('button').disabled);
-  const bodies=f.calls.filter(([,init])=>init.method==='POST').map(([,init])=>JSON.parse(init.body));assert.deepEqual(bodies[0],bodies[1]);assert.equal(bodies[0].amountCents,549);assert.equal(Object.hasOwn(bodies[0],'jobId'),false);assert.match(bodies[0].idempotencyKey,/^[a-f0-9-]{36}$/);assert.equal(f.d.getElementById('financeExpenseAmount').value,'');
+  const bodies=f.calls.filter(([,init])=>init.method==='POST').map(([,init])=>JSON.parse(init.body)),withoutProof=({verification,...body})=>body;assert.deepEqual(withoutProof(bodies[0]),withoutProof(bodies[1]));assert.notDeepEqual(bodies[0].verification,bodies[1].verification);assert.equal(bodies[0].amountCents,549);assert.equal(Object.hasOwn(bodies[0],'jobId'),false);assert.match(bodies[0].idempotencyKey,/^[a-f0-9-]{36}$/);assert.equal(f.d.getElementById('financeExpenseAmount').value,'');
  }finally{f.close();}
 });
 
@@ -105,7 +106,7 @@ test('policy edits send scaled integers and the loaded version, without client o
  try{
   f.d.getElementById('financePolicy-eurPerUsdMicros').value='0.94';f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='15.50';
   const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>f.calls.some(([,init])=>init.method==='POST'));
-  const [path,init]=f.calls.find(([,init])=>init.method==='POST'),body=JSON.parse(init.body);assert.equal(path,'/api/owner/finance/policy');assert.equal(body.expectedVersion,'profit-v1');assert.equal(body.eurPerUsdMicros,940000);assert.equal(body.dailyProviderLimitUsdMicros,15500000);assert.equal(body.providerVatBps,2100);assert.equal(body.minPriceCents,100);assert.equal(body.minProPriceCents,125);assert.equal(Object.keys(body).length,10);assert.equal(Object.hasOwn(body,'owner'),false);
+  const [path,init]=f.calls.find(([,init])=>init.method==='POST'),body=JSON.parse(init.body);assert.equal(path,'/api/owner/finance/policy');assert.equal(body.expectedVersion,'profit-v1');assert.equal(body.eurPerUsdMicros,940000);assert.equal(body.dailyProviderLimitUsdMicros,15500000);assert.equal(body.providerVatBps,2100);assert.equal(body.minPriceCents,100);assert.equal(body.minProPriceCents,125);assert.equal(Object.keys(body).length,11);assert.equal(Object.hasOwn(body,'owner'),false);assert.equal(f.verifications[0].operation,'finance-policy');assert.equal(Object.hasOwn(f.verifications[0].payload,'verification'),false);assert.deepEqual(body.verification.credential,{id:'test-only-assertion-1'});
  }finally{f.close();}
 });
 
@@ -168,5 +169,49 @@ test('a zero correction voids a mistyped cost, while a new non-Fal zero expense 
   f.d.querySelector('.finance-correct').click();f.d.getElementById('financeExpenseAmount').value='0';f.d.getElementById('financeExpenseNote').value='Ongedaan gemaakt';const form=f.d.getElementById('financeExpenseAmount').form;form.id='expenseForm';submit(f,'expenseForm');await waitFor(()=>!form.querySelector('button').disabled);
   const bodies=f.calls.filter(([,init])=>init.method==='POST').map(([,init])=>JSON.parse(init.body));assert.equal(bodies.length,1);assert.equal(bodies[0].amountCents,0);assert.equal(bodies[0].category,'other');assert.equal(bodies[0].replacesExpenseId,value.expenses[0].id);
   f.d.getElementById('financeExpenseCategory').value='other';f.d.getElementById('financeExpenseDate').value='2026-11-09';f.d.getElementById('financeExpenseAmount').value='0';f.d.getElementById('financeExpenseNote').value='Nieuwe nulkost';submit(f,'expenseForm');await new Promise(r=>setTimeout(r,10));assert.equal(f.calls.filter(([,init])=>init.method==='POST').length,1);
+ }finally{f.close();}
+});
+
+test('cancelled or setup-required verification never writes and keeps the financial overview readable',async()=>{
+ for(const code of ['verification_cancelled','owner_security_setup_required']){
+  const f=await ready(fixture({verificationHandler:()=>{throw Object.assign(Error('Bevestiging nodig.'),{code,status:428});}}));try{
+   f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='15';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>!form.querySelector('button').disabled);
+   assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.equal(f.d.getElementById('financeButton').hidden,false);assert.match(f.d.getElementById('financeStatus').textContent,/Bevestiging nodig/);assert.match(f.d.getElementById('financeCash').textContent,/25,00/);assert.equal(f.verifications.length,1);
+  }finally{f.close();}
+ }
+});
+
+test('a missing verification module blocks writes while keeping the overview readable',async()=>{
+ const f=await ready(fixture());try{
+  delete f.win.rigOwnerVerification;f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='15';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>!form.querySelector('button').disabled);
+  assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.match(f.d.getElementById('financeStatus').textContent,/Vernieuw RIG/);assert.equal(f.d.getElementById('financeButton').hidden,false);
+ }finally{f.close();}
+});
+
+test('an assertion arriving after logout never sends a financial write',async()=>{
+ const pending=deferred(),f=await ready(fixture({verificationHandler:()=>pending.promise}));try{
+  f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='15';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>f.verifications.length===1);f.d.getElementById('authLogout').click();f.stop();pending.resolve({challengeId:'test-only-late-challenge',credential:{id:'test-only-late-assertion'}});await new Promise(r=>setTimeout(r,10));
+  assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.equal(f.d.getElementById('financeDialog'),null);
+ }finally{f.close();}
+});
+
+test('a new policy version loaded during verification discards the obsolete action before writing',async()=>{
+ const pending=deferred(),value=summary(),f=await ready(fixture({verificationHandler:()=>pending.promise,handler:()=>Response.json(value)}));try{
+  f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='15';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>f.verifications.length===1);value.policy.version='profit-v2';value.policy.dailyProviderLimitUsdMicros=8000000;
+  const refresh=Array.from(f.d.querySelectorAll('#financeDialog button')).find(button=>button.textContent==='Vernieuwen');refresh.click();await waitFor(()=>f.calls.length===2);await waitFor(()=>f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value==='8');pending.resolve({challengeId:'test-only-old-version',credential:{id:'test-only-old-assertion'}});await waitFor(()=>!form.querySelector('button').disabled);
+  assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.match(f.d.getElementById('financeStatus').textContent,/ondertussen gewijzigd/);
+ }finally{f.close();}
+});
+
+test('a safe decrease classified by the server sends the unchanged original policy without proof',async()=>{
+ const f=await ready(fixture({verificationHandler:()=>null}));try{
+  f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='5';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>f.calls.some(([,init])=>init.method==='POST'));
+  const body=JSON.parse(f.calls.find(([,init])=>init.method==='POST')[1].body);assert.deepEqual(body,f.verifications[0].payload);assert.equal(Object.hasOwn(body,'verification'),false);assert.equal(body.dailyProviderLimitUsdMicros,5000000);
+ }finally{f.close();}
+});
+
+test('an HTML authorization denial on refresh removes previously shown private financial data',async()=>{
+ let denied=false;const f=await ready(fixture({handler:()=>denied?new Response('<h1>Forbidden</h1>',{status:403}):Response.json(summary())}));try{
+  denied=true;f.d.getElementById('financeButton').click();await waitFor(()=>f.d.getElementById('financeDialog')===null);assert.equal(f.d.getElementById('financeButton').hidden,true);assert.doesNotMatch(f.d.body.textContent,/Ontvangen betalingen|23,25/);
  }finally{f.close();}
 });
