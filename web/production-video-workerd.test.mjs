@@ -60,12 +60,12 @@ test('fresh paid wallet: verified purchase, owned quote, one reserve, private re
  const f=await fixture();try{
   const h=await f.service(),select={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
   let r=await f.call(h,'/api/video-config');assert.equal(r.status,200);assert.deepEqual(await r.json(),{enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro','edit-standard']});
-  r=await f.call(h,'/api/estimate/fal?quality=pro&duration=4');assert.equal(r.status,200);const estimate=await r.json();assert.equal(estimate.customerProposal.priceCents,100);assert.equal(estimate.customerProposal.testOnly,false);assert.equal(estimate.providerEstimate.currency,'USD');
+  r=await f.call(h,'/api/estimate/fal?quality=pro&duration=4');assert.equal(r.status,200);const estimate=await r.json();assert.equal(estimate.customerProposal.priceCents,100);assert.equal(estimate.customerProposal.testOnly,false);assert.equal(estimate.providerEstimate,undefined);assert.doesNotMatch(JSON.stringify(estimate),/USD|usdMicros|providerEstimate/);
   const before=f.stats();r=await h(new Request(SITE+'/api/assets',{method:'POST',headers:{origin:SITE,'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:new Uint8Array(64)}));assert.equal(r.status,402);assert.equal(f.stats().mediaCalls,before.mediaCalls);
   assert.equal((await f.call(h,'/api/generation-quotes',select)).status,400);assert.equal(await f.balance(),0);
   await f.fund();assert.equal(await f.balance(),500);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,1);
   const bob=await f.service(BOB);assert.equal((await f.call(bob,'/api/generation-quotes',select)).status,400);
-  r=await f.call(h,'/api/generation-quotes',select);assert.equal(r.status,201,await r.clone().text());const quote=await r.json();assert.equal(quote.priceCents,100);
+  r=await f.call(h,'/api/generation-quotes',select);assert.equal(r.status,201,await r.clone().text());const quote=await r.json();assert.equal(quote.priceCents,100);assert.equal(quote.providerEstimateUsdMicros,undefined);assert.doesNotMatch(JSON.stringify(quote),/USD|usdMicros|providerEstimate/);
   const submission={quoteId:quote.id,idempotencyKey:'paid-generation-001'};
   const results=await Promise.all([f.call(h,'/api/generations',submission),f.call(h,'/api/generations',submission)]);assert.ok(results.every(x=>[200,202,503].includes(x.status)));const accepted=results.find(x=>x.status===202);assert.ok(accepted,await Promise.all(results.map(x=>x.clone().text())));const job=await accepted.json();
   assert.equal(f.stats().dispatches,1);assert.equal(await f.balance(),400);assert.equal((await f.call(h,'/api/generations',submission)).status,200);assert.equal(f.stats().dispatches,1);

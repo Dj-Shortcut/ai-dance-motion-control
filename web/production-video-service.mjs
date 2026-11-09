@@ -45,7 +45,9 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     if(prices?.currency!=='USD'||prices?.unit!=='second'||!Number.isFinite(providerRate)||providerRate<=0||providerRate>1000)return unavailable();
     const rateUsdMicrosPerSecond=Math.ceil(providerRate*1e6),usdMicros=rateUsdMicrosPerSecond*billedSeconds;
     if(!Number.isSafeInteger(usdMicros)||usdMicros<=0||usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return unavailable();
-    return reply({quality,durationSeconds:duration,billedSeconds,...(funding==='owner-provider'?{funding}:{customerProposal:{currency:'EUR',priceCents:cents,version:mapped.RIG_PRICE_VERSION,binding:false,testOnly:false}}),providerEstimate:{currency:'USD',usdMicros,rateUsdMicrosPerSecond,rateCheckedOn:new Date().toISOString().slice(0,10),binding:false}});
+    // Provider costs are private business information. Customers receive only
+    // their own EUR estimate; the trusted owner retains the direct-Fal view.
+    return reply({quality,durationSeconds:duration,billedSeconds,...(funding==='owner-provider'?{funding,providerEstimate:{currency:'USD',usdMicros,rateUsdMicrosPerSecond,rateCheckedOn:new Date().toISOString().slice(0,10),binding:false}}:{customerProposal:{currency:'EUR',priceCents:cents,version:mapped.RIG_PRICE_VERSION,binding:false,testOnly:false}})});
    }
    if(url.pathname==='/api/assets'&&req.method==='POST'){
     const wallet=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance,EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();

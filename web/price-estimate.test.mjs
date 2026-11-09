@@ -34,16 +34,19 @@ test('estimate route is owner-only, test-only, nonbinding and disallows malforme
   assert.equal((await ingress.fetch(req('quality=standard&duration=30'),env,owner)).status,200);
   assert.equal((await handlePriceEstimate(req('quality=standard&duration=3'),{...env,RIG_MODE:'live'})).status,503);
 });
-test('web preview displays the provider estimate while explicitly leaving customer price unset',async()=>{
+test('private owner preview displays the provider estimate without customer-pricing suggestions',async()=>{
+ for(const configured of [false,true]){
   const elements=new Map();
   function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,value:'',duration:0,files:[],listeners:{},addEventListener(type,fn){(this.listeners[type]??=[]).push(fn)},showModal(){},close(){}});return elements.get(id)}
   const quality=element('quality');quality.value='standard';
   element('motionInput').files=[{}];element('motionVideo').duration=5;element('duration').value='3';element('start').value='0';
-  const context={document:{getElementById:element,querySelectorAll:()=>[quality],querySelector:()=>quality,addEventListener(){}},window:{},sessionStorage:{getItem:()=>null,setItem(){},removeItem(){}},fetch:async path=>path==='/api/generations/recent'?Response.json({job:null}):handlePriceEstimate(new Request(origin+path),env),Response,Request,URL,URLSearchParams,Intl,Number,queueMicrotask,setTimeout,clearTimeout};
+  const previewEnv=configured?{...env,RIG_ESTIMATE_EUR_STANDARD_CENTS:'25',RIG_ESTIMATE_EUR_VERSION:'owner-only-proposal'}:env;
+  const context={document:{getElementById:element,querySelectorAll:()=>[quality],querySelector:()=>quality,addEventListener(){}},window:{},sessionStorage:{getItem:()=>null,setItem(){},removeItem(){}},fetch:async path=>path==='/api/generations/recent'?Response.json({job:null}):handlePriceEstimate(new Request(origin+path),previewEnv),Response,Request,URL,URLSearchParams,Intl,Number,queueMicrotask,setTimeout,clearTimeout};
   runInNewContext(readFileSync(new URL('./frontend/generation-ui.js',import.meta.url),'utf8'),context);
   element('motionVideo').listeners.loadedmetadata[0]();await new Promise(resolve=>setTimeout(resolve,300));
-  assert.match(element('providerEstimate').textContent,/0,38/);assert.match(element('providerEstimate').textContent,/klantprijs is nog niet ingesteld/);assert.equal(element('providerEstimate').hidden,false);
+  assert.match(element('providerEstimate').textContent,/0,38/);assert.doesNotMatch(element('providerEstimate').textContent,/klantprijs|voorstel|aanbevolen|€|0,75/i);assert.equal(element('providerEstimate').hidden,false);
   element('duration').value='9';element('duration').listeners.input[0]();assert.equal(element('providerEstimate').hidden,true);
+ }
 });
 
 test('rapid duplicate estimate events make one request, cache it, and rate limits are explained',async()=>{
