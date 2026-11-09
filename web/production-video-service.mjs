@@ -1,6 +1,6 @@
 // Private composition only. The caller must authenticate the signed production
 // Sites subject once and pass its production-owned UUID and reconstructed request.
-import {createProductionGenerationContext,isProductionGenerationContext} from './production-generation-context.mjs';
+import {createProductionGenerationContext,isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {createClosedVideoService,closedVideoTesting} from './closed-video-service.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
@@ -15,6 +15,7 @@ const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&/^[1-9][0-9]*$/.test(env.RI
 export async function createProductionVideoService(env,{trustedUserId,lease,providerFetch=fetch,gatewayFetch=fetch,priceFetch,productionContext}={}){
  const context=productionContext??await createProductionGenerationContext(env);
  if(!USER.test(trustedUserId||'')||!isProductionGenerationContext(context,{db:env.PRODUCTION_DB})||context.env.PRODUCTION_DB!==env.PRODUCTION_DB)return unavailable;
+ const funding=productionFundingKind(context,trustedUserId);
  const mapped={...context.env,RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN,RIG_R2_INPUTS_ENABLED:'no',RIG_O3_INLINE_INPUTS_ENABLED:'no'};
  const verifyTenant=async()=>{
   const current=await validateProductionTenant(env);
@@ -31,7 +32,7 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
    if(!await verifyTenant())return unavailable();
    if(url.pathname==='/api/video-config'){
     if(req.method!=='GET'||url.search)return reply({error:'Aanvraag geweigerd.'},400);
-    return reply({enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro',...(editEnabled(mapped)?['edit-standard']:[])]});
+    return reply({enabled:true,funding,mode:'live',...(funding==='owner-provider'?{providerCurrency:'USD'}:{currency:'EUR'}),qualities:['standard','pro',...(editEnabled(mapped)?['edit-standard']:[])]});
    }
    if(url.pathname==='/api/estimate/fal'){
     if(req.method!=='GET')return reply({error:'Methode niet toegestaan.'},405);
@@ -44,12 +45,12 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     if(prices?.currency!=='USD'||prices?.unit!=='second'||!Number.isFinite(providerRate)||providerRate<=0||providerRate>1000)return unavailable();
     const rateUsdMicrosPerSecond=Math.ceil(providerRate*1e6),usdMicros=rateUsdMicrosPerSecond*billedSeconds;
     if(!Number.isSafeInteger(usdMicros)||usdMicros<=0||usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return unavailable();
-    return reply({quality,durationSeconds:duration,billedSeconds,customerProposal:{currency:'EUR',priceCents:cents,version:mapped.RIG_PRICE_VERSION,binding:false,testOnly:false},providerEstimate:{currency:'USD',usdMicros,rateUsdMicrosPerSecond,rateCheckedOn:new Date().toISOString().slice(0,10),binding:false}});
+    return reply({quality,durationSeconds:duration,billedSeconds,...(funding==='owner-provider'?{funding}:{customerProposal:{currency:'EUR',priceCents:cents,version:mapped.RIG_PRICE_VERSION,binding:false,testOnly:false}}),providerEstimate:{currency:'USD',usdMicros,rateUsdMicrosPerSecond,rateCheckedOn:new Date().toISOString().slice(0,10),binding:false}});
    }
    if(url.pathname==='/api/assets'&&req.method==='POST'){
     const wallet=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance,EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();
     if(wallet?.frozen===1)return reply({error:'Je tegoed wordt gecontroleerd.'},403);
-    if(!Number.isSafeInteger(wallet?.balance)||wallet.balance<=0)return reply({error:'Koop eerst RIG-tegoed om bestanden voor te bereiden.'},402);
+    if(funding!=='owner-provider'&&(!Number.isSafeInteger(wallet?.balance)||wallet.balance<=0))return reply({error:'Koop eerst RIG-tegoed om bestanden voor te bereiden.'},402);
    }
    // Existing dispatched jobs may still be polled and stored after a freeze.
    // Their result cannot trigger a new reserve or another provider submission.

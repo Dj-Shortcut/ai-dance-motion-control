@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS rig_generation_quotes (
   user_id TEXT NOT NULL,
   model TEXT NOT NULL,
   input_json TEXT NOT NULL,
+  funding_kind TEXT NOT NULL DEFAULT 'credits' CHECK(funding_kind IN ('credits','owner-provider')),
   price_cents INTEGER NOT NULL CHECK (price_cents > 0),
   pricing_version TEXT NOT NULL,
   duration_seconds REAL NOT NULL,
@@ -102,6 +103,19 @@ CREATE TABLE IF NOT EXISTS rig_generation_jobs (
   UNIQUE(user_id,idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS rig_generation_jobs_user ON rig_generation_jobs(user_id);
+
+-- Owner usage is a provider-cost journal, never a purchased-credit wallet.
+CREATE TABLE rig_owner_provider_usage (
+  job_id TEXT PRIMARY KEY,
+  quote_id TEXT NOT NULL UNIQUE REFERENCES rig_generation_quotes(id),
+  user_id TEXT NOT NULL,
+  estimated_usd_micros INTEGER NOT NULL CHECK(estimated_usd_micros > 0),
+  state TEXT NOT NULL CHECK(state IN ('authorized','completed','failed')),
+  created_at INTEGER NOT NULL,
+  finalized_at INTEGER,
+  CHECK((state='authorized' AND finalized_at IS NULL) OR
+    (state IN ('completed','failed') AND finalized_at IS NOT NULL))
+);
 
 CREATE TABLE IF NOT EXISTS rig_generation_cancelled_intents (user_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,quote_id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,idempotency_key));
 -- Deploy through schema migrations. No runtime schema creation.

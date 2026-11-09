@@ -1,12 +1,17 @@
 // Only the authenticated Site requests approvals. The raw nonce is returned
 // once to the UI and never stored; repeated confirmations share one job key.
-import {isProductionGenerationContext} from './production-generation-context.mjs';
+import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[A-Za-z0-9_-]{1,80}$/,TOKEN=/^[A-Za-z0-9_-]{43}$/;
 const hash=async token=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))].map(n=>n.toString(16).padStart(2,'0')).join('');
 export function createChatgptApprovals(db,{clock=Date.now,mode='test',productionContext}={}){
  if(typeof db?.prepare!=='function')throw Error('Missing approval store');
  if(!['test','live'].includes(mode)||mode==='live'&&!isProductionGenerationContext(productionContext,{db}))throw Error('Invalid approval environment');
+ // Only the server's signed production owner can approve provider-funded
+ // quotes. The persisted quote decides funding; a browser cannot select it.
+ const eligibleFunding=user=>mode==='live'?
+  `(q.funding_kind='credits' AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents OR q.funding_kind='owner-provider' AND ${productionFundingKind(productionContext,user)==='owner-provider'?'1':'0'}=1)`:
+  'COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents';
  return {
   async issue(user,{quoteId}={}){
    if(!USER.test(user||'')||!ID.test(quoteId||''))return null;
@@ -18,7 +23,7 @@ export function createChatgptApprovals(db,{clock=Date.now,mode='test',production
      AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?)
      AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=q.user_id)
      AND NOT EXISTS(SELECT 1 FROM rig_generation_jobs WHERE quote_id=q.id)
-     AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents
+     AND (${eligibleFunding(user)})
     RETURNING expires_at`).bind(await hash(token),key,quoteId,user,now,mode).first();
    return row?{approvalToken:token,idempotencyKey:key,expiresAt:row.expires_at}:null;
   },
@@ -29,6 +34,8 @@ export function createChatgptApprovals(db,{clock=Date.now,mode='test',production
     WHERE token_hash=? AND user_id=? AND quote_id=?
      AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?)
      AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?)
+     ${mode==='live'?`AND EXISTS(SELECT 1 FROM rig_generation_quotes q WHERE q.id=rig_chatgpt_approvals.quote_id AND q.user_id=rig_chatgpt_approvals.user_id AND
+       (q.funding_kind='credits' OR q.funding_kind='owner-provider' AND (${productionFundingKind(productionContext,user)==='owner-provider'?'1':'0'}=1 OR EXISTS(SELECT 1 FROM rig_generation_jobs j WHERE j.quote_id=q.id AND j.user_id=q.user_id AND j.idempotency_key=rig_chatgpt_approvals.idempotency_key))))`:''}
      AND (expires_at>? OR (used_at IS NOT NULL AND EXISTS(
        SELECT 1 FROM rig_generation_jobs j WHERE j.user_id=rig_chatgpt_approvals.user_id
        AND j.quote_id=rig_chatgpt_approvals.quote_id AND j.idempotency_key=rig_chatgpt_approvals.idempotency_key)))

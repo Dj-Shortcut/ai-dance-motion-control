@@ -16,3 +16,11 @@ test('paid capability keeps credit funding and customer language only with verif
  const f=fixture(Response.json({enabled:true,funding:'credits',mode:'live',currency:'EUR'}));
  try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),true);assert.equal(f.dom.window.rigVideoFunding,'credits');assert.equal(f.dom.window.rigVideoMode,'live');assert.match(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/RIG-tegoed/);assert.doesNotMatch(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/fal|testmodus/);}finally{f.dom.window.close();}
 });
+
+test('direct owner capability requires live USD and keeps the provider account distinct from RIG credits',async()=>{
+ for(const config of [{enabled:true,funding:'owner-provider'},{enabled:true,funding:'owner-provider',mode:'test',providerCurrency:'USD'},{enabled:true,funding:'owner-provider',mode:'live',providerCurrency:'EUR'}]){
+  const f=fixture(Response.json(config));try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),false);assert.equal(f.loaded(),0);}finally{f.dom.window.close();}
+ }
+ const f=fixture(Response.json({enabled:true,funding:'owner-provider',mode:'live',providerCurrency:'USD',qualities:['pro']}));
+ try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),true);assert.equal(f.dom.window.rigVideoFunding,'owner-provider');assert.equal(f.dom.window.rigVideoMode,'live');assert.match(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/eigen fal-account.*Fal-raming/);assert.doesNotMatch(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/Mollie|RIG-tegoed|testmodus/);}finally{f.dom.window.close();}
+});

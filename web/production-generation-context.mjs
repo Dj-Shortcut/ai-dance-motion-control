@@ -14,3 +14,9 @@ export async function createProductionGenerationContext(env){
 export function isProductionGenerationContext(context,{db,origin}={}){
  return Boolean(context&&contexts.has(context)&&context.mode==='live'&&(!db||context.env.DB===db)&&(!origin||context.env.RIG_PUBLIC_ORIGIN===origin));
 }
+// Funding is a server capability, never a browser-selected account role. A
+// persisted quote retains its original funding even if this setting changes.
+export function productionFundingKind(context,trustedUserId){
+ const owner=context?.env?.RIG_PRODUCTION_OWNER_USER_ID;
+ return isProductionGenerationContext(context)&&/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(owner||'')&&trustedUserId===owner?'owner-provider':'credits';
+}

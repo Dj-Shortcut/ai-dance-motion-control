@@ -16,10 +16,10 @@ const idSchema={type:'string',pattern:'^[A-Za-z0-9_-]{1,100}$'};
 const outputSchema={type:'object',additionalProperties:true};
 const fileSchema={type:'object',properties:{download_url:{type:'string',maxLength:8192},file_id:{type:'string',maxLength:256},mime_type:{type:'string',maxLength:100},file_name:{type:'string',maxLength:256}},required:['download_url','file_id'],additionalProperties:false};
 const nullableCents={anyOf:[{type:'integer',minimum:0,maximum:500},{type:'null'}]};
-const fundingSchema={enum:['owner','sponsored','credits',null]};
-const jobSchema=schema({jobId:idSchema,state:{enum:['submitting','queued','processing','unknown','needs_review','completed','failed']},priceCents:{type:'integer',minimum:1},currency:{const:'EUR'},videoUrl:{type:'string',format:'uri'},requiresAuthentication:{const:true}},['jobId','state']);
+const fundingSchema={enum:['owner','sponsored','credits','owner-provider',null]};
+const jobSchema=schema({jobId:idSchema,state:{enum:['submitting','queued','processing','unknown','needs_review','completed','failed']},priceCents:{type:'integer',minimum:1},currency:{const:'EUR'},funding:{const:'owner-provider'},providerCurrency:{const:'USD'},providerEstimateUsdMicros:{type:'integer',minimum:1},finalizationConfirmed:{const:true},videoUrl:{type:'string',format:'uri'},requiresAuthentication:{const:true}},['jobId','state']);
 const OUTPUTS={
- rig_get_account:schema({userId:{type:'string',pattern:'^u-[0-9a-f-]{36}$'},currency:{const:'EUR'},freeCredit:schema({state:{enum:['eligible','unavailable']},remainingCents:nullableCents},['state','remainingCents']),videoEnabled:{type:'boolean'},funding:fundingSchema},['userId','currency','freeCredit','videoEnabled','funding']),
+ rig_get_account:schema({userId:{type:'string',pattern:'^u-[0-9a-f-]{36}$'},currency:{const:'EUR'},freeCredit:schema({state:{enum:['eligible','unavailable']},remainingCents:nullableCents},['state','remainingCents']),videoEnabled:{type:'boolean'},funding:fundingSchema,providerAccountLabel:{const:'Eigen fal-account'},providerCurrency:{const:'USD'},rigCredit:schema({balanceCents:{type:'integer',minimum:0},currency:{const:'EUR'},frozen:{type:'boolean'}},['balanceCents','currency','frozen'])},['userId','currency','freeCredit','videoEnabled','funding']),
  rig_get_capabilities:schema({videoEnabled:{type:'boolean'},funding:fundingSchema,workflows:{type:'array',items:schema({id:idSchema,maxDurationSeconds:{type:'integer',minimum:3,maximum:30},animalSingingVerified:{type:'boolean'}},['id','maxDurationSeconds','animalSingingVerified'])},directFilePreparation:{type:'boolean'},explicitPriceConfirmation:{type:'boolean'}},['videoEnabled','funding','workflows','directFilePreparation','explicitPriceConfirmation']),
  rig_activate_invitation:schema({state:{enum:['owner','unavailable','redeemed']},amountCents:{const:500},currency:{const:'EUR'}},['state']),
  rig_open_studio:schema({studioUrl:{type:'string',format:'uri'},requiresAuthentication:{const:true}},['studioUrl','requiresAuthentication']),
@@ -64,6 +64,10 @@ async function api(context,path,method='GET',value){
 const money=c=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(c/100);
 function safeJob(value){
  if(!object(value)||!uuid(value.id)||!['submitting','queued','processing','unknown','needs_review','completed','failed'].includes(value.state))throw Error('Invalid job');
+ if(value.funding==='owner-provider'){
+  if(value.providerCurrency!=='USD'||!Number.isSafeInteger(value.providerEstimateUsdMicros)||value.providerEstimateUsdMicros<1||Object.hasOwn(value,'priceCents')||Object.hasOwn(value,'currency'))throw Error('Invalid provider-funded job');
+  return {jobId:value.id,state:value.state,funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:value.providerEstimateUsdMicros,...(value.state==='failed'&&value.finalizationConfirmed===true?{finalizationConfirmed:true}:{})};
+ }
  // An ambiguous 202 from the existing generation API deliberately contains
  // only its durable job ID and state. Preserve that recovery handle.
  if(value.state==='unknown'&&value.priceCents===undefined&&value.currency===undefined)return {jobId:value.id,state:value.state};
@@ -89,9 +93,9 @@ async function allowance(context){
  return {state:'eligible',remainingCents:data.remainingCents};
 }
 async function videoConfig(context){
- const value=await api(context,'/api/video-config'),websiteOnly=value?.funding==='credits';
- if(typeof value?.enabled!=='boolean'||value.enabled&&!['owner','sponsored','credits'].includes(value.funding)||websiteOnly&&(value.mode!=='live'||value.currency!=='EUR'))throw Error('Invalid capability');
- return {enabled:value.enabled,funding:value.enabled?value.funding:null,websiteOnly};
+ const value=await api(context,'/api/video-config'),ownerProvider=value?.funding==='owner-provider',websiteOnly=['credits','owner-provider'].includes(value?.funding);
+ if(typeof value?.enabled!=='boolean'||value.enabled&&!['owner','sponsored','credits','owner-provider'].includes(value.funding)||value.funding==='credits'&&(value.mode!=='live'||value.currency!=='EUR')||ownerProvider&&(value.mode!=='live'||value.providerCurrency!=='USD'))throw Error('Invalid capability');
+ return {enabled:value.enabled,funding:value.enabled?value.funding:null,websiteOnly,ownerProvider};
 }
 async function pluginGeneration(context){
  const capability=await videoConfig(context);
@@ -112,6 +116,11 @@ export function createRigMcp({authenticate,appOrigin,prepareFiles,issueApproval,
  async function call(name,a,context){
   if(name==='rig_get_account'){
    if(!empty(a))fail('Controleer je aanvraag.');const gift=await allowance(context),cap=await videoConfig(context);
+   if(cap.ownerProvider){
+    const wallet=await api(context,'/api/payments/balance');
+    if(wallet?.mode!=='live'||wallet.currency!=='EUR'||!Number.isSafeInteger(wallet.balance)||wallet.balance<0||typeof wallet.frozen!=='boolean')throw Error('Invalid RIG wallet');
+    return textResult({userId:context.userId,currency:'EUR',freeCredit:gift,videoEnabled:cap.enabled,funding:cap.funding,providerAccountLabel:'Eigen fal-account',providerCurrency:'USD',rigCredit:{balanceCents:wallet.balance,currency:'EUR',frozen:wallet.frozen}},`Eigen fal-account: maak je video op de RIG-website en bekijk daar eerst de Fal-raming. Je afzonderlijke RIG-tegoed is ${money(wallet.balance)}; dit is geen Fal-saldo. Het werkelijke Fal-saldo lees je op fal.ai.`);
+   }
    return textResult({userId:context.userId,currency:'EUR',freeCredit:gift,videoEnabled:cap.enabled,funding:cap.funding},gift.state==='eligible'?`Je hebt ${money(gift.remainingCents)} gratis RIG-testtegoed over.`:cap.websiteOnly?'Je RIG-account is actief. Bekijk je gekochte tegoed en maak een video op de RIG-website.':'Er is nog geen gratis testtegoed aan deze RIG-account gekoppeld.');
   }
   if(name==='rig_get_capabilities'){

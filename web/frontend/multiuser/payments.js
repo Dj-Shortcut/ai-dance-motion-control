@@ -5,6 +5,7 @@
   const message=text=>{byId('creditsMessage').textContent=text;};
   const requestIdKey='rig-payment-request';
   const sponsored=()=>window.rigVideoFunding==='sponsored';
+  const ownerProvider=()=>window.rigVideoFunding==='owner-provider';
   const native=()=>window.rigNativeSite===true;
   let purchaseReady=false,balanceRequestSequence=0,dialogSequence=0,resumeUrl=null,resumeContext=null;
   let payment={mode:null,enabled:false,frozen:false};
@@ -21,12 +22,12 @@
     // Site must receive an explicit authenticated checkout capability.
     return {mode:native()?null:'test',enabled:!native()&&!sponsored(),frozen:data?.frozen===true};
   }
-  const canPurchase=()=>payment.enabled&&!payment.frozen;
-  const budgetLabel=()=>payment.mode==='live'?'RIG-tegoed':sponsored()?'Gratis RIG-tegoed':window.rigVideoFunding==='owner'?'RIG-testbudget':'RIG-testtegoed';
+  const canPurchase=()=>!ownerProvider()&&payment.enabled&&!payment.frozen;
+  const budgetLabel=()=>ownerProvider()?'Eigen fal-account':payment.mode==='live'?'RIG-tegoed':sponsored()?'Gratis RIG-tegoed':window.rigVideoFunding==='owner'?'RIG-testbudget':'RIG-testtegoed';
   function configureCreditsDialog(){
     const gift=sponsored()&&payment.mode!=='live',explanation=byId('creditExplanation');
     byId('creditsTitle').textContent=budgetLabel();
-    if(explanation)explanation.textContent=payment.mode==='live'?'Koop RIG-tegoed in euro. Je ziet de prijs vóór elke video. Dit staat los van een eigen fal.ai-saldo.':gift?'Gratis RIG-tegoed voor je testvideo’s. Je betaalt niets; de maker betaalt de generatie.':window.rigVideoFunding==='owner'?'Dit is fictief RIG-testbudget. Je echte fal-tegoed staat apart op fal.ai.':'Dit is RIG-testtegoed voor deze proef; geen saldo van fal.ai.';
+    if(explanation)explanation.textContent=ownerProvider()?'Je video’s gebruiken het gekoppelde fal-account. Je hoeft hiervoor geen RIG-tegoed te kopen. Je ziet de Fal-raming vóór je bevestigt.':payment.mode==='live'?'Koop RIG-tegoed in euro. Je ziet de prijs vóór elke video. Dit staat los van een eigen fal.ai-saldo.':gift?'Gratis RIG-tegoed voor je testvideo’s. Je betaalt niets; de maker betaalt de generatie.':window.rigVideoFunding==='owner'?'Dit is fictief RIG-testbudget. Je echte fal-tegoed staat apart op fal.ai.':'Dit is RIG-testtegoed voor deze proef; geen saldo van fal.ai.';
     byId('refreshPayment').hidden=!canPurchase();
     if(!canPurchase()){setPurchaseReady(false);byId('packageList').replaceChildren();clearResume();}
   }
@@ -46,6 +47,13 @@
   }
   async function refreshBalance(){
     const sequence=++balanceRequestSequence,ctx=captureContext(),funding=window.rigVideoFunding,nativeMode=native();
+    if(ownerProvider()){
+      if(!current(ctx))return false;
+      payment={mode:null,enabled:false,frozen:false};configureCreditsDialog();
+      byId('creditsButton').textContent=budgetLabel();
+      message('RIG kan je Fal-saldo niet uitlezen. Bekijk je saldo en werkelijke kosten op fal.ai.');
+      return true;
+    }
     try{
       const gift=sponsored(),useGiftStatus=gift&&!nativeMode,value=await request(useGiftStatus?'/api/sponsor-invitations/status':'/api/payments/balance',{},ctx),balance=useGiftStatus?value.remainingCents:value.balance;
       if(!Number.isSafeInteger(balance)||(useGiftStatus&&(value.state!=='eligible'||balance<0||balance>500)))throw Error();

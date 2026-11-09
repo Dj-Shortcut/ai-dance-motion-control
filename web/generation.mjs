@@ -38,9 +38,20 @@ function configured(s) {
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
   return typeof s?.authenticate === 'function' && typeof s?.assets?.getOwned === 'function' && typeof s?.assets?.uploadOwned === 'function' && typeof s?.quotes?.create === 'function' && typeof s?.quotes?.getOwned === 'function' && typeof s?.jobs?.getByIdempotency === 'function' && typeof s?.jobs?.getRecent === 'function' && typeof s?.jobs?.begin === 'function' && typeof s?.jobs?.getOwned === 'function' && typeof s?.jobs?.authorizeDispatch === 'function' && typeof s?.jobs?.markSubmitted === 'function' && typeof s?.jobs?.markUnknown === 'function' && typeof s?.jobs?.markPreparationFailed === 'function' && typeof s?.jobs?.claimPoll === 'function' && typeof s?.jobs?.releasePoll === 'function' && typeof s?.jobs?.markCompleted === 'function' && typeof s?.jobs?.markProviderFailed === 'function' && typeof s?.results?.store === 'function' && typeof s?.results?.read === 'function' && typeof s?.falKey === 'string' && s.falKey.length>0 && s.falKey.length<1024 && Number.isSafeInteger(s?.pricing?.standard) && s.pricing.standard>0 && Number.isSafeInteger(s?.pricing?.pro) && s.pricing.pro>0 && typeof s.pricing.version==='string' && s.pricing.version.length>0;
 }
+function publicFunding(value) {
+  if(value.fundingKind==='owner-provider'){
+    const estimate=value.providerEstimateUsdMicros??value.input?.providerEstimateUsdMicros;
+    if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Invalid confirmed provider estimate');
+    return {funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:estimate};
+  }
+  return {priceCents:value.priceCents,currency:'EUR'};
+}
+function failedPreparation(job,message){
+  return {...publicJob(job),...(job.fundingKind==='owner-provider'?{finalizationConfirmed:true,message:`${message} Er is geen videogeneratie naar fal verstuurd.`}:{refundConfirmed:true,message:`${message} Je tegoed is teruggezet.`})};
+}
 function publicJob(job) {
   const failureCode=job.state==='failed'&&['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)?job.failureCode:null;
-  return { id:job.id, state:job.state, priceCents:job.priceCents, currency:'EUR',...(failureCode?{failureCode}:{}) };
+  return { id:job.id, state:job.state, ...publicFunding(job),...(failureCode?{failureCode}:{}) };
 }
 async function readJSON(req) {
   if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers.get('content-type') ?? '')) return null;
@@ -120,7 +131,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
-      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),priceCents:cents,currency:'EUR',expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})},201);
+      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})},201);
     }
     if (req.method==='POST' && path==='/api/generations') {
       const data=await readJSON(req);
@@ -138,21 +149,23 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(Object.hasOwn(data,'transferPolicy')||(temporaryLinks?data.transferConsent!==TEMPORARY_FAL_LINKS:Object.hasOwn(data,'transferConsent')))return fail('Bevestig opnieuw de prijs en de tijdelijke Fal-bestandslinks.',400);
       const inlineEdit=!temporaryLinks&&quote.model===MODEL['edit-standard']&&services.inlineO3Owner===user.id;
       if(inlineEdit&&!inlineFiveSeconds(quote.durationSeconds))return fail('Kies voor deze privéproef 5 seconden en vraag de prijs opnieuw op.',409);
-      if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
+      if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents,quote}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
       if(quote.input.data.quality!=='edit-standard'){
         const imageRef=quote.input.refs[0];
         if(!imageRef||imageRef.kind!=='image'||imageRef.id!==quote.input.data.imageId||!/^[a-f0-9]{64}$/.test(imageRef.sha256??''))return fail('Prijsopgave is niet geldig of verlopen.',409);
         try{if(typeof services.jobs.hasKnownSubjectRejection!=='function')throw Error('Subject check unavailable');if(await services.jobs.hasKnownSubjectRejection(user.id,imageRef.sha256))return rejectSubject(409)}catch{return fail('De fotocontrole is tijdelijk niet beschikbaar.',503)}
       }
-      let started; try {started=await services.jobs.begin({userId:user.id,quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,quote});} catch {return fail('Tegoed kon niet worden gereserveerd.',503);}
-      if (!started || !['created','existing','conflict','insufficient','pending','subject_rejected'].includes(started.kind)) return fail('Tegoed kon niet worden gereserveerd.',503);
+      const authorizationError=quote.fundingKind==='owner-provider'?'Je fal-opdracht kon niet veilig worden vastgelegd.':'Tegoed kon niet worden gereserveerd.';
+      let started; try {started=await services.jobs.begin({userId:user.id,quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,quote});} catch {return fail(authorizationError,503);}
+      if (!started || !['created','existing','conflict','insufficient','pending','subject_rejected'].includes(started.kind)) return fail(authorizationError,503);
       if (started.kind==='subject_rejected') return rejectSubject(409);
       if (started.kind==='conflict') return fail('Deze aanvraagcode of prijsopgave is al gebruikt.',409);
-      if (started.kind==='insufficient') return fail('Onvoldoende tegoed.',402);
+      if (started.kind==='insufficient') return fail(quote.fundingKind==='owner-provider'?'Je fal-opdracht is niet beschikbaar of je account wordt gecontroleerd.':'Onvoldoende tegoed.',402);
       if (started.kind==='pending') return fail('Een eerdere opdracht is nog niet afgerond. Controleer eerst de status.',409);
       if (!started.job || !ID.test(started.job.id??'')) return fail('Aanvraagstatus is onzeker.',503);
       if (started.kind==='existing') return respond(publicJob(started.job));
       const jobId=started.job.id;
+      const acceptedJob={...started.job,priceCents:quote.priceCents,fundingKind:quote.fundingKind,providerEstimateUsdMicros:quote.input.providerEstimateUsdMicros};
       let providerInput,providerBody;
       try {
         if(services.trialGuard){const estimate=quote.input.providerEstimateUsdMicros;if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Missing confirmed provider estimate');const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);if(current>estimate)throw Error('Provider price increased');}
@@ -195,10 +208,10 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         // No generation request has been sent yet. Release once, transactionally.
         try {
           const failed=await services.jobs.markPreparationFailed(user.id,jobId);
-          return respond({...publicJob(failed),refundConfirmed:true,message:'Bestanden konden niet worden voorbereid. Je tegoed is teruggezet.'});
+          return respond(failedPreparation(failed,'Bestanden konden niet worden voorbereid.'));
         } catch {
           try {await services.jobs.markUnknown(user.id,jobId);} catch {}
-          return respond({id:jobId,state:'unknown',message:'Het tegoed wordt gecontroleerd.'},202);
+          return respond({...publicJob(acceptedJob),state:'unknown',message:quote.fundingKind==='owner-provider'?'Je fal-opdracht wordt gecontroleerd. Start niet opnieuw.':'Het tegoed wordt gecontroleerd.'},202);
         }
       }
       // Serialize the one dispatch decision with account freezes. A lost DB
@@ -206,11 +219,11 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let authorized;
       try {authorized=await services.jobs.authorizeDispatch(user.id,jobId);} catch {
         try {await services.jobs.markUnknown(user.id,jobId);} catch {}
-        return respond({id:jobId,state:'unknown',message:'De opdracht wordt gecontroleerd.'},202);
+        return respond({...publicJob(acceptedJob),state:'unknown',message:'De opdracht wordt gecontroleerd.'},202);
       }
       if(authorized!==true){
-        try {const failed=await services.jobs.markPreparationFailed(user.id,jobId);return respond({...publicJob(failed),refundConfirmed:true,message:'De opdracht kon niet worden gestart. Je tegoed is teruggezet.'});}
-        catch {try {await services.jobs.markUnknown(user.id,jobId);} catch {}return respond({id:jobId,state:'unknown',message:'De opdracht wordt gecontroleerd.'},202);}
+        try {const failed=await services.jobs.markPreparationFailed(user.id,jobId);return respond(failedPreparation(failed,'De opdracht kon niet worden gestart.'));}
+        catch {try {await services.jobs.markUnknown(user.id,jobId);} catch {}return respond({...publicJob(acceptedJob),state:'unknown',message:'De opdracht wordt gecontroleerd.'},202);}
       }
       try {
         const signal=AbortSignal.timeout(30000);
@@ -219,19 +232,20 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if (!r.ok) throw Error('ambiguous');
         const result=await providerJSON(r,{signal}); if (!REQ_ID.test(result.request_id??'')) throw Error('ambiguous');
         await services.jobs.markSubmitted(user.id,jobId,result.request_id);
-        return respond({id:jobId,state:'queued',priceCents:quote.priceCents,currency:'EUR'},202);
+        return respond({...publicJob(acceptedJob),state:'queued'},202);
       } catch {
         try {await services.jobs.markUnknown(user.id,jobId);} catch {}
-        return respond({id:jobId,state:'unknown',message:'De inzending wordt gecontroleerd. Start niet opnieuw.'},202);
+        return respond({...publicJob(acceptedJob),state:'unknown',message:'De inzending wordt gecontroleerd. Start niet opnieuw.'},202);
       }
     }
     async function publicFailure(job) {
       if(job.state!=='failed')return publicJob(job);
       const inputFailure=['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode);
       if(inputFailure&&!REQ_ID.test(job.falRequestId??''))return publicJob(job);
-      const confirm=inputFailure?services.jobs.confirmInputFailureRefund:services.jobs.confirmFailureRefund;
+      const owner=job.fundingKind==='owner-provider';
+      const confirm=owner?services.jobs.confirmFailureFinalized:inputFailure?services.jobs.confirmInputFailureRefund:services.jobs.confirmFailureRefund;
       if(typeof confirm!=='function')return publicJob(job);
-      try {return {...publicJob(job),...(await confirm.call(services.jobs,user.id,job.id,job.falRequestId??null)===true?{refundConfirmed:true}:{})};}catch{return publicJob(job);}
+      try {return {...publicJob(job),...(await confirm.call(services.jobs,user.id,job.id,job.falRequestId??null)===true?(owner?{finalizationConfirmed:true}:{refundConfirmed:true}):{})};}catch{return publicJob(job);}
     }
     const match=path.match(/^\/api\/generations\/([a-zA-Z0-9_-]{1,100})(\/video)?$/);
     if(req.method==='GET' && match) {
