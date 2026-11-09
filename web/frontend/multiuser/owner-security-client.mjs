@@ -15,7 +15,7 @@ const ceremonyError=error=>{
 export function createOwnerVerification({window:browser,document=browser?.document,webauthn={startRegistration,startAuthentication,browserSupportsWebAuthn,cancel:()=>WebAuthnAbortService.cancelCeremony()}}={}){
  const request=browser?.rigRequest,active=browser?.rigSessionActive;
  if(!browser||!document||browser.rigNativeSite!==true||typeof request!=='function'||typeof active!=='function')throw Error('Je aanmelding is gewijzigd.');
- let disposed=false,busy=false,popup=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0;
+ let disposed=false,busy=false,popup=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0,refreshSequence=0;
  const current=()=>!disposed&&browser.rigRequest===request&&browser.rigSessionActive===active&&active()===true;
  const element=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
  const supported=()=>{try{return webauthn.browserSupportsWebAuthn()===true;}catch{return false;}};
@@ -88,7 +88,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
    if(value.status==='active'){pending=null;stopPoll();pendingNode.replaceChildren();pendingNode.hidden=true;await refresh();return;}
    if(value.status==='expired'||value.status==='rejected'){pending=null;stopPoll();pendingNode.hidden=true;status('Deze aanvraag is niet actief. Je kunt opnieuw instellen.',true);return;}
    if(value.status!=='pending')throw failure('Controleer de status opnieuw.','security_unavailable');
-  }catch(error){status(error.message,true);}
+  }catch(error){if(current()&&pending?.candidateId===token)status(error.message,true);}
   if(current()&&pending){stopPoll();poll=browser.setTimeout(()=>void pendingStatus(),10000);}
  }
  async function enroll(){
@@ -106,16 +106,20 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   }catch(error){const safe=ceremonyError(error);status(safe?.code==='verification_cancelled'?'Instellen geannuleerd. Er is nog geen apparaat geactiveerd.':safe.message,true);if(safe?.code==='browser_unsupported'&&current()&&mountRoot&&!mountRoot.querySelector('.owner-security-browser-hint'))mountRoot.append(browserHint());}
   finally{busy=false;if(current()&&setupButton)setupButton.disabled=!supported();}
  }
- async function refresh(){
-  if(!current())return;if(refreshButton)refreshButton.disabled=true;
+ async function refresh({manual=false}={}){
+  if(!current())return;const token=++refreshSequence;
+  if(refreshButton){refreshButton.disabled=true;refreshButton.textContent='Controleren…';}
+  mountRoot?.setAttribute('aria-busy','true');status('Beveiligingsstatus wordt gecontroleerd…');
   try{
    const value=await call('/api/owner/security');if(!Number.isSafeInteger(value?.activeCredentialCount)||value.activeCredentialCount<0||value.configured!==(value.activeCredentialCount>0))throw failure('De beveiligingsstatus is niet beschikbaar.','security_unavailable');
+   if(token!==refreshSequence)return;
+   const checked=manual?' Laatst gecontroleerd om '+new Date().toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+'.':'';
    setupButton.hidden=value.configured;
-   if(value.configured)status('Extra verificatie actief. Gevoelige handelingen bevestig je steeds op je apparaat.');
-   else if(!pending)status('Stel eerst je apparaat in. Gevoelige handelingen zijn tot dan geblokkeerd.');
+   if(value.configured){pending=null;stopPoll();pendingNode.replaceChildren();pendingNode.hidden=true;status('Extra verificatie actief. Gevoelige handelingen bevestig je steeds op je apparaat.'+checked);}
+   else status((pending?'Wacht op aparte goedkeuring. Je gegevens blijven leesbaar.':'Stel eerst je apparaat in. Gevoelige handelingen zijn tot dan geblokkeerd.')+checked);
    setupButton.disabled=!supported();if(pending)await pendingStatus();
-  }catch(error){status(error.message,true);}
-  finally{if(current()&&refreshButton)refreshButton.disabled=false;}
+  }catch(error){if(token===refreshSequence)status('Status controleren is niet gelukt. '+error.message,true);}
+  finally{if(current()&&token===refreshSequence){if(refreshButton){refreshButton.disabled=false;refreshButton.textContent='Status controleren';}mountRoot?.setAttribute('aria-busy','false');}}
  }
  function mount(container){
   check();if(mountRoot===container)return;
@@ -123,7 +127,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   const title=element('strong','Extra beveiliging');statusNode=element('p','Beveiligingsstatus ophalen…');statusNode.className='finance-status';statusNode.setAttribute('role','status');statusNode.setAttribute('aria-live','polite');
   const actions=element('div');actions.className='owner-verification-actions';setupButton=element('button','Apparaat instellen');refreshButton=element('button','Status controleren');setupButton.type=refreshButton.type='button';actions.append(setupButton,refreshButton);
   pendingNode=element('div');pendingNode.className='owner-security-pending';pendingNode.hidden=true;container.append(title,statusNode,actions,pendingNode);if(!supported())container.append(browserHint());
-  setupButton.addEventListener('click',()=>void enroll());refreshButton.addEventListener('click',()=>void refresh());void refresh();
+  setupButton.addEventListener('click',()=>void enroll());refreshButton.addEventListener('click',()=>void refresh({manual:true}));void refresh();
  }
  browser.addEventListener('pagehide',dispose);document.getElementById('authLogout')?.addEventListener('click',dispose);
  return {prepare,mount,dispose,cancel};
