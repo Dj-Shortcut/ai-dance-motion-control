@@ -4,6 +4,7 @@
 import {closedPaymentWithFetch} from './closed-test-payment.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {d1Limit} from './router.mjs';
+import {prepareCommercialCheckout,commercialPackageData} from './commercial-checkout.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail=()=>Response.json({error:'Betalen is tijdelijk niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 class PreDispatchFailure extends Error {}
@@ -78,10 +79,13 @@ export function createProductionPayment({transport}={}){
      if(!Number.isSafeInteger(balance?.balance))return fail();
      return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:true,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
+    if(req.method==='POST'&&url.pathname==='/api/payments/create'){
+     const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;
+    }
     const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,trustedUserId)||new Response(null,{status:404});
     if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
      const value=await response.json();
-     return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:{}),currency:'EUR',mode:'live',purchasesEnabled:true},{status:response.status,headers:response.headers});
+     return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:commercialPackageData(env)),currency:'EUR',mode:'live',purchasesEnabled:true},{status:response.status,headers:response.headers});
     }
     return response;
    }catch{return fail()}

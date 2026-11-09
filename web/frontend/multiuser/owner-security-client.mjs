@@ -1,6 +1,6 @@
 import {startRegistration,startAuthentication,browserSupportsWebAuthn,WebAuthnAbortService} from '@simplewebauthn/browser';
 
-const operations=new Set(['finance-policy','finance-expense','owner-generation']);
+const operations=new Set(['finance-policy','finance-expense','owner-generation','accounting-document','recovery-note','recovery-payment']);
 const identifier=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const failure=(message,code,status)=>Object.assign(Error(message),{code,status});
 const ceremonyError=error=>{

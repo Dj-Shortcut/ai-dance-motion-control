@@ -11,7 +11,7 @@ if(values['project-id']&&!/^appgprj_[A-Za-z0-9]{20,80}$/.test(values['project-id
 // Build in memory: source bundles and sibling checkouts are never overwritten.
 const browser=await build({entryPoints:[join(root,'frontend/multiuser/native-site-boot.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const security=await build({entryPoints:[join(root,'frontend/multiuser/owner-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
-const names=['index.html','style.css','media.js','app.js','payments.js','generation-ui.js','finance.js'];
+const names=['index.html','style.css','media.js','app.js','payments.js','generation-ui.js','owner-administration.js','finance.js'];
 const files=Object.fromEntries(await Promise.all(names.map(async name=>[`/multiuser/${name}`,await readFile(join(root,'frontend/multiuser',name),'utf8')])));
 files['/multiuser/index.html']=files['/multiuser/index.html']
  .replace('<button id="authLogin" class="auth-login" type="button" hidden>Inloggen met Google</button>','<a id="authLogin" class="auth-login" href="/signin-with-chatgpt?return_to=%2F" target="_top" hidden>Inloggen met ChatGPT</a>')

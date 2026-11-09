@@ -1,13 +1,15 @@
 // Production Sites identity: private payment Worker only, validated BEFORE
 // trusting a subject or request. Uses the same nonce and identity tables as
 // production video; never share these tables with the test database.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesOwnerSecurityPath,sitesPath,SITES_BODY_MAX} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesPath,SITES_BODY_MAX} from './sites-bridge-protocol.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {createPreparationBudget,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const equals=(a,b)=>{if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0};
 function allowed(path,method,allowGeneration,allowFinance,allowSecurity){
  if(sitesOwnerSecurityPath(path,method))return allowSecurity;
+ if(sitesAdministrationPath(path,method))return allowFinance;
+ if(sitesFinancePath(path,method))return allowFinance;
  return path==='/api/session'&&method==='GET'||sitesPaymentPath(path,method)||allowFinance&&sitesFinancePath(path,method)||allowGeneration&&sitesPath(path,method);
 }
 async function bytes(req,max){

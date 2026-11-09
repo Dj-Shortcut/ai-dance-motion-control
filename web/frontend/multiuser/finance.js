@@ -29,7 +29,7 @@
 
   function dispose(){
     if(disposed)return;disposed=true;loadSequence++;data=null;expensePending=null;policyPending=null;correction=null;
-    window.rigOwnerVerification?.cancel?.();
+    window.rigOwnerVerification?.cancel?.();window.rigOwnerAdministration?.dispose?.();
     button.hidden=true;button.closest('header')?.classList.remove('has-finance');button.removeEventListener('click',open);window.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
     if(dialog?.open)dialog.close();dialog?.remove();dialog=null;ui=null;
     if(window.rigFinanceDispose===dispose)delete window.rigFinanceDispose;
@@ -90,6 +90,8 @@
     for(const [key,label,scale,min,max,step]of policyFields){const input=field(policyForm,label,'financePolicy-'+key,'number');input.required=true;input.min=String(min);input.max=String(max);input.step=String(step);inputs.set(key,{input,scale});}
     const policyNote=element('p','Deze instellingen bewaken nieuwe video’s. De btw- en kostenreserves zijn begrotingsaannames, geen vaststelling van je facturen. De margecontrole kan de basisprijs verhogen; je klant ziet altijd zijn exacte prijs vóór bevestiging. Een eerder bevestigde klantprijs wordt nooit stilzwijgend verhoogd. De daglimiet wordt per kalenderdag in UTC bijgehouden.','finance-policy-note finance-wide');policyForm.append(policyNote);
     const policySubmit=element('button','Bevestigen en bewaren');policySubmit.type='submit';policySubmit.className='finance-wide';policyForm.append(policySubmit);
+    const administration=element('section');administration.id='financeAdministration';dialog.append(administration);
+    if(typeof window.rigOwnerAdministration?.mount==='function')window.rigOwnerAdministration.mount(administration,{onChanged:()=>void reload()});
     document.body.append(dialog);
     ui={month,refresh,all,status:message,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
     refresh.addEventListener('click',()=>void reload());all.addEventListener('click',()=>{month.value='';void reload();});month.addEventListener('change',()=>void reload());

@@ -49,7 +49,7 @@ test('native owner boot enables direct Fal without replacing its account note wi
  const app=await startNativeSiteApp({window:f.w,auth,loadScript:async name=>loaded.push(name)});
  try{
   assert.equal(f.w.rigVideoEnabled,true);assert.equal(f.w.rigVideoFunding,'owner-provider');assert.equal(f.w.rigVideoMode,'live');
-  assert.deepEqual(loaded,['media.js','app.js','owner-security.js','generation-ui.js','payments.js','finance.js']);
+  assert.deepEqual(loaded,['media.js','app.js','owner-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);
   assert.match(f.el('videoAvailabilityNote').textContent,/eigen fal-account.*Fal-raming.*vóór je bevestigt/);
   assert.doesNotMatch(f.el('videoAvailabilityNote').textContent,/RIG-tegoed|uitnodiging|testtegoed|Mollie/);
  }finally{app.dispose();f.dom.window.close();}
