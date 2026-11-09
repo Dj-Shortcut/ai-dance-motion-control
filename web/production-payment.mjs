@@ -4,6 +4,7 @@
 import {closedPaymentWithFetch} from './closed-test-payment.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {d1Limit} from './router.mjs';
+import {ensurePendingInvoices} from './invoice-store.mjs';
 import {prepareCommercialCheckout,commercialPackageData} from './commercial-checkout.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail=()=>Response.json({error:'Betalen is tijdelijk niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
@@ -87,6 +88,16 @@ export function createProductionPayment({transport}={}){
      const value=await response.json();
      return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:commercialPackageData(env)),currency:'EUR',mode:'live',purchasesEnabled:true},{status:response.status,headers:response.headers});
     }
+    // A document outage must never hide a verified payment or cause a retry
+    // of the customer's bank transaction. The collector repairs missed issues.
+    if(env.RIG_AUTOMATIC_INVOICES_ENABLED==='yes'&&response.ok){
+     if(req.method==='POST'&&url.pathname.endsWith('/reconcile')){try{await ensurePendingInvoices(env,{limit:4});}catch{}}
+     if(req.method==='GET'&&url.pathname==='/api/payments/orders'){
+      const value=await response.json();
+      try{for(const order of value.orders??[]){const invoice=await mapped.DB.prepare('SELECT invoice_number FROM rig_issued_invoices WHERE user_id=? AND order_request_id=?').bind(trustedUserId,order.requestId).first();order.invoiceAvailable=Boolean(invoice);if(invoice)order.invoiceNumber=invoice.invoice_number;}}catch{}
+      return Response.json({...value,automaticInvoices:true},{status:response.status,headers:response.headers});
+     }
+    }
     return response;
    }catch{return fail()}
   },
@@ -97,7 +108,9 @@ export function createProductionPayment({transport}={}){
     // Independent of edge/IP limits: even distributed untrusted notifications
     // cannot trigger unlimited authenticated reads from the payment provider.
     if(await d1Limit({env:mapped,category:'webhook',userId:null,method:'POST'})!==true)return Response.json({error:'Betaalmeldingen zijn tijdelijk begrensd. Probeer later opnieuw.'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
-    return await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,null)||new Response(null,{status:404});
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,null)||new Response(null,{status:404});
+    if(response.ok&&env.RIG_AUTOMATIC_INVOICES_ENABLED==='yes'){try{await ensurePendingInvoices(env,{limit:4});}catch{}}
+    return response;
    }catch{return fail()}
   }
  };

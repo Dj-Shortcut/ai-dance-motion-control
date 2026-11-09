@@ -92,3 +92,44 @@ test('denied owner responses clear data and an obsolete month response cannot re
   await accounting(f);const month=f.d.getElementById('ownerAccountingMonth');month.value='2026-10';month.dispatchEvent(new f.win.Event('change'));await waitFor(()=>f.calls.some(([path])=>path.includes('month=2026-10')));denied=true;month.value='2026-11';month.dispatchEvent(new f.win.Event('change'));await waitFor(()=>f.root.children.length===0);pending.resolve(Response.json(data()));await new Promise(r=>setTimeout(r,15));assert.equal(f.root.children.length,0);assert.equal(f.verifications.length,0);
  }finally{f.close();}
 });
+
+const issuedRow=()=>({id:DOCUMENT,orderId:ORDER,number:'RIG-2026-000001',issuedDate:'2026-11-09',amountCents:500,currency:'EUR',pdfReady:true,mailState:'sent',accountableValidated:false,pdfPath:'https://attacker.invalid/stolen.pdf'});
+const invoiceIndex=(rows=[issuedRow()])=>({automaticIssuanceEnabled:true,accountableDeliveryConfigured:false,accountableValidated:false,peppolDeliveryVerified:false,hasMore:false,invoices:rows});
+function automaticData(){const value=data();value.automaticInvoiceIssuance=true;value.accountableDeliveryConfigured=false;value.purchases[0].invoice=issuedRow();return value;}
+
+test('automatic invoices show original documents and honest mail status with authenticated PDF and monthly ZIP downloads',async()=>{
+ const value=automaticData(),f=fixture({handler:(path)=>path.startsWith('/api/owner/accounting')?Response.json(value):path.startsWith('/api/owner/invoices/export.zip')?new Response('zip-file',{headers:{'content-type':'application/zip'}}):path.endsWith('/pdf')?new Response('%PDF-fixture',{headers:{'content-type':'application/pdf'}}):Response.json(invoiceIndex())});
+ try{
+  await accounting(f);await waitFor(()=>f.root.querySelector('[data-invoice-pdf]'));assert.match(f.root.textContent,/originele factuur uit/);assert.match(f.root.textContent,/maak geen tweede verkoopfactuur/);assert.match(f.root.textContent,/Factuurmail is nog niet ingesteld/);assert.match(f.root.textContent,/Mail door verzenddienst aanvaard; controle in Accountable blijft nodig/);assert.match(f.root.textContent,/Boeking en Peppol-bezorging zijn niet bevestigd/);assert.equal(f.root.querySelector('[data-invoice-zip]').disabled,true);
+  f.root.querySelector('[data-invoice-pdf]').click();await waitFor(()=>f.downloads.length===1);assert.equal(f.calls.at(-1)[0],'/api/owner/invoices/'+DOCUMENT+'/pdf');assert.equal(f.downloads[0].name,'RIG-2026-000001.pdf');assert.equal(f.downloads[0].href,'blob:local-private-1');assert.equal(f.calls.some(([path])=>path.includes('attacker.invalid')),false);
+  const month=f.d.getElementById('ownerAccountingMonth');month.value='2026-11';month.dispatchEvent(new f.win.Event('change'));await waitFor(()=>f.calls.some(([path])=>path==='/api/owner/invoices?month=2026-11'));await waitFor(()=>f.root.querySelector('[data-invoice-zip]')?.disabled===false);f.root.querySelector('[data-invoice-zip]').click();await waitFor(()=>f.downloads.length===2);assert.equal(f.calls.at(-1)[0],'/api/owner/invoices/export.zip?month=2026-11');assert.equal(f.downloads[1].name,'RIG-facturen-2026-11.zip');assert.equal(posts(f).length,0);assert.equal(f.verifications.length,0);
+ }finally{f.close();}
+});
+
+test('issued invoice defaults lock the exact original number while an external accounting entry remains possible',async()=>{
+ const value=automaticData(),f=fixture({handler:(path,init)=>init.method==='POST'?Response.json({recorded:true}):path.startsWith('/api/owner/accounting')?Response.json(value):Response.json(invoiceIndex())});try{
+  await accounting(f);await waitFor(()=>f.root.querySelector('[data-invoice-pdf]'));const form=f.d.getElementById('ownerAccountingDocumentForm'),ref=f.d.getElementById('ownerAccountingReference'),kind=f.d.getElementById('ownerAccountingRecordType');assert.equal(ref.value,'RIG-2026-000001');assert.equal(ref.readOnly,true);assert.match(form.textContent,/originele factuur bestaat al/);
+  kind.value='accounting-entry';kind.dispatchEvent(new f.win.Event('change'));assert.equal(ref.readOnly,false);assert.equal(ref.value,'');ref.value='ACC-book-27';await waitFor(()=>!f.root.querySelector('details .finance-toolbar button').disabled);submit(f,form);await waitFor(()=>posts(f).length===1);const body=JSON.parse(posts(f)[0][1].body);assert.equal(body.recordType,'accounting-entry');assert.equal(body.externalInvoiceReference,'ACC-book-27');assert.equal(f.verifications[0].operation,'accounting-document');
+ }finally{f.close();}
+});
+
+test('invoice-list failures preserve administration, but an authorization denial clears all owner data',async()=>{
+ for(const status of [503,403]){const f=fixture({handler:path=>path.startsWith('/api/owner/accounting')?Response.json(automaticData()):Response.json({error:'Facturen niet beschikbaar.'},{status})});try{
+  open(f,'Administratie voor Accountable');await waitFor(()=>f.calls.some(([path])=>path==='/api/owner/invoices'));await new Promise(r=>setTimeout(r,15));if(status===403)assert.equal(f.root.children.length,0);else{assert.match(f.root.textContent,/Facturen niet beschikbaar/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,4);assert.ok(f.d.getElementById('ownerAccountingDocumentForm'));}assert.equal(posts(f).length,0);
+ }finally{f.close();}}
+});
+
+test('an invoice document response cannot download private bytes after logout and HTML masquerading as a PDF is rejected',async()=>{
+ const pending=deferred(),f=fixture({handler:path=>path.endsWith('/pdf')?pending.promise:path.startsWith('/api/owner/accounting')?Response.json(automaticData()):Response.json(invoiceIndex())});try{
+  await accounting(f);await waitFor(()=>f.root.querySelector('[data-invoice-pdf]'));f.root.querySelector('[data-invoice-pdf]').click();await waitFor(()=>f.calls.some(([path])=>path.endsWith('/pdf')));f.d.getElementById('authLogout').click();f.stop();pending.resolve(new Response('%PDF-private',{headers:{'content-type':'application/pdf'}}));await new Promise(r=>setTimeout(r,15));assert.equal(f.downloads.length,0);assert.equal(f.created.length,0);assert.equal(f.root.children.length,0);
+ }finally{f.close();}
+ const html=fixture({handler:path=>path.endsWith('/pdf')?new Response('<html>not a PDF</html>',{headers:{'content-type':'text/html'}}):path.startsWith('/api/owner/accounting')?Response.json(automaticData()):Response.json(invoiceIndex())});try{
+  await accounting(html);await waitFor(()=>html.root.querySelector('[data-invoice-pdf]'));html.root.querySelector('[data-invoice-pdf]').click();await waitFor(()=>html.root.textContent.includes('geen geldig factuurbestand'));assert.equal(html.downloads.length,0);
+ }finally{html.close();}
+});
+
+test('paid purchases needing invoice review remain visible even when there is no issued-invoice row',async()=>{
+ const value=automaticData();value.purchases[0].invoice=null;value.purchases[0].invoiceIssueState='review-required';value.purchases[0].invoiceIssueReason='billing_missing';const f=fixture({handler:path=>path.startsWith('/api/owner/accounting')?Response.json(value):Response.json(invoiceIndex([]))});try{
+  await accounting(f);await waitFor(()=>f.root.textContent.includes('Nog geen uitgegeven facturen'));const warning=f.root.querySelector('[data-invoice-review]');assert.ok(warning);assert.equal(warning.dataset.invoiceReview,ORDER);assert.match(warning.textContent,/Factuur controleren · Factuuradres ontbreekt/);assert.equal(f.root.querySelector('[data-invoice-pdf]'),null);assert.equal(f.verifications.length,0);
+ }finally{f.close();}
+});

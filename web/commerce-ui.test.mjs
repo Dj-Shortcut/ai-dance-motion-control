@@ -6,7 +6,7 @@ import {publicCommerce} from './commerce-profile.mjs';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8'),script=readFileSync(new URL('./frontend/multiuser/payments.js',import.meta.url),'utf8');
 const orderId='a65ca7a2-389d-42bb-92bb-e02024ea8c3a',ticketId='3c3f0e65-af97-4025-9ae0-4472c30bd129';
 const wait=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('UI did not settle');};
-async function setup({orders=[],required=true,deferredOrders}={}){
+async function setup({orders=[],required=true,deferredOrders,automatic=false,billing=null,deferredBilling}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[],redirects=[],downloads=[],revoked=[],storage=new Map();let active=true;
  for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;};}
  w.rigNativeSite=true;w.rigVideoFunding='credits';w.rigSessionActive=()=>active;w.rigScopedStorage={getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};w.rigCheckout=async u=>redirects.push(u);
@@ -15,8 +15,10 @@ async function setup({orders=[],required=true,deferredOrders}={}){
  w.rigRequest=async(path,init={})=>{
   calls.push([path,init]);
   if(path==='/api/payments/balance')return Response.json({...details,balance:500});
-  if(path==='/api/payments/packages')return Response.json({...details,packages:[{id:'credits-5',amountCents:500,credits:500}],...(required?{commerce:{...publicCommerce(),required:true}}:{})});
-  if(path==='/api/payments/orders')return deferredOrders?deferredOrders():Response.json({orders});
+  if(path==='/api/payments/packages')return Response.json({...details,packages:[{id:'credits-5',amountCents:500,credits:500}],...(required?{commerce:{...publicCommerce(),required:true,...(automatic?{billingRequired:true,electronicDelivery:'rig-download-v1'}:{})}}:{})});
+  if(path==='/api/payments/billing')return deferredBilling?deferredBilling():Response.json({billing,electronicDelivery:'rig-download-v1'});
+  if(path==='/api/payments/orders')return deferredOrders?deferredOrders():Response.json({orders,automaticInvoices:automatic});
+  if(path.endsWith('/invoice'))return new Response('%PDF-1.7 mock private invoice',{headers:{'content-type':'application/pdf'}});
   if(path.endsWith('/reconcile'))return Response.json({state:'paid'});
   if(path.endsWith('/receipt')||path.endsWith('/confirmation'))return new Response('<html>Owned receipt</html>',{headers:{'content-type':'text/html'}});
   if(path==='/api/payments/create')return Response.json({checkoutUrl:'https://www.mollie.com/checkout/live-fixture'});
@@ -56,5 +58,54 @@ test('withdrawal creates a customer request and downloadable confirmation withou
 test('an account change discards a late history response and disables all purchase data',async()=>{
  let resolve,blocks=false;const pending=new Promise(r=>resolve=r);const f=await setup({deferredOrders:()=>blocks?pending:Response.json({orders:[]})});try{
   blocks=true;const history=f.d.getElementById('customerHistory');history.open=true;history.dispatchEvent(new f.w.Event('toggle'));await wait(()=>history.textContent.includes('ophalen'));f.stop();resolve(Response.json({orders:[{requestId:orderId,amountCents:500,state:'paid'}]}));await new Promise(r=>setTimeout(r,20));assert.equal(f.d.getElementById('customerHistory'),null);assert.doesNotMatch(f.d.body.textContent,new RegExp(orderId));assert.equal(f.redirects.length,0);
+ }finally{f.close();}
+});
+
+const fill=(f,key,value,event='input')=>{const input=f.d.getElementById(key);input.value=value;input.dispatchEvent(new f.w.Event(event));};
+test('automatic invoice checkout requires real billing fields and explicit digital delivery consent',async()=>{
+ const f=await setup({automatic:true});try{
+  const button=f.d.querySelector('.package-button'),consent=f.d.getElementById('acceptCommerce');
+  assert.equal(consent.checked,false);assert.match(consent.parentNode.textContent,/factuur digitaal in RIG/);
+  fill(f,'buyerCountry','NL','change');consent.checked=true;consent.dispatchEvent(new f.w.Event('change'));
+  assert.equal(button.disabled,true);fill(f,'billing-name','François de Vries');fill(f,'billing-street','a');fill(f,'billing-city','Middelburg');fill(f,'billing-postalCode','4331 AB');assert.equal(button.disabled,true);
+  fill(f,'billing-street','Markt 12');assert.equal(button.disabled,false);button.click();await wait(()=>f.redirects.length===1);
+  const payload=JSON.parse(f.calls.find(([p])=>p==='/api/payments/create')[1].body);
+  assert.deepEqual(payload.billing,{name:'François de Vries',street:'Markt 12',postalCode:'4331 AB',city:'Middelburg'});
+  assert.equal(payload.commerce.accepted,true);assert.equal(payload.commerce.country,'NL');
+  assert.equal(f.calls.some(([p])=>/owner|invoice$|fal/.test(p)),false);
+ }finally{f.close();}
+});
+test('saved billing profile prefills privately, never prechecks consent, and disappears on logout',async()=>{
+ const f=await setup({automatic:true,billing:{name:'Private Buyer',street:'Private street 4',postalCode:'9400',city:'Ninove',country:'BE'}});try{
+  assert.equal(f.d.getElementById('billing-name').value,'Private Buyer');assert.equal(f.d.getElementById('buyerCountry').value,'BE');
+  assert.equal(f.d.getElementById('acceptCommerce').checked,false);assert.equal(f.d.querySelector('.package-button').disabled,true);
+  assert.equal(f.w.localStorage.length,0);f.stop();assert.equal(f.d.getElementById('commerceChoice'),null);assert.doesNotMatch(f.d.body.textContent,/Private Buyer/);
+ }finally{f.close();}
+});
+test('late billing response after closing a new dialog cannot reveal an old address',async()=>{
+ let block=false,resolve;const pending=new Promise(r=>resolve=r);
+ const f=await setup({automatic:true,deferredBilling:()=>block?pending:Response.json({billing:null})});try{
+  f.d.getElementById('closeCredits').click();block=true;f.d.getElementById('creditsButton').click();await wait(()=>f.d.getElementById('billing-name'));
+  f.d.getElementById('closeCredits').click();resolve(Response.json({billing:{name:'Secret Previous Buyer',street:'Previous road 1',postalCode:'9400',city:'Ninove',country:'BE'}}));
+  await new Promise(r=>setTimeout(r,20));assert.equal(f.d.getElementById('commerceChoice'),null);assert.equal(f.d.querySelector('.package-button'),null);assert.doesNotMatch(f.d.body.textContent,/Secret Previous Buyer/);
+ }finally{f.close();}
+});
+test('customer invoice download uses only its own authenticated order endpoint',async()=>{
+ const f=await setup({automatic:true,orders:[{requestId:orderId,amountCents:500,state:'paid',invoiceAvailable:true,invoiceNumber:'RIG-2026-000001',pdfPath:'https://attacker.invalid/invoice'}]});try{
+  assert.equal(f.calls.some(([p])=>p.endsWith('/invoice')),false);const history=await f.history();
+  [...history.querySelectorAll('button')].find(x=>x.textContent==='Factuur downloaden').click();await wait(()=>f.downloads.length===1);
+  assert.equal(f.calls.filter(([p])=>p.endsWith('/invoice')).length,1);assert.ok(f.calls.some(([p])=>p===`/api/payments/orders/${orderId}/invoice`));assert.equal(f.calls.some(([p])=>p.includes('attacker')),false);
+  f.stop();assert.deepEqual(f.revoked,f.downloads);
+ }finally{f.close();}
+});
+test('a delayed saved address never overwrites the billing identity already typed by the buyer',async()=>{
+ let block=false,resolve;const pending=new Promise(r=>resolve=r);
+ const f=await setup({automatic:true,deferredBilling:()=>block?pending:Response.json({billing:null})});try{
+  f.d.getElementById('closeCredits').click();block=true;f.d.getElementById('creditsButton').click();await wait(()=>f.d.getElementById('billing-name'));
+  fill(f,'billing-name','New Buyer');fill(f,'billing-street','New road 5');fill(f,'buyerCountry','NL','change');fill(f,'billing-postalCode','4331 AB');fill(f,'billing-city','Middelburg');
+  resolve(Response.json({billing:{name:'Old Buyer',street:'Old street 4',postalCode:'9400',city:'Ninove',country:'BE'}}));await wait(()=>f.d.querySelector('.package-button'));
+  assert.equal(f.d.getElementById('billing-name').value,'New Buyer');assert.equal(f.d.getElementById('billing-street').value,'New road 5');assert.equal(f.d.getElementById('buyerCountry').value,'NL');assert.equal(f.d.getElementById('billing-postalCode').value,'4331 AB');
+  const consent=f.d.getElementById('acceptCommerce');consent.checked=true;consent.dispatchEvent(new f.w.Event('change'));f.d.querySelector('.package-button').click();await wait(()=>f.redirects.length===1);
+  assert.equal(JSON.parse(f.calls.find(([p])=>p==='/api/payments/create')[1].body).billing.name,'New Buyer');
  }finally{f.close();}
 });

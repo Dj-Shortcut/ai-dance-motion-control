@@ -18,3 +18,7 @@ __pycache__/
 *.log
 .rig-sites-build/
 *.app/
+
+# Local illustrative invoice renders are never issued documents.
+web/output/
+web/tmp/
