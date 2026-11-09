@@ -30,6 +30,21 @@ test('30 seconds are accepted without relaxing the provider maximum',async()=>{
  const result=await transformAndVerifyVideo({...args(fixture(),async()=>full),durationSeconds:30});assert.equal(result.durationSeconds,30);
  await assert.rejects(transformAndVerifyVideo({...args(fixture(),async()=>({...full,durationSeconds:30.001})),durationSeconds:30}));
 });
+test('integer selections above the minimum request a short margin while retaining the verified duration and audio/offset',async()=>{
+ for(const seconds of [4,5,6,10,15,30]){
+  const f=fixture(),actual=seconds-0.06,verified={...valid,hasAudio:true,fps:30,frameCount:Math.round(actual*30),sampleDurationSeconds:Math.round(actual*30)/30,durationSeconds:seconds-0.02};
+  const result=await transformAndVerifyVideo({...args(f,async()=>verified),durationSeconds:seconds,startSeconds:12.345,keepSound:true});
+  assert.deepEqual(f.trace[2],['output',{mode:'video',time:'12.345s',duration:(seconds-0.06).toFixed(2)+'s',audio:true}]);assert.equal(result.durationSeconds,verified.durationSeconds);assert.equal(Math.ceil(result.durationSeconds),seconds);
+ }
+});
+test('a five-second selection can never accept an extra billable second from a small timing overrun',async()=>{
+ const metadata=duration=>({...valid,fps:150/duration,frameCount:150,sampleDurationSeconds:duration,durationSeconds:duration});
+ for(const duration of [4.9,4.94,4.972,5]){
+  const f=fixture(),result=await transformAndVerifyVideo({...args(f,async()=>metadata(duration)),durationSeconds:5});
+  assert.equal(result.durationSeconds,duration);assert.equal(Math.ceil(result.durationSeconds),5);assert.equal(f.trace[2][1].duration,'4.94s');
+ }
+ for(const duration of [5.000001,5.011,5.09,4.899])await assert.rejects(transformAndVerifyVideo({...args(fixture(),async()=>metadata(duration)),durationSeconds:5}),error=>error.message==='Unverified transformed video'&&error.rigMediaSettled===true);
+});
 test('unverified or inconsistent output is never accepted',async()=>{
  for(const bad of [{...valid,durationSeconds:2},{...valid,frameCount:89},{...valid,width:339},{...valid,codec:'vp9'},{...valid,hasAudio:true}])await assert.rejects(transformAndVerifyVideo(args(fixture(),async()=>bad)));
  for(const response of [new Response('oops',{status:500}),new Response('oops',{headers:{'content-type':'text/html'}}),new Response(new Uint8Array(16*1024*1024+1),{headers:{'content-type':'video/mp4','content-length':'1'}})])await assert.rejects(transformAndVerifyVideo(args(fixture(response))));

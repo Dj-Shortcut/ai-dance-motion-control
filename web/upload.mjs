@@ -7,6 +7,11 @@ const ACL='https://rest.fal.ai/storage/files/acl';
 const LIMIT=16*1024*1024;
 const types=new Map([['image/jpeg','jpg'],['image/png','png'],['image/webp','webp'],['video/mp4','mp4']]);
 export const PRIVATE_LIFECYCLE=JSON.stringify({expiration_duration_seconds:86400,initial_acl:{default:'forbid',rules:[]}});
+// This policy is selected only by a persisted O3 quote after the visitor has
+// explicitly accepted temporary, readable-by-link Fal files. It never changes
+// RIG storage ACLs or the default private provider path.
+export const TEMPORARY_LINK_POLICY='fal-temporary-links-v1';
+export const TEMPORARY_LINK_LIFECYCLE=JSON.stringify({expiration_duration_seconds:86400});
 function keyOk(key){return typeof key==='string' && key.length>0 && key.length<1024 && !/[\r\n]/.test(key)}
 function v3(value,signed=false){try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='v3b.fal.media'&&!u.port&&!u.username&&!u.password&&!u.hash&&/^\/files\/b\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(u.pathname)&&(signed?u.searchParams.has('identity'):!u.search)}catch{return false}}
 function uploadUrl(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&['fal.media','fal.ai','fal.run'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d))}catch{return false}}
@@ -45,15 +50,23 @@ async function verifyPrivate(file,key,fetchImpl,parent){
  try{void anonymous.body?.cancel().catch(()=>{})}catch{}
  if(![403,404].includes(anonymous.status))throw Error('Private access not verified');
 }
-export async function uploadVerifiedAsset({asset,key,fetchImpl=fetch}){
+export async function uploadVerifiedAsset({asset,key,fetchImpl=fetch,transferPolicy}){
+ if(transferPolicy!==undefined&&transferPolicy!==TEMPORARY_LINK_POLICY)throw Error('Unsupported transfer policy');
  if(!asset||asset.verified!==true||!types.has(asset.mime)||!Number.isSafeInteger(asset.size)||asset.size<1||asset.size>LIMIT||!(asset.body instanceof Blob)||asset.body.size!==asset.size||!keyOk(key))throw Error('Upload unavailable');
  const expectedHash=new Uint8Array(await crypto.subtle.digest('SHA-256',await asset.body.arrayBuffer()));
  const name=`${crypto.randomUUID()}.${types.get(asset.mime)}`;
  const initSignal=AbortSignal.timeout(30000);
- const init=await providerJSON(await fetchImpl(INIT,{method:'POST',redirect:'manual',signal:initSignal,headers:{...headers(key),'X-Fal-Object-Lifecycle-Preference':PRIVATE_LIFECYCLE},body:JSON.stringify({file_name:name,content_type:asset.mime})}),{signal:initSignal,limit:8192});
+ const init=await providerJSON(await fetchImpl(INIT,{method:'POST',redirect:'manual',signal:initSignal,headers:{...headers(key),'X-Fal-Object-Lifecycle-Preference':transferPolicy===TEMPORARY_LINK_POLICY?TEMPORARY_LINK_LIFECYCLE:PRIVATE_LIFECYCLE},body:JSON.stringify({file_name:name,content_type:asset.mime})}),{signal:initSignal,limit:8192});
  if(!uploadUrl(init?.upload_url)||!v3(init?.file_url))throw Error('Upload unavailable');
  // The API key is never sent to the presigned upload URL.
  const put=await fetchImpl(init.upload_url,{method:'PUT',redirect:'manual',signal:AbortSignal.timeout(90000),headers:{'Content-Type':asset.mime},body:asset.body,duplex:'half'});if(!put.ok)throw Error('Upload unavailable');
+ if(transferPolicy===TEMPORARY_LINK_POLICY){
+  // Exactly the normal Mac/Fal transfer: a canonical CDN URL without a query
+  // string, checked anonymously against the held bytes before paid dispatch.
+  // Never convert a private cached object or accept a caller-supplied URL.
+  await verifySignedInput(init.file_url,asset,expectedHash,fetchImpl);
+  return init.file_url;
+ }
  // Check the effective ACL and anonymous access; either failure closes the path.
  await verifyPrivate(init.file_url,key,fetchImpl);
  const token=await getCdnToken(key,fetchImpl);
@@ -69,6 +82,13 @@ export async function uploadVerifiedAsset({asset,key,fetchImpl=fetch}){
 export function privateResultFetch(key,fetchImpl=fetch){
  if(!keyOk(key))throw Error('Provider credentials unavailable');
  return async (url,options={})=>{
+  if(options.transferPolicy!==undefined&&options.transferPolicy!==TEMPORARY_LINK_POLICY)throw Error('Unsupported transfer policy');
+  if(options.transferPolicy===TEMPORARY_LINK_POLICY){
+   if(!v3(url))throw Error('Unsupported result URL');checkSignal(options.signal);
+   const response=await fetchImpl(url,{method:'GET',redirect:'manual',signal:options.signal,headers:{Accept:'video/mp4'}});checkSignal(options.signal);
+   if(!response.ok||response.redirected)throw Error('Result unavailable');
+   return response;
+  }
   // A provider result may contain a signed query string. Reconstruct the
   // canonical file URL, validate its exact host/path, and authenticate using
   // our own short-lived token instead of forwarding URL-carried credentials.

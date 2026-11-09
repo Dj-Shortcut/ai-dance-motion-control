@@ -37,9 +37,12 @@ export async function providerJSON(response,options){return JSON.parse(await pro
 // Only the two exact observed fal validation rejections are classified terminal.
 // The caller must first verify COMPLETED and matching request_id from the fixed
 // authenticated status URL and fetch this body from that same job's result URL.
-export async function providerInputValidation(response,{signal,requestId}={}){
+export async function providerInputValidation(response,{signal,requestId,allowInlineEcho=false}={}){
  if(response.status!==422 || !/^(?:application\/json|application\/problem\+json)(?:\s*;|$)/i.test(response.headers.get('content-type')||'') || typeof requestId!=='string')return false;
- let data;try{data=JSON.parse(await providerText(response,{signal,acceptedStatus:422}));}catch{return false;}
+ // Some validation responses echo the submitted inline file bytes. Only the
+ // exact owned, bounded inline job may read that larger error; it is never
+ // logged, stored or returned. Ordinary metadata retains the 64 KiB limit.
+ let data;try{data=JSON.parse(await providerText(response,{signal,acceptedStatus:422,limit:allowInlineEcho===true?8*1024*1024:65536}));}catch{return false;}
  if(!data || typeof data!=='object' || Array.isArray(data) || data.request_id!==undefined && data.request_id!==requestId)return false;
  const detail=data.detail;
  if(!Array.isArray(detail) || detail.length!==1)return false;

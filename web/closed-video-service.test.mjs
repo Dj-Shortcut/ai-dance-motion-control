@@ -20,7 +20,18 @@ test('30-second owner media is prepared and priced without submitting a generati
  }finally{if(mf)await mf.dispose();await rm(dir,{recursive:true,force:true})}
 });
 test('missing configuration, untrusted transport and live modes fail closed',async()=>{const db={prepare(){throw Error('not reached')},batch(){}};const env={...config,DB:db,RIG_MEDIA:{fetch(){}},BUCKET:{get(){},put(){},head(){}}};assert.equal(closedVideoTesting.valid(env),true);assert.equal(closedVideoTesting.valid({...env,RIG_CLOSED_VIDEO_MAX_CENTS:'800',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000000'}),true);for(const e of [{...env,RIG_CLOSED_VIDEO_ENABLED:undefined},{...env,RIG_MODE:'live'},{...env,RIG_MOLLIE_MODE:'live'},{...env,RIG_PRICE_VERSION:''},{...env,RIG_CLOSED_VIDEO_MAX_CENTS:'801'},{...env,RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000001'},{...env,RIG_MEDIA_SECRET:''}])assert.equal(closedVideoTesting.valid(e),false);const disabled=await createClosedVideoService(env,{trustedUserId:'alice'});assert.equal((await disabled(new Request('https://rig.local/api/generations/recent'))).status,503);let calls=0;const transport=closedVideoTesting.providerTransport(async()=>{calls++;return new Response(null,{status:302})});await assert.rejects(transport('https://attacker.example/',{redirect:'manual'}));await assert.rejects(transport('https://queue.fal.run/',{redirect:'follow'}));assert.equal(calls,0);await assert.rejects(transport('https://queue.fal.run/',{redirect:'manual'}));assert.equal(calls,1);});
-test('O3 composition requires operator enablement and a price, then reserves the exact verified edit quote once',async()=>{
+test('enabling R2 without complete credentials closes the service instead of falling back to the old host',async()=>{
+ const r2={RIG_R2_INPUTS_ENABLED:'yes',RIG_R2_INPUTS_ACCOUNT_ID:'a'.repeat(32),RIG_R2_INPUTS_BUCKET:'private-inputs',RIG_R2_INPUTS_ACCESS_KEY_ID:'b'.repeat(32),RIG_R2_INPUTS_SECRET_ACCESS_KEY:'c'.repeat(64)};
+ let forbiddenCalls=0;const no=()=>{forbiddenCalls++;throw Error('No storage or provider operation allowed')};
+ const base={...config,DB:{prepare(sql){assert.equal(sql,'SELECT mode FROM rig_payment_environment WHERE id=1');return {first:async()=>({mode:'test'})}},batch:no},RIG_MEDIA:{fetch:no},BUCKET:{get:no,put:no,head:no}};
+ for(const field of Object.keys(r2).filter(k=>k!=='RIG_R2_INPUTS_ENABLED')){
+  const env={...base,...r2,[field]:undefined};
+  const service=await createClosedVideoService(env,{trustedUserId:'alice',lease:{acquire:no,complete:no},verifyTenant:async()=>true,providerFetch:no,gatewayFetch:no});
+  assert.equal((await service(new Request('https://rig.local/api/generations'))).status,503);
+ }
+ assert.equal(forbiddenCalls,0);
+});
+for(const inline of [false,true])test(`O3 ${inline?'inline':'gateway'} composition requires operator enablement and a price, then reserves the exact verified edit quote once`,async()=>{
  const dir=await mkdtemp(join(process.cwd(),'.closed-video-edit-'));let mf;try{
   const path=join(dir,'five.mp4');await promisify(execFile)('ffmpeg',['-hide_banner','-v','error','-f','lavfi','-i','color=c=blue:s=1280x720:r=30:d=5','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',path]);
   for(const [input,out] of [['closed-video-test-fixture.mjs','main.mjs'],['cloud-media-workerd-fixture.mjs','media.mjs']])await build({entryPoints:[input],outfile:join(dir,out),bundle:true,format:'esm',platform:'browser',logLevel:'silent',loader:{'.mp4':'base64'}});
@@ -31,7 +42,7 @@ test('O3 composition requires operator enablement and a price, then reserves the
   const imageId=await upload('image',await readFile('test/fixtures/input.jpg')),videoId=await upload('video',await readFile(path)),selection={imageId,videoId,quality:'edit-standard',keepSound:false,prompt:'Use the dog in @Image1.'};
   assert.equal((await json(mf,'alice','/api/generation-quotes',selection)).status,503);await mf.dispose();
   mf=create({RIG_EDIT_ENABLED:'yes'});assert.equal((await json(mf,'alice','/api/generation-quotes',selection)).status,503);await mf.dispose();
-  mf=create({RIG_EDIT_ENABLED:'yes',RIG_PRICE_EDIT:'20'});db=await mf.getD1Database('DB','main');
+  mf=create({RIG_EDIT_ENABLED:'yes',RIG_PRICE_EDIT:'20',...(inline?{RIG_O3_INLINE_INPUTS_ENABLED:'yes',RIG_VIDEO_OWNER_USER_ID:'alice'}:{})});db=await mf.getD1Database('DB','main');
   let r=await json(mf,'alice','/api/generation-quotes',selection);assert.equal(r.status,201,await r.clone().text());const quote=await r.json();assert.equal(quote.priceCents,100);assert.equal(quote.durationSeconds,5);assert.equal(quote.providerEstimateUsdMicros,700000);
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_fixture_fal_dispatch').first()).n,0);assert.equal((await db.prepare('SELECT SUM(delta) n FROM rig_ledger WHERE user_id=?').bind('alice').first()).n,500);
   const spare=await (await json(mf,'alice','/api/generation-quotes',selection)).json(),request={quoteId:quote.id,idempotencyKey:'edit-attempt'};

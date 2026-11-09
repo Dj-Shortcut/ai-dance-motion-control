@@ -161,8 +161,45 @@ test('completed matching provider input-validation failure refunds once and repo
  f.services.jobs.markProviderFailed=async(u,id,providerId,token,reason)=>{assert.deepEqual([u,id,providerId,token,reason],['u1','job1','abc-123','token1','provider_input_unavailable']);refunds++;return Object.assign(await f.services.jobs.getOwned(u,id),{state:'failed',falRequestId:providerId,failureCode:reason})};
  f.services.jobs.confirmInputFailureRefund=async()=>true;
  f.setResultResponse(()=>Response.json({detail:[{loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error'}]},{status:422}));
- await quote(f,editBody);await submit(f);let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
- r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+ await quote(f,editBody);await submit(f);let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
+ r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_input_unavailable');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+});
+test('large inline validation echoes settle only the configured owner edit and never leak or resubmit',async()=>{
+ for(const enabledOwner of ['u1','other',undefined]){
+  const f=editFixture();let refunds=0;
+  f.services.jobs.markProviderFailed=async(u,id,providerId,_token,reason)=>{refunds++;return Object.assign(await f.services.jobs.getOwned(u,id),{state:'failed',falRequestId:providerId,failureCode:reason})};
+  f.services.jobs.confirmInputFailureRefund=async()=>true;
+  f.setResultResponse(()=>Response.json({request_id:'abc-123',detail:[{loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error',input:'data:video/mp4;base64,'+'A'.repeat(100000)}]},{status:422}));
+  await quote(f,editBody);await submit(f);f.services.inlineO3Owner=enabledOwner;
+  const response=await f.handler(get('/api/generations/job1')),result=await response.json();
+  assert.doesNotMatch(JSON.stringify(result),/data:|base64|AAAA/);
+  if(enabledOwner==='u1'){
+   assert.equal(response.status,200);assert.equal(result.state,'failed');assert.equal(result.refundConfirmed,true);assert.equal(refunds,1);
+   assert.equal((await f.handler(get('/api/generations/job1'))).status,200);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
+  }else{assert.equal(response.status,503);assert.equal(refunds,0);assert.equal((await f.services.jobs.getOwned('u1','job1')).state,'queued');}
+ }
+});
+test('public jobs expose only allowlisted terminal failure codes and never imply an unconfirmed refund',async()=>{
+ for(const failureCode of ['provider_input_unavailable','provider_subject_not_detected','provider_raw_failure: https://private.invalid/token','constructor',undefined]){
+  const f=fixture();await quote(f);await submit(f);const job=await f.services.jobs.getOwned('u1','job1');
+  Object.assign(job,{state:'failed',failureCode,providerError:'private diagnostic',providerInputUrl:'https://private.invalid/token'});
+  f.services.jobs.confirmInputFailureRefund=async()=>false;
+  const result=await (await f.handler(get('/api/generations/job1'))).json();
+  assert.deepEqual(result,{id:'job1',state:'failed',priceCents:270,currency:'EUR',...(['provider_input_unavailable','provider_subject_not_detected'].includes(failureCode)?{failureCode}:{})});
+  assert.equal(Object.hasOwn(result,'refundConfirmed'),false);assert.doesNotMatch(JSON.stringify(result),/private|token|diagnostic|abc-123/);
+  job.state='unknown';assert.equal(Object.hasOwn(await (await f.handler(get('/api/generations/job1'))).json(),'failureCode'),false);
+ }
+});
+test('generic failures report only a proven refund and remain recoverable without another provider request',async()=>{
+ const f=fixture();let settled=false,proofReads=0;
+ f.services.jobs.confirmFailureRefund=async(user,id,request)=>{assert.deepEqual([user,id,request],['u1','job1','abc-123']);proofReads++;return settled;};
+ await quote(f);await submit(f);f.setTerminalError('private provider diagnostic');
+ let result=await (await f.handler(get('/api/generations/job1'))).json();
+ assert.equal(result.state,'failed');assert.equal(Object.hasOwn(result,'refundConfirmed'),false);assert.doesNotMatch(JSON.stringify(result),/diagnostic|provider_failed/);
+ const before=f.calls();settled='true';result=await (await f.handler(get('/api/generations/job1'))).json();assert.equal(Object.hasOwn(result,'refundConfirmed'),false);
+ settled=true;result=await (await f.handler(get('/api/generations/job1'))).json();assert.equal(result.refundConfirmed,true);
+ assert.equal(proofReads,3);assert.deepEqual(f.calls(),before);
+ f.setUser('u2');assert.equal((await f.handler(get('/api/generations/job1'))).status,404);assert.equal(proofReads,3);
 });
 test('other HTTP 422s and wrong status request IDs remain queued without refund',async()=>{
  const expected={loc:['body'],msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',type:'input_value_error'};
@@ -177,7 +214,7 @@ test('exact observed pro subject rejection returns one proven refund, and is nev
  f.services.jobs.confirmInputFailureRefund=async()=>true;
  f.setResultResponse(()=>Response.json({detail:[{loc:['body'],msg:message,type:'input_value_error'}]},{status:422}));
  assert.equal((await quote(f)).status,201);assert.equal((await submit(f)).status,202);
- let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
+ let r=await f.handler(get('/api/generations/job1'));assert.equal(r.status,200);let body=await r.json();assert.equal(body.state,'failed');assert.equal(body.failureCode,'provider_subject_not_detected');assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);
  r=await f.handler(get('/api/generations/job1'));body=await r.json();assert.equal(body.refundConfirmed,true);assert.equal(refunds,1);assert.equal(f.calls().providerCalls,3);
 });
 test('subject errors with changed model, message, request ID, content-type or status remain unrefunded',async()=>{
@@ -208,4 +245,83 @@ test('a prior accepted job remains recoverable and is never labeled as an unstar
  const f=fixture();assert.equal((await quote(f)).status,201);assert.equal((await submit(f)).status,202);
  f.services.jobs.hasKnownSubjectRejection=async()=>true;
  const recovered=await submit(f);assert.equal(recovered.status,200);const value=await recovered.json();assert.equal(value.state,'queued');assert.equal(value.code,undefined);assert.equal(value.generationStarted,undefined);assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().providerCalls,1);
+});
+
+const temporaryPolicy='fal-temporary-links-v1';
+const temporarySelection={...editBody,transferPolicy:temporaryPolicy};
+const temporaryConfirmation={quoteId:'quote1',idempotencyKey:'attempt',transferConsent:temporaryPolicy};
+function temporaryFixture(){
+ const f=editFixture();f.services.inlineO3Owner='u1';
+ for(const [id,a]of Object.entries(f.assets)){a.url=`https://v3b.fal.media/files/b/fixture/${id}.${a.kind==='video'?'mp4':'jpg'}`;a.size=32;}
+ const upload=f.services.assets.uploadOwned,contexts=[];
+ f.services.assets.uploadOwned=async(...args)=>{contexts.push(args[3]);return upload(...args)};
+ return {...f,contexts};
+}
+test('temporary Fal links are offered only for an explicitly requested O3 quote without uploading',async()=>{
+ const f=temporaryFixture();const response=await quote(f,temporarySelection),q=await response.json();
+ assert.equal(response.status,201);assert.equal(q.transferPolicy,temporaryPolicy);assert.equal(q.transferConsentRequired,true);
+ assert.equal(f.qs.get('quote1').input.data.transferPolicy,temporaryPolicy);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().providerCalls,0);
+ for(const policy of ['public','private',true,null,{},'fal-temporary-links-v2']){
+  const invalid=temporaryFixture();assert.equal((await quote(invalid,{...temporarySelection,transferPolicy:policy})).status,400);assert.equal(invalid.qs.size,0);
+ }
+ for(const quality of ['standard','pro']){
+  const motion=fixture();assert.equal((await quote(motion,{...body,quality,transferPolicy:temporaryPolicy})).status,400);assert.equal(motion.qs.size,0);
+ }
+ const privateEdit=editFixture(),privatePrice=await(await quote(privateEdit,editBody)).json();
+ assert.equal(Object.hasOwn(privatePrice,'transferPolicy'),false);assert.equal(Object.hasOwn(privatePrice,'transferConsentRequired'),false);
+});
+test('temporary Fal transfer needs exact quote-bound consent before reservation or media export',async()=>{
+ for(const patch of [{},{transferConsent:true},{transferConsent:null},{transferConsent:'public'},{transferConsent:temporaryPolicy,transferPolicy:temporaryPolicy}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);
+  const response=await submit(f,{quoteId:'quote1',idempotencyKey:'attempt',...patch});
+  assert.equal(response.status,400);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
+ }
+ const privateEdit=editFixture();await quote(privateEdit,editBody);
+ assert.equal((await submit(privateEdit,temporaryConfirmation)).status,400);assert.equal(privateEdit.calls().reserveCount,0);assert.equal(privateEdit.calls().uploadCalls,0);assert.equal(privateEdit.calls().providerCalls,0);
+ const motion=fixture();await quote(motion);
+ assert.equal((await submit(motion,temporaryConfirmation)).status,400);assert.equal(motion.calls().reserveCount,0);assert.equal(motion.calls().uploadCalls,0);
+});
+test('confirmed temporary edit uses exact O3 CDN body and one-day lifecycle while preserving guards and idempotency',async()=>{
+ const f=temporaryFixture();await quote(f,temporarySelection);
+ const response=await submit(f,temporaryConfirmation);assert.equal(response.status,202);assert.equal((await response.json()).state,'queued');
+ assert.deepEqual(f.contexts,[{jobId:'job1',model:'fal-ai/kling-video/o3/standard/video-to-video/edit',transferPolicy:temporaryPolicy},{jobId:'job1',model:'fal-ai/kling-video/o3/standard/video-to-video/edit',transferPolicy:temporaryPolicy}]);
+ const {submitted}=f.calls();assert.equal(submitted.url,'https://queue.fal.run/fal-ai/kling-video/o3/standard/video-to-video/edit');
+ assert.deepEqual(submitted.body,{video_url:f.assets.video.url,image_urls:[f.assets.image.url],prompt:f.qs.get('quote1').input.prompt,keep_audio:true,enable_safety_checker:true,shot_type:'customize'});
+ assert.deepEqual(JSON.parse(submitted.headers['X-Fal-Object-Lifecycle-Preference']),{expiration_duration_seconds:86400});
+ assert.equal(submitted.headers['X-Fal-Store-IO'],'0');assert.equal(submitted.headers['X-Fal-No-Retry'],'1');assert.equal(submitted.headers['x-app-fal-disable-fallback'],'true');assert.equal(submitted.headers['X-Fal-Request-Start-Timeout'],'300');
+ // A retry recovers the original accepted job, even after price expiry or
+ // without another consent field; it cannot trigger a second export/charge.
+ f.qs.get('quote1').expiresAt=Date.now()-1;assert.equal((await submit(f)).status,200);
+ assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().uploadCalls,2);assert.equal(f.calls().providerCalls,1);
+});
+test('temporary transfer bypasses the old owner-only inline restriction but keeps actual O3 duration checks',async()=>{
+ const f=temporaryFixture();f.assets.video.durationSeconds=8.2;assert.equal((await quote(f,temporarySelection)).status,201);assert.equal((await submit(f,temporaryConfirmation)).status,202);
+ const invalid=temporaryFixture();invalid.assets.video.durationSeconds=15.01;assert.equal((await quote(invalid,temporarySelection)).status,400);assert.equal(invalid.calls().reserveCount,0);
+});
+test('temporary CDN inputs reject signed URLs, inline bytes or changed manifests before dispatch and refund once',async()=>{
+ for(const patch of [{url:'https://v3b.fal.media/files/b/fixture/image.jpg?token=private'},{url:'data:image/jpeg;base64,/9j/'},{inline:true},{id:'wrong'},{size:0},{sha256:'b'.repeat(64)}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);Object.assign(f.assets.image,patch);
+  const response=await submit(f,temporaryConfirmation),job=await response.json();
+  assert.equal(job.state,'failed');assert.equal(job.refundConfirmed,true);assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().releaseCount,1);
+  assert.equal((await(await submit(f,temporaryConfirmation)).json()).state,'failed');assert.equal(f.calls().releaseCount,1);
+ }
+});
+test('result download derives temporary transfer only from the owned persisted quote and stores privately',async()=>{
+ const f=temporaryFixture();await quote(f,temporarySelection);await submit(f,temporaryConfirmation);
+ let observed;
+ f.services.results.store=async(job,url,options)=>{observed={job,url,options};return `rig-results/${job.id}.mp4`};
+ const result=await(await f.handler(get('/api/generations/job1?transferPolicy=private'))).json();
+ assert.equal(result.state,'completed');assert.equal(result.videoPath,'/api/generations/job1/video');assert.equal(result.videoUrl,undefined);
+ assert.equal(observed.options.transferPolicy,temporaryPolicy);assert.ok(observed.options.signal instanceof AbortSignal);
+ assert.doesNotMatch(JSON.stringify(result),/v3b\.fal|temporary-links|test-key/);
+ const privateMotion=fixture();await quote(privateMotion);await submit(privateMotion);let privateOptions;
+ privateMotion.services.results.store=async(_job,_url,options)=>{privateOptions=options;return 'private-key'};
+ assert.equal((await privateMotion.handler(get('/api/generations/job1?transferPolicy='+temporaryPolicy))).status,200);
+ assert.equal(Object.hasOwn(privateOptions,'transferPolicy'),false);
+});
+test('missing or corrupted quote policy prevents result access before any provider read',async()=>{
+ for(const modify of [q=>{q.input.data.transferPolicy='public'},q=>{q.input.data.quality='pro'},q=>{q.userId='other'}]){
+  const f=temporaryFixture();await quote(f,temporarySelection);await submit(f,temporaryConfirmation);modify(f.qs.get('quote1'));
+  const response=await f.handler(get('/api/generations/job1'));assert.equal(response.status,503);assert.equal(f.calls().providerCalls,1);assert.equal((await f.services.jobs.getOwned('u1','job1')).state,'queued');
+ }
 });

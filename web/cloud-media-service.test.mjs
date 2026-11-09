@@ -2,7 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {e
 import {createCloudMediaService} from './cloud-media-service.mjs';import {createAssets} from './assets.mjs';
 const run=promisify(execFile),source=new URL('./test/fixtures/input.mp4',import.meta.url).pathname,secret='x'.repeat(40),owner='owner1',origin='https://rig.test';
 async function files(){const dir=await mkdtemp(join(tmpdir(),'rig-media-int-'));try{const jpg=join(dir,'frame.jpg'),mp4=join(dir,'clip.mp4');await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-frames:v','1','-threads','1','-y',jpg]);await run('ffmpeg',['-hide_banner','-v','error','-i',source,'-t','3','-vf','fps=30','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',mp4]);return {jpg:await readFile(jpg),mp4:await readFile(mp4)}}finally{await rm(dir,{recursive:true,force:true})}}
-function memory(){const map=new Map();return {map,async head(k){return map.has(k)?{}:null},async delete(k){map.delete(k)},async put(k,b,o){if(map.has(k))return null;map.set(k,{bytes:new Uint8Array(b),customMetadata:o.customMetadata});return {key:k}},async get(k){const v=map.get(k);if(!v)return null;return {customMetadata:v.customMetadata,body:new Response(v.bytes).body}}}}
+function memory(){const map=new Map();return {map,async head(k){return map.has(k)?{}:null},async delete(k){map.delete(k)},async put(k,b,o){if(map.has(k))return null;map.set(k,{bytes:new Uint8Array(b),customMetadata:o.customMetadata,httpMetadata:o.httpMetadata});return {key:k}},async get(k){const v=map.get(k);if(!v)return null;return {customMetadata:v.customMetadata,httpMetadata:v.httpMetadata,body:new Response(v.bytes).body}}}}
 function bindings(f){const trace=[];return {trace,images:{input(){return {transform(options){trace.push(options);return {output:async()=>({response:()=>new Response(f.jpg,{headers:{'content-type':'image/jpeg'}})})}}}}},video:{input(){return {transform(){return {output(){return {response:async()=>new Response(f.mp4,{headers:{'content-type':'video/mp4'}})}}}}}}}}}
 function setup(f){const bucket=memory(),b=bindings(f),handler=createCloudMediaService({secret,bucket,images:b.images,video:b.video,enabled:true});return {bucket,b,handler}}
 const post=(path,bytes,user=owner,key=secret)=>new Request('https://rig-media.internal'+path,{method:'POST',headers:{authorization:`Bearer ${key}`,'x-rig-user':user,'content-type':'application/octet-stream'},body:bytes});
@@ -169,4 +169,27 @@ test('media service connection and invalid responses receive safe distinct messa
   const result=await assets.handle(new Request(origin+'/api/assets',{method:'POST',headers:{origin,'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:new Uint8Array(64)}));
   assert.equal(result.status,503);assert.equal(result.headers.get('x-rig-media-uncertain'),'1');assert.equal((await result.json()).error,expected);
  }
+});
+test('private provider copies are immutable, owner-bound, hash-verified and contain no identity metadata',async()=>{
+ const f=await files(),{bucket,handler}=setup(f),job='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',otherJob='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ const createdImage=await handler(post('/v1/normalize/image',f.jpg)),image=await createdImage.json();assert.equal(createdImage.status,201);
+ const createdVideo=await handler(post('/v1/normalize/video?durationSeconds=3&startSeconds=0&keepSound=false',f.mp4)),video=await createdVideo.json();assert.equal(createdVideo.status,201);
+ const request=(asset,payload,user=owner,key=secret)=>new Request(`https://rig-media.internal/v1/provider-inputs/${asset}`,{method:'POST',headers:{authorization:`Bearer ${key}`,'x-rig-user':user,'content-type':'application/json'},body:JSON.stringify(payload)});
+ assert.equal((await handler(request(image.id,{jobId:job,sha256:image.sha256},owner,'wrong'))).status,401);
+ assert.equal((await handler(request(image.id,{jobId:job,sha256:image.sha256},'other'))).status,404);
+ assert.equal((await handler(request(image.id,{jobId:job,sha256:'0'.repeat(64)}))).status,404);
+ for(const payload of [{jobId:job,sha256:image.sha256,extra:true},{jobId:'not-a-job',sha256:image.sha256},{jobId:job,sha256:'bad'}])assert.equal((await handler(request(image.id,payload))).status,400);
+ for(const asset of [image,video]){
+  const first=await handler(request(asset.id,{jobId:job,sha256:asset.sha256}));assert.equal(first.status,201);const copy=await first.json();
+  assert.match(copy.key,new RegExp(`^rig-inputs/provider/[a-f0-9]{64}\\.${asset.kind==='image'?'jpg':'mp4'}$`));assert.equal(copy.kind,asset.kind);assert.equal(copy.mime,asset.mime);assert.equal(copy.sha256,asset.sha256);assert.equal(copy.size,asset.size);assert.equal(JSON.stringify(copy).includes(owner),false);assert.equal(JSON.stringify(copy).includes(asset.id),false);
+  const stored=bucket.map.get(copy.key);assert.equal(stored.customMetadata,undefined);assert.deepEqual(stored.httpMetadata,{contentType:asset.mime,cacheControl:'private, no-store'});assert.equal(stored.bytes.length,asset.size);
+  const replay=await handler(request(asset.id,{jobId:job,sha256:asset.sha256}));assert.equal(replay.status,201);assert.deepEqual(await replay.json(),copy);
+  const distinct=await handler(request(asset.id,{jobId:otherJob,sha256:asset.sha256}));assert.equal(distinct.status,201);assert.notEqual((await distinct.json()).key,copy.key);
+  stored.bytes[0]^=1;assert.equal((await handler(request(asset.id,{jobId:job,sha256:asset.sha256}))).status,503);stored.bytes[0]^=1;
+  stored.customMetadata={manifest:'must-not-leak'};assert.equal((await handler(request(asset.id,{jobId:job,sha256:asset.sha256}))).status,503);stored.customMetadata=undefined;
+ }
+ const original=bucket.map.get(`rig-inputs/${owner}/${image.id}`);original.bytes[0]^=1;assert.equal((await handler(request(image.id,{jobId:otherJob,sha256:image.sha256}))).status,503);original.bytes[0]^=1;
+ const oversized=request(image.id,{jobId:job,sha256:image.sha256,padding:'x'.repeat(1200)});assert.equal((await handler(oversized)).status,400);
+ const manifest=JSON.parse(original.customMetadata.manifest);manifest.expiresAt=Date.now()-1;original.customMetadata.manifest=JSON.stringify(manifest);
+ assert.equal((await handler(request(image.id,{jobId:job,sha256:image.sha256}))).status,404);
 });

@@ -51,6 +51,18 @@ async function normalizeImage(images,bytes,signal){
 }
 function videoMime(b){if(b.length>=12&&String.fromCharCode(...b.slice(4,8))==='ftyp')return 'video/mp4';if(b[0]===0x1a&&b[1]===0x45&&b[2]===0xdf&&b[3]===0xa3)return 'video/webm';throw Error('unsupported video')}
 function validMeta(m,id,owner){return m&&m.id===id&&m.ownerId===owner&&['image','video'].includes(m.kind)&&m.mime===(m.kind==='video'?'video/mp4':'image/jpeg')&&SHA.test(m.sha256??'')&&Number.isSafeInteger(m.size)&&m.size>=16&&m.size<=MAX&&Number.isSafeInteger(m.width)&&m.width>=340&&m.width<=1280&&Number.isSafeInteger(m.height)&&Number.isSafeInteger(m.expiresAt)&&m.height>=340&&m.height<=1280&&(m.kind!=='video'||Number.isFinite(m.durationSeconds)&&m.durationSeconds>=3&&m.durationSeconds<=30&&(m.fps===undefined||Number.isFinite(m.fps)&&m.fps>=20&&m.fps<=60))}
+async function readCopyRequest(req,signal){
+ if(!/^application\/json(?:\s*;|\s*$)/i.test(req.headers.get('content-type')||'')||!req.body)return null;
+ const length=req.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>1024))return null;
+ const reader=req.body.getReader(),parts=[];let n=0;
+ try{for(;;){const {done,value}=await raceDeadline(reader.read(),signal);if(done)break;if(!(value instanceof Uint8Array))return null;n+=value.length;if(n>1024)return null;parts.push(value)}if(length!==null&&n!==Number(length))return null;const data=new Uint8Array(n);let p=0;for(const part of parts){data.set(part,p);p+=part.length}const o=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));return o&&typeof o==='object'&&!Array.isArray(o)&&Object.keys(o).length===2&&Object.keys(o).every(k=>k==='jobId'||k==='sha256')&&typeof o.jobId==='string'&&UUID.test(o.jobId)&&o.jobId===o.jobId.toLowerCase()&&typeof o.sha256==='string'&&SHA.test(o.sha256)?o:null}catch{return null}finally{try{void reader.cancel().catch(()=>{});reader.releaseLock()}catch{}}
+}
+async function providerCopyKey(secret,owner,jobId,assetId,sha256,kind){
+ const key=await crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const signed=await crypto.subtle.sign('HMAC',key,enc.encode(`rig-provider-copy-v1:${owner}:${jobId}:${assetId}:${sha256}`));
+ const name=Array.from(new Uint8Array(signed),x=>x.toString(16).padStart(2,'0')).join('');
+ return `rig-inputs/provider/${name}.${kind==='video'?'mp4':'jpg'}`;
+}
 function parseVideo(url){if([...url.searchParams.keys()].some(k=>!['durationSeconds','startSeconds','keepSound'].includes(k)||url.searchParams.getAll(k).length!==1))throw Error('bad query');const duration=url.searchParams.get('durationSeconds'),start=url.searchParams.get('startSeconds'),sound=url.searchParams.get('keepSound');if(!/^(?:[3-9]|[12][0-9]|30)$/.test(duration??'')||!/^(?:0|[1-9][0-9]{0,3})(?:\.[0-9]{1,3})?$/.test(start??'')||Number(start)>3600||!['true','false'].includes(sound))throw Error('bad query');return {durationSeconds:Number(duration),startSeconds:Number(start),keepSound:sound==='true'}}
 export function createCloudMediaService({secret,bucket,images,video,enabled=false,diagnosticEnabled=false,summaryEnabled=false,diagnosticOwner=''}){
  if(!enabled||typeof secret!=='string'||secret.length<32||!bucket||typeof bucket.put!=='function'||typeof bucket.get!=='function'||!images||!video)throw Error('Private media not configured');
@@ -63,6 +75,24 @@ export function createCloudMediaService({secret,bucket,images,video,enabled=fals
   const summary=summaryEnabled===true&&diagnosticOwnerRequest;
   const u=new URL(req.url),get=u.pathname.match(/^\/v1\/assets\/([0-9a-f-]{36})$/i);
   if(req.method==='GET'&&get&&!u.search){const id=get[1];if(!UUID.test(id))return json(400,{error:'Ongeldig bestand.'});try{const getSignal=AbortSignal.timeout(30000);const obj=await raceDeadline(bucket.get(`rig-inputs/${owner}/${id}`),getSignal);if(!obj)return json(404,{error:'Niet gevonden.'});const metadata=JSON.parse(obj.customMetadata?.manifest??'null');if(!validMeta(metadata,id,owner))throw Error('bad metadata');if(metadata.expiresAt<=Date.now()){try{await raceDeadline(bucket.delete(`rig-inputs/${owner}/${id}`),AbortSignal.timeout(5000))}catch{}return json(404,{error:'Bestand verlopen.'})}const bytes=await readBounded(obj.body,getSignal);if(bytes.length!==metadata.size||await hash(bytes)!==metadata.sha256)throw Error('bad object');return new Response(bytes,{headers:{'Content-Type':metadata.mime,'Content-Length':String(metadata.size),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Rig-Asset-Kind':metadata.kind,'X-Rig-Sha256':metadata.sha256,'X-Rig-Width':String(metadata.width),'X-Rig-Height':String(metadata.height),...(metadata.kind==='video'?{'X-Rig-Duration-Seconds':String(metadata.durationSeconds),...(metadata.fps!==undefined?{'X-Rig-Fps':String(metadata.fps)}:{})}:{})}})}catch{return json(503,{error:'Bestand niet beschikbaar.'})}}
+  // Only the trusted private backend can request this copy, after it has
+  // authorized and reserved a specific job. Never put identity metadata on it.
+  const copy=u.pathname.match(/^\/v1\/provider-inputs\/([a-f0-9-]{36})$/);
+  if(copy&&req.method==='POST'&&!u.search){
+   const id=copy[1];if(!UUID.test(id)||id!==id.toLowerCase())return json(400,{error:'Ongeldig bestand.'});
+   const signal=AbortSignal.timeout(30000),data=await readCopyRequest(req,signal);if(!data)return json(400,{error:'Ongeldige aanvraag.'});
+   try{
+    const original=await raceDeadline(bucket.get(`rig-inputs/${owner}/${id}`),signal);if(!original)return json(404,{error:'Niet gevonden.'});
+    const m=JSON.parse(original.customMetadata?.manifest??'null');if(!validMeta(m,id,owner)||m.expiresAt<=Date.now()||m.sha256!==data.sha256)return json(404,{error:'Niet gevonden.'});
+    const bytes=await readBounded(original.body,signal);if(bytes.length!==m.size||await hash(bytes)!==m.sha256)throw Error('Source integrity mismatch');
+    const key=await providerCopyKey(secret,owner,data.jobId,id,m.sha256,m.kind);
+    await raceDeadline(bucket.put(key,bytes,{onlyIf:new Headers({'If-None-Match':'*'}),httpMetadata:{contentType:m.mime,cacheControl:'private, no-store'}}),signal);
+    const saved=await raceDeadline(bucket.get(key),signal);
+    if(!saved||saved.httpMetadata?.contentType!==m.mime||saved.httpMetadata?.cacheControl!=='private, no-store'||Object.keys(saved.customMetadata||{}).length)throw Error('Copy metadata mismatch');
+    const readback=await readBounded(saved.body,signal);if(readback.length!==m.size||await hash(readback)!==m.sha256)throw Error('Copy integrity mismatch');
+    return json(201,{key,kind:m.kind,mime:m.mime,size:m.size,sha256:m.sha256});
+   }catch{return json(503,{error:'Bestand tijdelijk niet beschikbaar.'})}
+  }
   const normalize=u.pathname.match(/^\/v1\/normalize\/(image|video)$/);if(req.method!=='POST'||!normalize)return json(404,{error:'Niet gevonden.'});
   if(req.headers.get('content-type')!=='application/octet-stream')return json(415,{error:'Ongeldig bestandstype.'});const declared=req.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>MAX))return json(413,{error:'Bestand te groot.'});
   let key=null,wrote=false,dispatched=false,storageUncertain=false,phase='input',signal;

@@ -1,5 +1,7 @@
 import {providerJSON,providerInputValidation} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
+import {isR2InputUrl} from './rig-r2-inputs.mjs';
+import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -8,6 +10,9 @@ const QUEUE = 'https://queue.fal.run';
 const SUBJECT_REJECTED='Deze foto is niet geschikt voor persoonsbeweging. Kies Video bewerken, of gebruik een foto met een duidelijk zichtbaar menselijk bovenlichaam.';
 const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at a fixed distance and focal length throughout. Keep the person centered and their complete body visible from the top of the head to both shoes, with generous space above the head, below the feet and on both sides for all dance movements. Maintain the initial wide framing throughout the entire clip, with a stable background and realistic proportions. ';
 const MODEL = Object.freeze({ standard: 'fal-ai/kling-video/v3/standard/motion-control', pro: 'fal-ai/kling-video/v3/pro/motion-control', 'edit-standard':'fal-ai/kling-video/o3/standard/video-to-video/edit' });
+// This transfer changes who can read Fal's temporary copies. It is opt-in per
+// quoted O3 edit, never inferred from the user, model default or runtime owner.
+const TEMPORARY_FAL_LINKS='fal-temporary-links-v1';
 const RESPONSE_HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
 const respond = (value, code=200) => Response.json(value,{status:code,headers:RESPONSE_HEADERS});
 const fail = (message,code) => respond({error:message},code);
@@ -17,17 +22,25 @@ export function isFalMedia(value) {
   try { const u = new URL(value); return u.protocol==='https:' && !u.username && !u.password && !u.port && !u.hash && u.hostname==='v3b.fal.media' && /^\/files\/b\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(u.pathname); } catch { return false; }
 }
 function validAsset(x, kind) { return !!x && x.verified===true && x.kind===kind && isFalMedia(x.url); }
+function validTemporaryAsset(x,kind,ref) {
+  if(!validAsset(x,kind)||x.inline===true||x.id!==ref.id||x.sha256!==ref.sha256||!Number.isSafeInteger(x.size)||x.size<=0)return false;
+  try{const u=new URL(x.url);return u.href===u.origin+u.pathname;}catch{return false;}
+}
 function validPrepared(x,kind,id) { return !!x && x.verified===true && x.kind===kind && x.id===id && /^[a-f0-9]{64}$/.test(x.sha256??''); }
 function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.editStandard:s.pricing[quality]; }
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
+const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
 function editPrompt(prompt) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${prompt}`; }
 function configured(s) {
   if (s?.mode !== 'test') return false; // live billing/settlement is not ready
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
   return typeof s?.authenticate === 'function' && typeof s?.assets?.getOwned === 'function' && typeof s?.assets?.uploadOwned === 'function' && typeof s?.quotes?.create === 'function' && typeof s?.quotes?.getOwned === 'function' && typeof s?.jobs?.getByIdempotency === 'function' && typeof s?.jobs?.getRecent === 'function' && typeof s?.jobs?.begin === 'function' && typeof s?.jobs?.getOwned === 'function' && typeof s?.jobs?.authorizeDispatch === 'function' && typeof s?.jobs?.markSubmitted === 'function' && typeof s?.jobs?.markUnknown === 'function' && typeof s?.jobs?.markPreparationFailed === 'function' && typeof s?.jobs?.claimPoll === 'function' && typeof s?.jobs?.releasePoll === 'function' && typeof s?.jobs?.markCompleted === 'function' && typeof s?.jobs?.markProviderFailed === 'function' && typeof s?.results?.store === 'function' && typeof s?.results?.read === 'function' && typeof s?.falKey === 'string' && s.falKey.length>0 && s.falKey.length<1024 && Number.isSafeInteger(s?.pricing?.standard) && s.pricing.standard>0 && Number.isSafeInteger(s?.pricing?.pro) && s.pricing.pro>0 && typeof s.pricing.version==='string' && s.pricing.version.length>0;
 }
-function publicJob(job) { return { id:job.id, state:job.state, priceCents:job.priceCents, currency:'EUR' }; }
+function publicJob(job) {
+  const failureCode=job.state==='failed'&&['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)?job.failureCode:null;
+  return { id:job.id, state:job.state, priceCents:job.priceCents, currency:'EUR',...(failureCode?{failureCode}:{}) };
+}
 async function readJSON(req) {
   if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers.get('content-type') ?? '')) return null;
   const declared=req.headers.get('content-length');
@@ -49,10 +62,11 @@ async function readJSON(req) {
 
 function inputData(o) {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
-  const { imageId, videoId, faceId=null, angleIds=[], quality, prompt='', keepSound=true, steadyCamera=quality!=='edit-standard' }=o;
+  const { imageId, videoId, faceId=null, angleIds=[], quality, prompt='', keepSound=true, steadyCamera=quality!=='edit-standard', transferPolicy }=o;
   if (!ID.test(imageId??'') || !ID.test(videoId??'') || !Object.hasOwn(MODEL, quality) || typeof prompt!=='string' || prompt.length>1900 || typeof keepSound!=='boolean' || typeof steadyCamera!=='boolean' || !(faceId===null || ID.test(faceId)) || !Array.isArray(angleIds) || angleIds.length>3 || angleIds.some(x=>typeof x!=='string'||!ID.test(x)) || (angleIds.length>0 && !faceId)) return null;
   if (quality==='edit-standard' && (!prompt.trim() || faceId!==null || angleIds.length>0 || steadyCamera)) return null;
-  return {imageId,videoId,faceId,angleIds:[...angleIds],quality,prompt,keepSound,steadyCamera};
+  if(Object.hasOwn(o,'transferPolicy')&&(quality!=='edit-standard'||transferPolicy!==TEMPORARY_FAL_LINKS))return null;
+  return {imageId,videoId,faceId,angleIds:[...angleIds],quality,prompt,keepSound,steadyCamera,...(transferPolicy?{transferPolicy}:{})};
 }
 
 // `create` and `begin` are deliberately contracts, not in-memory stand-ins.
@@ -93,6 +107,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       // not from a browser, file name or untrusted user-provided metadata.
       if (video.durationVerified!==true || !Number.isFinite(video.durationSeconds) || video.durationSeconds<3 || video.durationSeconds>30) return fail('De videoduur kon niet veilig worden vastgesteld.',400);
       if (data.quality==='edit-standard' && !validEditVideo(video)) return fail('Kies voor deze videobewerking 3 tot 15 seconden, minstens 720 pixels breed en hoog, met 23 tot 60 beelden per seconde.',400);
+      if (data.quality==='edit-standard' && data.transferPolicy!==TEMPORARY_FAL_LINKS && services.inlineO3Owner===user.id && !inlineFiveSeconds(video.durationSeconds)) return fail('Kies voor deze privéproef een fragment van 5 seconden.',400);
       const cents=Math.ceil(video.durationSeconds)*configuredRate(services,data.quality);
       if (!Number.isSafeInteger(cents) || cents<=0) return fail('Prijs is niet beschikbaar.',503);
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:video.durationSeconds,priceCents:cents}))return fail(services.trialGuard.limitMessage||'Deze video past niet binnen het beschikbare testbudget.',400);
@@ -103,7 +118,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
-      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),priceCents:cents,currency:'EUR',expiresAt:quote.expiresAt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})},201);
+      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),priceCents:cents,currency:'EUR',expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})},201);
     }
     if (req.method==='POST' && path==='/api/generations') {
       const data=await readJSON(req);
@@ -114,6 +129,12 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let quote; try {quote=await services.quotes.getOwned(user.id,data.quoteId);} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || quote.userId!==user.id || !Object.values(MODEL).includes(quote.model) || !Number.isSafeInteger(quote.priceCents) || quote.priceCents<=0 || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now() || !quote.input || !inputData(quote.input.data) || !Array.isArray(quote.input.refs) || quote.input.refs.length<2 || quote.input.refs.length>6) return fail('Prijsopgave is niet geldig of verlopen.',409);
       if (quote.model!==MODEL[quote.input.data.quality] || !qualityEnabled(services,quote.input.data.quality)) return fail('Dit videomodel is niet beschikbaar. Vraag opnieuw de prijs op.',409);
+      const temporaryLinks=quote.model===MODEL['edit-standard']&&quote.input.data.transferPolicy===TEMPORARY_FAL_LINKS;
+      // Consent authorizes this quote only. Reject before credit reservation,
+      // media export or provider work, while preserving prior-job recovery.
+      if(Object.hasOwn(data,'transferPolicy')||(temporaryLinks?data.transferConsent!==TEMPORARY_FAL_LINKS:Object.hasOwn(data,'transferConsent')))return fail('Bevestig opnieuw de prijs en de tijdelijke Fal-bestandslinks.',400);
+      const inlineEdit=!temporaryLinks&&quote.model===MODEL['edit-standard']&&services.inlineO3Owner===user.id;
+      if(inlineEdit&&!inlineFiveSeconds(quote.durationSeconds))return fail('Kies voor deze privéproef 5 seconden en vraag de prijs opnieuw op.',409);
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
       if(quote.input.data.quality!=='edit-standard'){
         const imageRef=quote.input.refs[0];
@@ -129,7 +150,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if (!started.job || !ID.test(started.job.id??'')) return fail('Aanvraagstatus is onzeker.',503);
       if (started.kind==='existing') return respond(publicJob(started.job));
       const jobId=started.job.id;
-      let providerInput;
+      let providerInput,providerBody;
       try {
         if(services.trialGuard){const estimate=quote.input.providerEstimateUsdMicros;if(!Number.isSafeInteger(estimate)||estimate<=0)throw Error('Missing confirmed provider estimate');const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);if(current>estimate)throw Error('Provider price increased');}
         if(services.trialGuard && !await services.trialGuard.claimOnce({userId:user.id,jobId,quote}))throw Error('Trial allowance unavailable');
@@ -140,24 +161,33 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if(refs.length!==ids.length || typeof quote.input.prompt!=='string' || quote.input.prompt.length>2500)throw Error('invalid quote');
         if(selected.quality==='edit-standard'){
           const verified=await services.assets.getOwned(user.id,selected.videoId);
-          if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validEditVideo(verified))throw Error('Invalid prepared edit video');
+          if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validEditVideo(verified)||inlineEdit&&!inlineFiveSeconds(verified.durationSeconds))throw Error('Invalid prepared edit video');
         }
         const uploaded=[];
         for(let i=0;i<refs.length;i++){
           const kind=i===1?'video':'image', ref=refs[i];
           if(!ref||ref.id!==ids[i]||ref.kind!==kind||!/^[a-f0-9]{64}$/.test(ref.sha256??''))throw Error('invalid reference');
-          const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,selected.quality==='edit-standard'?{jobId,model:quote.model}:undefined);
-          if(selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind)) : !validAsset(asset,kind))throw Error('invalid uploaded asset');
+          const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,selected.quality==='edit-standard'?{jobId,model:quote.model,...(temporaryLinks?{transferPolicy:TEMPORARY_FAL_LINKS}:{})}:undefined);
+          if(temporaryLinks){
+            if(!validTemporaryAsset(asset,kind,ref))throw Error('Invalid temporary Fal input');
+          }else if(inlineEdit){
+            if(asset?.id!==ref.id||asset.sha256!==ref.sha256||!await validateInlineInput(asset,{kind,sha256:ref.sha256}))throw Error('Invalid inline input');
+          }else if(asset?.inline===true|| (selected.quality==='edit-standard' ? !(asset?.verified===true&&asset.kind===kind&&(services.inputR2Config?isR2InputUrl(asset.url,{config:services.inputR2Config,kind}):isProviderInputUrl(asset.url,services.inputGatewayOrigin,kind))) : !validAsset(asset,kind)))throw Error('invalid uploaded asset');
           uploaded.push(asset);
         }
         const [image,video,...rest]=uploaded;
         if(selected.quality==='edit-standard'){
           if(!validEditVideo(video)||!quote.input.prompt.includes('@Image1')||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
-          providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true};
+          providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,...(temporaryLinks?{shot_type:'customize'}:{})};
         }else{
           providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
           if(selected.faceId){providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];if(!providerInput.prompt.includes('@Element1'))providerInput.prompt+=' The person is @Element1.';}
         }
+        // Inline bytes stay only in this authenticated server-to-provider body.
+        // Bound the complete encoding before the atomic dispatch decision; no
+        // fallback upload, public link or paid retry is permitted on overflow.
+        providerBody=JSON.stringify(providerInput);
+        if(inlineEdit&&new TextEncoder().encode(providerBody).byteLength>INLINE_REQUEST_MAX_BYTES)throw Error('Inline request too large');
       } catch {
         // No generation request has been sent yet. Release once, transactionally.
         try {
@@ -181,7 +211,8 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       }
       try {
         const signal=AbortSignal.timeout(30000);
-        const r=await fetchImpl(`${QUEUE}/${quote.model}`,{method:'POST',redirect:'manual',signal,headers:{Authorization:`Key ${services.falKey}`,'Content-Type':'application/json','X-Fal-No-Retry':'1','X-Fal-Request-Start-Timeout':'300','x-app-fal-disable-fallback':'true','X-Fal-Store-IO':'0','X-Fal-Object-Lifecycle-Preference':'{"expiration_duration_seconds":86400,"initial_acl":{"default":"forbid","rules":[]}}'},body:JSON.stringify(providerInput)});
+        const lifecycle=temporaryLinks?{expiration_duration_seconds:86400}:{expiration_duration_seconds:86400,initial_acl:{default:'forbid',rules:[]}};
+        const r=await fetchImpl(`${QUEUE}/${quote.model}`,{method:'POST',redirect:'manual',signal,headers:{Authorization:`Key ${services.falKey}`,'Content-Type':'application/json','X-Fal-No-Retry':'1','X-Fal-Request-Start-Timeout':'300','x-app-fal-disable-fallback':'true','X-Fal-Store-IO':'0','X-Fal-Object-Lifecycle-Preference':JSON.stringify(lifecycle)},body:providerBody});
         if (!r.ok) throw Error('ambiguous');
         const result=await providerJSON(r,{signal}); if (!REQ_ID.test(result.request_id??'')) throw Error('ambiguous');
         await services.jobs.markSubmitted(user.id,jobId,result.request_id);
@@ -192,8 +223,12 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       }
     }
     async function publicFailure(job) {
-      if(job.state!=='failed'||!['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)||!REQ_ID.test(job.falRequestId??'')||typeof services.jobs.confirmInputFailureRefund!=='function')return publicJob(job);
-      try {return {...publicJob(job),...(await services.jobs.confirmInputFailureRefund(user.id,job.id,job.falRequestId)?{refundConfirmed:true}:{})};}catch{return publicJob(job);}
+      if(job.state!=='failed')return publicJob(job);
+      const inputFailure=['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode);
+      if(inputFailure&&!REQ_ID.test(job.falRequestId??''))return publicJob(job);
+      const confirm=inputFailure?services.jobs.confirmInputFailureRefund:services.jobs.confirmFailureRefund;
+      if(typeof confirm!=='function')return publicJob(job);
+      try {return {...publicJob(job),...(await confirm.call(services.jobs,user.id,job.id,job.falRequestId??null)===true?{refundConfirmed:true}:{})};}catch{return publicJob(job);}
     }
     const match=path.match(/^\/api\/generations\/([a-zA-Z0-9_-]{1,100})(\/video)?$/);
     if(req.method==='GET' && match) {
@@ -202,6 +237,13 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(match[2]) { if(job.state!=='completed') return fail('Video is nog niet beschikbaar.',404); try {return await services.results.read(job);} catch {return fail('Video is tijdelijk niet beschikbaar.',503);} }
       if(job.state==='completed') return respond({...publicJob(job),videoPath:`/api/generations/${job.id}/video`});
       if(job.state!=='queued' || !REQ_ID.test(job.falRequestId??'')) return respond(await publicFailure(job));
+      let allowInlineEcho=false,resultTransferPolicy;
+      try{
+        const q=await services.quotes.getOwned(user.id,job.quoteId);
+        if(!q||q.userId!==user.id||q.id!==job.quoteId||!Object.values(MODEL).includes(q.model)||!inputData(q.input?.data))return fail('Status is tijdelijk niet beschikbaar.',503);
+        if(q.model===MODEL['edit-standard']&&q.input.data.quality==='edit-standard'&&q.input.data.transferPolicy===TEMPORARY_FAL_LINKS)resultTransferPolicy=TEMPORARY_FAL_LINKS;
+        allowInlineEcho=resultTransferPolicy===undefined&&services.inlineO3Owner===user.id&&q.model===MODEL['edit-standard']&&inlineFiveSeconds(q.durationSeconds);
+      }catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
       const url=`${QUEUE}/fal-ai/kling-video/requests/${encodeURIComponent(job.falRequestId)}`;
       let claim; try {claim=await services.jobs.claimPoll(user.id,job.id);} catch {return fail('Status is tijdelijk niet beschikbaar.',503);}
       if(!claim || claim.kind!=='acquired' || !REQ_ID.test(claim.token??'')) {
@@ -219,11 +261,11 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           // Network errors, missing results and unrecognised errors remain queued.
           if(typeof s.error!=='string' || !s.error.trim()) return respond({...publicJob(job),state:'needs_review'});
           const failed=await services.jobs.markProviderFailed(user.id,job.id,job.falRequestId,claim.token);
-          return respond(publicJob(failed));
+          return respond(await publicFailure(failed));
         }
         const response=await fetchImpl(url,{signal,redirect:'manual',headers:{Authorization:`Key ${services.falKey}`}});
         if(!response.ok){
-          const reason=await providerInputValidation(response,{signal,requestId:job.falRequestId});
+          const reason=await providerInputValidation(response,{signal,requestId:job.falRequestId,allowInlineEcho});
           if(reason){
             if(reason==='provider_subject_not_detected'){
               const q=await services.quotes.getOwned(user.id,job.quoteId);
@@ -235,7 +277,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           throw Error();
         }
         const result=await providerJSON(response,{signal}); if(!isFalMedia(result?.video?.url)) throw Error();
-        const key=await services.results.store(job,result.video.url,{signal});
+        const key=await services.results.store(job,result.video.url,{signal,...(resultTransferPolicy?{transferPolicy:resultTransferPolicy}:{})});
         const completed=await services.jobs.markCompleted(user.id,job.id,job.falRequestId,key,claim.token);
         return respond({...publicJob(completed),videoPath:`/api/generations/${job.id}/video`});
       } catch {return fail('Status is tijdelijk niet beschikbaar.',503);}

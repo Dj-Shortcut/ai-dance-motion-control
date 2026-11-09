@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {providerText,providerJSON} from './provider-response.mjs';
+import {providerText,providerJSON,providerInputValidation} from './provider-response.mjs';
 
 test('provider metadata enforces a streaming byte limit and does not trust content-length',async()=>{
  assert.deepEqual(await providerJSON(Response.json({request_id:'ok'}),{limit:128}),{request_id:'ok'});
@@ -26,4 +26,13 @@ test('expiration while the final chunk is delivered cannot produce a successful 
  const controller=new AbortController();
  const stream=new ReadableStream({pull(c){c.enqueue(new TextEncoder().encode('{"request_id":"ok"}'));controller.abort();c.close()}});
  await assert.rejects(providerText(new Response(stream),{signal:controller.signal}),/timeout/);
+});
+test('only explicitly bounded inline validation errors may contain a large echoed input, with the same exact terminal checks',async()=>{
+ const body={request_id:'same-request',detail:[{loc:['body'],type:'input_value_error',msg:'Failed to access the input file. Please ensure the URL is publicly accessible and in a supported format.',input:'data:video/mp4;base64,'+'A'.repeat(100000)}]};
+ const response=(b=body)=>Response.json(b,{status:422});
+ assert.equal(await providerInputValidation(response(),{requestId:'same-request'}),false);
+ assert.equal(await providerInputValidation(response(),{requestId:'same-request',allowInlineEcho:true}),'provider_input_unavailable');
+ assert.equal(await providerInputValidation(response(),{requestId:'different',allowInlineEcho:true}),false);
+ assert.equal(await providerInputValidation(response({...body,detail:[{...body.detail[0],msg:'Unknown failure'}]}),{requestId:'same-request',allowInlineEcho:true}),false);
+ assert.equal(await providerInputValidation(response({...body,detail:[{...body.detail[0],input:'A'.repeat(8*1024*1024)}]}),{requestId:'same-request',allowInlineEcho:true}),false);
 });

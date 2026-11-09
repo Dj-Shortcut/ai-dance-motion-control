@@ -53,3 +53,48 @@ credit keep their separate bounded grant.
 The EUR RIG test budget is not the USD balance of an external Fal account.
 The native Site still does not sell live Mollie packages. See the
 [launch review](../docs/launch-review.md) for the unresolved commercial gates.
+
+## Private five-second input transport
+
+The website's **Video bewerken** flow now offers the ordinary Mac/Fal transfer
+after the price is known. Its confirmation explains that Fal's temporary
+photo, source-video and result links can be opened by anyone holding the link.
+The persisted O3 quote selects `fal-temporary-links-v1`; the final generation
+request must explicitly confirm that same policy. The backend checks consent
+before reserving credits or exporting media. Changing a private quote's policy
+at confirmation is refused.
+
+For this opted-in route, RIG uploads the exact owned, digest-verified prepared
+bytes to new Fal CDN objects with a requested 24-hour expiry, verifies an
+anonymous byte-for-byte readback, and sends the canonical URLs to O3 Edit.
+It does not use the private R2 gateway or inline fallback for these requests.
+The output uses the same requested expiry, is checked and copied into RIG's
+existing private result bucket, and is served only through the owned job.
+No provider key, temporary URL or upload capability is returned to the browser.
+Price confirmation, one-dispatch guards, safety checks, no-retry behavior and
+failure refunds remain in place. A closed or changed confirmation never grants
+permission for another quote. Default API requests and human-motion videos
+retain the existing private provider path.
+
+The following owner-only inline path is retained for legacy private quotes;
+it is not selected by the website's opted-in O3 flow:
+
+`RIG_O3_INLINE_INPUTS_ENABLED=yes` enables a bounded, owner-only O3 input path.
+It applies only to the configured owner in owner access mode, with an
+independently verified 4.9–5.0 second clip. The private media bytes are encoded
+directly into the Fal request after the quoted hashes and reserved funds have
+been checked. JPEG input is capped at 1 MiB, MP4 at 3 MiB, and the complete
+encoded request at 6 MiB. Exceeding a bound fails before dispatch and never
+falls back to another upload or URL. Sponsored and motion paths are unchanged.
+
+This uses the data-URI input described in the exact
+[O3 API documentation](https://fal.ai/models/fal-ai/kling-video/o3/standard/video-to-video/edit/api#files)
+to avoid external URL download compatibility problems. The private Fal ACL,
+`X-Fal-Store-IO: 0`, safety checks and one-dispatch guard stay in
+place. Mock-provider checks do not prove that the closed Kling backend accepts
+this transport; only a customer-confirmed real result can establish that.
+
+For selections above the three-second minimum, preparation requests a 60 ms
+encoding margin and refuses output longer than the selected integer duration.
+The price still uses the independently measured duration and rounds upward;
+it never hides a 5.01-second file behind a five-second price.

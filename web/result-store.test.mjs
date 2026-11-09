@@ -68,6 +68,16 @@ test('a stalled download that times out never writes an output or settles it',as
  try{await assert.rejects(store.store(job,url,{signal:controller.signal}));assert.equal(b.items.size,0);assert.equal(canceled,true)}finally{clearTimeout(timer)}
 });
 
+test('quote-bound temporary result policy reaches the provider reader while the saved result remains private',async()=>{
+ const b=bucket(),seen=[];const store=createResultStore(b,async(_url,options)=>{seen.push(options);return response()});
+ assert.equal(await store.store(job,url,{transferPolicy:'fal-temporary-links-v1'}),job.resultKey);
+ assert.equal(seen[0].transferPolicy,'fal-temporary-links-v1');assert.equal(seen[0].redirect,'manual');
+ assert.equal(b.items.get(job.resultKey).httpMetadata.cacheControl,'private, no-store');assert.equal((await store.read(job)).headers.get('cache-control'),'private, no-store');
+ await assert.rejects(store.store(job,url,{transferPolicy:'public'}),/Unsupported transfer policy/);assert.equal(seen.length,1);
+ const privateJob={...job,id:'223e4567-e89b-42d3-a456-426614174000'};
+ await store.store(privateJob,url);assert.equal(seen.length,2);assert.equal(Object.hasOwn(seen[1],'transferPolicy'),false);
+});
+
 test('many media boxes use logarithmic range lookup and preserve real video offsets',async()=>{
  const boxCount=10000,mdatSize=9,added=boxCount*mdatSize,mdats=Array.from({length:boxCount},(_,i)=>({p:i*mdatSize,start:i*mdatSize+8,end:i*mdatSize+9}));
  let comparisons=0;assert.equal(resultMp4Testing.mediaContains(mdats,mdats.at(-1).start,mdats.at(-1).end,0,()=>comparisons++),true);assert.ok(comparisons<=14,`lookup took ${comparisons} comparisons`);

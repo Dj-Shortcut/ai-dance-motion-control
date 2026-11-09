@@ -1,7 +1,9 @@
 // TEST ONLY: compose with an authenticated private media service, never expose
 // the service directly. Live billing and real provider access remain disabled.
-import { uploadVerifiedAsset } from './upload.mjs';
+import { uploadVerifiedAsset,TEMPORARY_LINK_POLICY } from './upload.mjs';
 import {mintProviderInput,verifyProviderInput} from './rig-provider-inputs.mjs';
+import {mintR2Input,verifyR2Input} from './rig-r2-inputs.mjs';
+import {encodeInlineInput} from './rig-inline-inputs.mjs';
 const BASE='https://rig-media.internal';
 const MAX=16*1024*1024; // deliberate Worker memory bound; deployment needs global concurrency budget
 const USER=/^[a-zA-Z0-9_-]{1,100}$/;
@@ -75,6 +77,9 @@ export function createAssets(o){
  if(!optionsOk(o)||typeof o.authenticate!=='function')throw Error('asset dependencies missing');
  async function resolveOwned(user,id,upload,expectedSha,context){
    if(!USER.test(user??'')||!UUID.test(id??''))return null;
+   // The public HTTP asset-preparation handler never accepts this context.
+   // Only the generation handler can supply a quote-bound policy after consent.
+   if(upload&&context?.transferPolicy!==undefined&&(context.transferPolicy!==TEMPORARY_LINK_POLICY||context.model!=='fal-ai/kling-video/o3/standard/video-to-video/edit'||!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||!SHA.test(expectedSha??'')))throw Error('Invalid provider transfer context');
    if(!await o.limit(user,'asset-read'))throw Error('quota');
    // A service binding or similarly authenticated PRIVATE channel is mandatory.
    const res=await o.media.fetch(createMediaRequest(o,`/v1/assets/${id}`,user,{method:'GET',signal:AbortSignal.timeout(30000)}));
@@ -92,12 +97,28 @@ export function createAssets(o){
    if(!upload)return {id,kind,verified:true,sha256:sha,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
    // Do not expose URLs or credentials in user-facing responses; upload is made
    // only after authenticated ownership and digest checks on exact held bytes.
-   let url;
-   if(context?.model==='fal-ai/kling-video/o3/standard/video-to-video/edit'){
-    url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,kind});
-    await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+   let url,inline=false;
+   if(context?.transferPolicy===TEMPORARY_LINK_POLICY){
+    url=await uploadVerifiedAsset({asset:{verified:true,mime,size,body:new Blob([bytes],{type:mime})},key:o.falKey,fetchImpl:o.providerFetch||fetch,transferPolicy:TEMPORARY_LINK_POLICY});
+   }else if(context?.model==='fal-ai/kling-video/o3/standard/video-to-video/edit'){
+    if(o.inlineO3Owner===user){
+     if(!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||kind==='video'&&(!Number.isFinite(duration)||duration<4.9||duration>5))throw Error('Inline media unavailable');
+     url=encodeInlineInput({bytes,kind});inline=true;
+    }else if(o.r2Inputs){
+     // A private, metadata-free delivery copy has its own opaque filename.
+     // Its short-lived S3 URL avoids the browser checks on workers.dev.
+     const response=await o.media.fetch(createMediaRequest(o,`/v1/provider-inputs/${id}`,user,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json'},body:JSON.stringify({jobId:context.jobId,sha256:sha})}));
+     if(response.status!==201&&response.status!==200)throw Error('Private delivery copy unavailable');
+     const copy=await boundedJson(response);
+     if(copy?.kind!==kind||copy.mime!==mime||copy.size!==size||copy.sha256!==sha)throw Error('Private delivery copy mismatch');
+     url=await mintR2Input({config:o.r2Inputs,key:copy.key});
+     await verifyR2Input(url,{config:o.r2Inputs,key:copy.key,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+    }else{
+     url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,kind});
+     await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
+    }
    }else url=await uploadVerifiedAsset({asset:{verified:true,mime,size,body:new Blob([bytes],{type:mime})},key:o.falKey,fetchImpl:o.providerFetch||fetch});
-   return {kind,verified:true,url,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
+   return {kind,verified:true,url,width,height,...(inline?{inline:true,id,sha256:sha,size}:context?.transferPolicy===TEMPORARY_LINK_POLICY?{id,sha256:sha,size}:{}),...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
  }
  async function handle(req){
    if(req.method!=='POST'||new URL(req.url).pathname!==(o.ephemeral===true?'/api/media/test':'/api/assets'))return null;

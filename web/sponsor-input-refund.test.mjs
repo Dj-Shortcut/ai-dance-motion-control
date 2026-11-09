@@ -21,9 +21,19 @@ test('D1 sponsor input rejection releases exact ledger and allowance once; ambig
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_ledger WHERE event_id=?').bind(`release:${job}`).first()).n,1);
   await make(job2,'generic-123');lease=await jobs.claimPoll(owner,job2);failed=await jobs.markProviderFailed(owner,job2,'generic-123',lease.token);assert.equal(failed.failureCode,'provider_failed');
   assert.equal((await store.releaseInputFailure(owner,job2,'generic-123')).state,'unavailable');assert.equal(await jobs.confirmInputFailureRefund(owner,job2,'generic-123'),false);assert.deepEqual(await store.eligibility(owner),{state:'eligible',remainingCents:400});
+  assert.equal(await jobs.confirmFailureRefund(owner,job2,'generic-123'),false,'ledger return alone cannot confirm an unreleased sponsor allowance');
+  assert.equal((await db.prepare('SELECT released_at FROM rig_sponsored_reservations WHERE job_id=?').bind(job2).first()).released_at,null);
   await make(job3,'subject-123');lease=await jobs.claimPoll(owner,job3);failed=await jobs.markProviderFailed(owner,job3,'subject-123',lease.token,'provider_subject_not_detected');assert.equal(failed.failureCode,'provider_subject_not_detected');
   assert.equal(await jobs.confirmInputFailureRefund(owner,job3,'subject-123'),true);assert.equal((await store.releaseInputFailure(owner,job3,'wrong')).state,'unavailable');
   assert.ok((await Promise.all([store.releaseInputFailure(owner,job3,'subject-123'),store.releaseInputFailure(owner,job3,'subject-123')])).every(x=>x.state==='released'));
   assert.deepEqual(await store.eligibility(owner),{state:'eligible',remainingCents:400});assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_ledger WHERE event_id=?').bind(`release:${job3}`).first()).n,1);
+  // A trusted manual reconciliation can release a generic sponsor hold. The
+  // status reader may acknowledge it but cannot perform that release itself.
+  await db.prepare('UPDATE rig_sponsored_reservations SET released_at=? WHERE job_id=?').bind(Date.now(),job2).run();
+  const before=await db.prepare('SELECT released_at FROM rig_sponsored_reservations WHERE job_id=?').bind(job2).first();
+  assert.equal(await jobs.confirmFailureRefund(owner,job2,'generic-123'),true);
+  assert.equal(await jobs.confirmFailureRefund(other,job2,'generic-123'),false);
+  assert.equal(await jobs.confirmFailureRefund(owner,job2,'wrong-request'),false);
+  assert.deepEqual(await db.prepare('SELECT released_at FROM rig_sponsored_reservations WHERE job_id=?').bind(job2).first(),before);
  }finally{await mf.dispose()}
 });

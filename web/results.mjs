@@ -2,6 +2,7 @@
 // Ingress auth, global rate limits and bucket lifecycle remain host responsibilities.
 import {isFalMedia} from './generation.mjs';
 import {inspectResultMp4} from './result-mp4-inspect.mjs';
+import {TEMPORARY_LINK_POLICY} from './upload.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const requestId=/^[a-zA-Z0-9_-]{1,100}$/;
 // Hold a bounded result in memory until structural inspection succeeds.
@@ -20,12 +21,13 @@ export function createResultStore(bucket,fetchImpl=fetch){
   if(!bucket || typeof bucket.put!=='function' || typeof bucket.get!=='function' || typeof bucket.head!=='function') throw Error('Private result storage required');
   return {
     // The caller must own the durable job and hold its unexpired poll lease.
-    async store(job,url,{signal}={}){
+    async store(job,url,{signal,transferPolicy}={}){
       const key=keyFor(job);
+      if(transferPolicy!==undefined&&transferPolicy!==TEMPORARY_LINK_POLICY)throw Error('Unsupported transfer policy');
       if(!isFalMedia(url))throw Error('Untrusted result origin');
       const old=await bounded(bucket.head(key),signal);
       if(old){if(!matches(old,job)||old.customMetadata?.inspection!=='result-mp4-v1')throw Error('Result conflict or unverified legacy result');return key;}
-      const response=await bounded(fetchImpl(url,{signal,redirect:'manual',headers:{Accept:'video/mp4'}}),signal);
+      const response=await bounded(fetchImpl(url,{signal,redirect:'manual',headers:{Accept:'video/mp4'},...(transferPolicy===TEMPORARY_LINK_POLICY?{transferPolicy}:{})}),signal);
       if(!response.ok)throw Error('Result unavailable');
       const length=lengthOf(response),reader=response.body.getReader(),limit=length??maxUnknownBytes;
       // A known-size response uses one bounded allocation. Unknown-size output
