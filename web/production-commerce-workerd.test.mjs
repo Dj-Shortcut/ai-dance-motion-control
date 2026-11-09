@@ -82,3 +82,57 @@ test('production signed bridge rejects spoofing, replay, cross-origin writes and
   assert.equal((await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).status,503);assert.equal((await stats(f)).providerReads,0);
  }finally{await f.dispose()}
 });
+
+for(const videoFlag of ['no','absent'])test(`payment sessions and owned recovery remain available when video flag is ${videoFlag}`,async()=>{
+ const f=await setup();
+ try{
+  await seeded(f);
+  const alice=await(await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).json();
+  const requestId='existing-payment-recovery',body=JSON.stringify({packageId:'small',requestId});
+  let response=await f.site.fetch(SITE+'/api/payments/create',{method:'POST',headers:headers('alice',alice.userId),body});
+  assert.equal(response.status,200,await response.clone().text());const checkout=(await response.json()).checkoutUrl;
+  const paymentId=(await stats(f)).payments[0].id;
+  await f.privateService.fetch('https://fixture.invalid/fixture/video?value='+videoFlag);
+
+  response=await f.site.fetch(SITE+'/api/session',{headers:headers('alice')});
+  assert.equal(response.status,200,await response.clone().text());const current=await response.json();
+  assert.equal(current.userId,alice.userId);assert.equal(current.mode,'live');assert.equal(current.balanceCents,0);
+  const packages=await(await f.site.fetch(SITE+'/api/payments/packages',{headers:headers('alice',alice.userId)})).json();
+  assert.equal(packages.packages[0].amountCents,500);assert.equal(packages.purchasesEnabled,true);
+  const orders=await(await f.site.fetch(SITE+'/api/payments/orders',{headers:headers('alice',alice.userId)})).json();
+  assert.equal(orders.orders[0].requestId,requestId);
+  response=await f.site.fetch(SITE+`/api/payments/orders/${requestId}/reconcile`,{method:'POST',headers:headers('alice',alice.userId),body:'{}'});
+  assert.equal(response.status,200,await response.clone().text());const resumed=await response.json();
+  assert.equal(resumed.state,'open');assert.equal(resumed.checkoutUrl,checkout);assert.equal((await stats(f)).created,1);
+  assert.equal((await(await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('alice',alice.userId)})).json()).balance,0);
+  const bob=await(await f.site.fetch(SITE+'/api/session',{headers:headers('bob')})).json();
+  assert.notEqual(bob.userId,alice.userId);
+  assert.equal((await f.site.fetch(SITE+`/api/payments/orders/${requestId}`,{headers:headers('bob',bob.userId)})).status,404);
+  assert.equal((await f.site.fetch(SITE+'/api/payments/balance')).status,401);
+
+  response=await f.site.fetch(SITE+'/api/video-config',{headers:headers('alice',alice.userId)});
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),{enabled:false,funding:'credits',currency:'EUR',mode:'live'});
+  const before=await stats(f);
+  for(const path of ['/api/assets','/api/generation-quotes','/api/generations']){
+   const denied=await f.site.fetch(SITE+path,{method:'POST',headers:headers('alice',alice.userId),body:'{}'});
+   assert.equal(denied.status,503,path);
+  }
+  const after=await stats(f);assert.equal(after.videoCalls,before.videoCalls);assert.equal(after.dispatches,before.dispatches);assert.equal(after.providerReads,before.providerReads);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_media_work_lock').first()).n,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_quotes').first()).n,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
+
+  // Both callback delivery and owned recovery use provider truth while video
+  // is suspended; neither path creates another checkout or dispatches a video.
+  await f.privateService.fetch('https://fixture.invalid/fixture/paid?id='+paymentId);
+  const callback=await f.relay.fetch(BRIDGE+'/api/payments/webhook',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'192.0.2.30'},body:new URLSearchParams({id:paymentId})});
+  assert.equal(callback.status,200);
+  response=await f.site.fetch(SITE+`/api/payments/orders/${requestId}/reconcile`,{method:'POST',headers:headers('alice',alice.userId),body:'{}'});
+  assert.equal(response.status,200);assert.equal((await response.json()).state,'paid');
+  assert.equal((await(await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('alice',alice.userId)})).json()).balance,500);
+  assert.equal((await(await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).json()).balanceCents,500);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id LIKE 'credit:%'").first()).n,1);
+  assert.equal((await stats(f)).created,1);assert.equal((await stats(f)).dispatches,0);
+  const testDb=await f.mf.getD1Database('DB','private');assert.equal((await testDb.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name='rig_ledger'").first()).n,0);
+ }finally{await f.dispose()}
+});

@@ -6,9 +6,9 @@ import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
 export const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 export const BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 const PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ac'.repeat(32),PROFILE='pfl_FIXTUREPROFILE';
-let active=true,created=0,providerReads=0,videoCalls=0,dispatches=0,lastGeneration=null,lastPrivateHeaders=null;
+let active=true,videoEnabled='yes',created=0,providerReads=0,videoCalls=0,dispatches=0,lastGeneration=null,lastPrivateHeaders=null;
 const payments=new Map();
-const production=env=>({...env,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:active?'yes':'no',RIG_PRODUCTION_VIDEO_ENABLED:'yes',MOLLIE_LIVE_API_KEY:'live_localfixture',RIG_PRODUCTION_MOLLIE_PROFILE:PROFILE,RIG_PRODUCTION_ENVIRONMENT_ID:'commerce-fixture-v1',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:JSON.stringify([{id:'small',amountCents:500,credits:500},{id:'medium',amountCents:1000,credits:1000}]),RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY});
+const production=env=>({...env,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:active?'yes':'no',...(videoEnabled===null?{}:{RIG_PRODUCTION_VIDEO_ENABLED:videoEnabled}),MOLLIE_LIVE_API_KEY:'live_localfixture',RIG_PRODUCTION_MOLLIE_PROFILE:PROFILE,RIG_PRODUCTION_ENVIRONMENT_ID:'commerce-fixture-v1',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:JSON.stringify([{id:'small',amountCents:500,credits:500},{id:'medium',amountCents:1000,credits:1000}]),RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY});
 async function provider(input,init={}){
  const url=new URL(input),headers=new Headers(init.headers);providerReads++;
  if(url.origin!=='https://api.mollie.com'||headers.get('authorization')!=='Bearer live_localfixture'||init.redirect!=='manual')throw Error('No real provider access permitted');
@@ -42,8 +42,9 @@ async function videoFactory(env,{trustedUserId}){
 const commerce=createProductionCommerceWorker({network:provider,videoFactory});
 export const privateWorker={async fetch(req,env){
  const url=new URL(req.url);
- if(url.pathname==='/fixture/stats')return Response.json({active,created,providerReads,videoCalls,dispatches,lastGeneration,lastPrivateHeaders,payments:[...payments.values()]});
+ if(url.pathname==='/fixture/stats')return Response.json({active,videoEnabled,created,providerReads,videoCalls,dispatches,lastGeneration,lastPrivateHeaders,payments:[...payments.values()]});
  if(url.pathname==='/fixture/active'){active=url.searchParams.get('value')!=='no';return Response.json({active})}
+ if(url.pathname==='/fixture/video'){videoEnabled=url.searchParams.get('value')==='absent'?null:url.searchParams.get('value');return Response.json({videoEnabled})}
  if(url.pathname==='/fixture/paid'){const payment=payments.get(url.searchParams.get('id'));if(!payment)return new Response(null,{status:404});payment.status='paid';return Response.json({ok:true})}
  lastPrivateHeaders=Object.fromEntries(['authorization','cookie','oai-authenticated-user-id','x-rig-expected-user'].map(name=>[name,req.headers.get(name)]));
  return commerce.fetch(req,production(env));

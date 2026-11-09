@@ -9,6 +9,7 @@ import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
 import {handleProviderInput} from './rig-provider-inputs.mjs';
 import {d1Limit} from './router.mjs';
 import {handleProductionInvitation} from './production-invitation.mjs';
+import {validateProductionTenant} from './production-tenant.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -23,15 +24,30 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
   let authenticated;
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
-   const context=await createProductionGenerationContext(env);if(!context)return unavailable();
-   const mapped={...context.env,RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN},u=new URL(req.url);
+   const u=new URL(req.url);
+   // Existing purchases must stay recoverable while generation is suspended.
+   // These routes still require the live tenant and the signed Sites identity,
+   // but never acquire a media lease or a generation capability.
+   if(u.pathname==='/api/session'||u.pathname.startsWith('/api/payments/')){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env);
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return payments.user(authenticated.request,env,authenticated.userId);
+   }
+   const context=await createProductionGenerationContext(env);
+   if(!context){
+    if(u.pathname!=='/api/video-config'||req.method!=='GET'||!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowGeneration:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return json({enabled:false,funding:'credits',currency:'EUR',mode:'live'});
+   }
+   const mapped={...context.env,RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN};
    if(u.pathname.startsWith('/provider-inputs/'))return handleProviderInput(req,mapped,{productionContext:context,verifyTenant:async()=>Boolean(await createProductionGenerationContext(env))});
    const leaseFactory=db=>createDurableMediaLease(db,{mode:'live',productionContext:context});
    authenticated=await authenticateProductionSites(req,env,{allowGeneration:true,leaseFactory});
    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
    const {userId}=authenticated;
    if(u.pathname.startsWith('/api/sponsor-invitations/'))return handleProductionInvitation(authenticated.request,env,{userId,productionContext:context});
-   if(u.pathname==='/api/session'||u.pathname.startsWith('/api/payments/'))return payments.user(authenticated.request,env,userId);
    const approvals=createChatgptApprovals(mapped.DB,{mode:'live',productionContext:context});
    const issue=u.pathname==='/api/chatgpt/quote-approvals',consume=u.pathname==='/api/chatgpt/quote-approvals/consume';
    if(issue||consume){
