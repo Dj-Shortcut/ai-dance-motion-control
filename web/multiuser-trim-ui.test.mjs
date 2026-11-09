@@ -136,11 +136,13 @@ test('a trial never silently moves a near-end start and leaves three- or four-se
    f.byId('confirmBrief').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);assert.equal(f.prepared[0].duration,3);assert.equal(f.prepared[0].start,start);
   }finally{f.close()}
  }
- const f=fixture();try{
-  f.loadPerson();f.loadMotion(10);f.change('duration','3');f.change('start','5');f.byId('prepare').click();
-  assert.equal(f.byId('tryShortVideo').disabled,false);f.byId('tryShortVideo').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);
-  assert.equal(f.prepared[0].start,5);assert.equal(f.prepared[0].duration,5);
- }finally{f.close()}
+ for(const [source,start] of [[10,5],[9.2,4.2]]){
+  const f=fixture();try{
+   f.loadPerson();f.loadMotion(source);f.change('duration','3');f.change('start',String(start));f.byId('prepare').click();
+   assert.equal(f.byId('tryShortVideo').disabled,false);f.byId('tryShortVideo').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);
+   assert.equal(f.prepared[0].start,start);assert.equal(f.prepared[0].duration,5);assert.equal(f.byId('start').value,String(start));
+  }finally{f.close()}
+ }
 });
 
 test('trial preparation rejects an empty prompt, inactive session or capability and ignores a busy double click',async()=>{
