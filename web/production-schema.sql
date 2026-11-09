@@ -392,3 +392,100 @@ CREATE TABLE rig_purchase_acceptances (
  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
  PRIMARY KEY(user_id,request_id)
 );
+
+-- 0011_automatic_invoices.sql
+-- Automatic invoices are independent immutable documents, not Accountable or
+-- Peppol confirmations. Counters and issuance commit in the same D1 batch.
+CREATE TABLE rig_invoice_counters (
+ issue_year INTEGER PRIMARY KEY CHECK(typeof(issue_year)='integer' AND issue_year BETWEEN 2000 AND 9999),
+ next_sequence INTEGER NOT NULL CHECK(typeof(next_sequence)='integer' AND next_sequence BETWEEN 1 AND 1000000000000)
+);
+CREATE TABLE rig_issued_invoices (
+ id TEXT PRIMARY KEY CHECK(length(id)=36),
+ order_id TEXT NOT NULL UNIQUE REFERENCES rig_orders(id),
+ user_id TEXT NOT NULL CHECK(length(user_id)=38),
+ order_request_id TEXT NOT NULL CHECK(length(order_request_id) BETWEEN 12 AND 80),
+ invoice_number TEXT NOT NULL UNIQUE,
+ issue_year INTEGER NOT NULL CHECK(typeof(issue_year)='integer' AND issue_year BETWEEN 2000 AND 9999),
+ sequence INTEGER NOT NULL CHECK(typeof(sequence)='integer' AND sequence BETWEEN 1 AND 999999999999),
+ issued_date TEXT NOT NULL CHECK(length(issued_date)=10),
+ issued_at INTEGER NOT NULL CHECK(typeof(issued_at)='integer' AND issued_at>0),
+ currency TEXT NOT NULL CHECK(currency='EUR'),
+ amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents)='integer' AND amount_cents BETWEEN 1 AND 1000000),
+ credit_cents INTEGER NOT NULL CHECK(typeof(credit_cents)='integer' AND credit_cents BETWEEN 1 AND 100000000),
+ snapshot_json TEXT NOT NULL CHECK(json_valid(snapshot_json) AND json_type(snapshot_json)='object'),
+ snapshot_sha256 TEXT NOT NULL CHECK(length(snapshot_sha256)=64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+ UNIQUE(issue_year,sequence),
+ CHECK(invoice_number='RIG-'||issue_year||'-'||printf('%06d',sequence)),
+ CHECK(substr(issued_date,1,4)=CAST(issue_year AS TEXT))
+);
+CREATE INDEX rig_issued_invoices_customer ON rig_issued_invoices(user_id,issued_at,id);
+-- Fair bounded read-repair scheduling only. These rows are not invoices and
+-- their presence never means a payment, cash refund or credit note exists.
+CREATE TABLE rig_invoice_issuance_attempts (
+ order_id TEXT PRIMARY KEY REFERENCES rig_orders(id),
+ last_checked_at INTEGER NOT NULL CHECK(typeof(last_checked_at)='integer' AND last_checked_at>0),
+ last_state TEXT NOT NULL,
+ last_reason TEXT
+);
+
+-- 0012_purchase_billing.sql
+-- A buyer identity is captured before provider checkout, atomically with terms.
+-- This table does not itself issue an invoice or prove payment.
+CREATE UNIQUE INDEX rig_purchase_acceptance_billing_hash
+ ON rig_purchase_acceptances(user_id,request_id,request_hash);
+CREATE TABLE rig_purchase_billing (
+ user_id TEXT NOT NULL CHECK(typeof(user_id)='text' AND length(user_id)=38),
+ request_id TEXT NOT NULL CHECK(typeof(request_id)='text' AND length(request_id)=36),
+ name TEXT NOT NULL CHECK(typeof(name)='text' AND length(name) BETWEEN 1 AND 120),
+ street TEXT NOT NULL CHECK(typeof(street)='text' AND length(street) BETWEEN 3 AND 180),
+ postal_code TEXT NOT NULL CHECK(typeof(postal_code)='text' AND length(postal_code) BETWEEN 4 AND 7),
+ city TEXT NOT NULL CHECK(typeof(city)='text' AND length(city) BETWEEN 1 AND 100),
+ country TEXT NOT NULL CHECK(country IN ('BE','NL')),
+ electronic_delivery TEXT NOT NULL CHECK(electronic_delivery='rig-download-v1'),
+ request_hash TEXT NOT NULL CHECK(length(request_hash)=64 AND request_hash NOT GLOB '*[^0-9a-f]*'),
+ created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
+ PRIMARY KEY(user_id,request_id),
+ FOREIGN KEY(user_id,request_id,request_hash) REFERENCES rig_purchase_acceptances(user_id,request_id,request_hash)
+);
+CREATE TABLE rig_billing_profiles (
+ user_id TEXT PRIMARY KEY CHECK(typeof(user_id)='text' AND length(user_id)=38),
+ name TEXT NOT NULL CHECK(typeof(name)='text' AND length(name) BETWEEN 1 AND 120),
+ street TEXT NOT NULL CHECK(typeof(street)='text' AND length(street) BETWEEN 3 AND 180),
+ postal_code TEXT NOT NULL CHECK(typeof(postal_code)='text' AND length(postal_code) BETWEEN 4 AND 7),
+ city TEXT NOT NULL CHECK(typeof(city)='text' AND length(city) BETWEEN 1 AND 100),
+ country TEXT NOT NULL CHECK(country IN ('BE','NL')),
+ electronic_delivery TEXT NOT NULL CHECK(electronic_delivery='rig-download-v1'),
+ updated_at INTEGER NOT NULL CHECK(typeof(updated_at)='integer' AND updated_at>0)
+);
+
+-- 0013_invoice_delivery.sql
+-- Private immutable PDF archive and a conservative one-attempt mail outbox.
+-- These records do not assert that Accountable imported or validated anything.
+CREATE TABLE rig_invoice_archives (
+ invoice_id TEXT PRIMARY KEY REFERENCES rig_issued_invoices(id),
+ storage_key TEXT NOT NULL UNIQUE,
+ snapshot_sha256 TEXT NOT NULL CHECK(length(snapshot_sha256)=64),
+ pdf_sha256 TEXT NOT NULL CHECK(length(pdf_sha256)=64),
+ byte_length INTEGER NOT NULL CHECK(typeof(byte_length)='integer' AND byte_length BETWEEN 1 AND 3145728),
+ created_at INTEGER NOT NULL
+);
+CREATE TABLE rig_invoice_mail_outbox (
+ invoice_id TEXT PRIMARY KEY REFERENCES rig_issued_invoices(id),
+ state TEXT NOT NULL CHECK(state IN ('sending','sent','unknown','failed')),
+ attempt_token TEXT NOT NULL UNIQUE,
+ pdf_sha256 TEXT NOT NULL CHECK(length(pdf_sha256)=64),
+ started_at INTEGER NOT NULL,
+ completed_at INTEGER,
+ provider_message_id TEXT,
+ last_error TEXT,
+ CHECK(state<>'sent' OR provider_message_id IS NOT NULL)
+);
+CREATE INDEX rig_invoice_mail_outbox_state ON rig_invoice_mail_outbox(state,started_at);
+-- Fair scheduling lets a damaged archive be investigated without holding up
+-- the invoices for later purchases. No delivery claim is made by this table.
+CREATE TABLE rig_invoice_delivery_attempts (
+ invoice_id TEXT PRIMARY KEY REFERENCES rig_issued_invoices(id),
+ last_checked_at INTEGER NOT NULL,
+ last_state TEXT NOT NULL CHECK(last_state IN ('checking','archived','review','unavailable'))
+);

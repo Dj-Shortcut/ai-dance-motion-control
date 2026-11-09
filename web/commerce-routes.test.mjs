@@ -11,9 +11,9 @@ import {createRigSitesApp} from './rig-sites-app.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ac'.repeat(32),PROFILE='pfl_ROUTETEST';
 const id='12345678-1234-4123-8123-123456789abc',requestId='customer-purchase-route-0001';
-const adminReads=['/api/owner/accounting','/api/owner/accounting?month=2026-11',...['purchases','credit-events','costs','estimates'].map(kind=>'/api/owner/accounting/export/'+kind+'.csv?month=2026-11'),'/api/owner/recovery','/api/owner/support'];
+const adminReads=['/api/owner/accounting','/api/owner/accounting?month=2026-11',...['purchases','credit-events','costs','estimates'].map(kind=>'/api/owner/accounting/export/'+kind+'.csv?month=2026-11'),'/api/owner/recovery','/api/owner/support','/api/owner/invoices','/api/owner/invoices?month=2026-11','/api/owner/invoices/export.zip?month=2026-11','/api/owner/invoices/'+id+'/pdf'];
 const adminWrites=['/api/owner/accounting/documents','/api/owner/recovery/notes','/api/owner/recovery/payments/'+id+'/adopt'];
-const customerReads=['/api/payments/orders/'+requestId+'/receipt','/api/payments/support-requests','/api/payments/support-requests/'+id+'/confirmation'];
+const customerReads=['/api/payments/billing','/api/payments/orders/'+requestId+'/invoice','/api/payments/orders/'+requestId+'/receipt','/api/payments/support-requests','/api/payments/support-requests/'+id+'/confirmation'];
 const signedEnv={RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_SITES_BRIDGE_ORIGIN:BRIDGE,RIG_SITES_BRIDGE_KEY:KEY};
 const sign=(subject,path,method='GET',body='')=>signSitesBridgeRequest({env:signedEnv,subject,path,method,headers:method==='POST'?{'content-type':'application/json'}:{},body:new TextEncoder().encode(body)});
 // Deliberately bypass the producer allowlist so the consumer must independently

@@ -128,3 +128,41 @@ For selections above the three-second minimum, preparation requests a 60 ms
 encoding margin and refuses output longer than the selected integer duration.
 The price still uses the independently measured duration and rounds upward;
 it never hides a 5.01-second file behind a five-second price.
+
+
+## Automatic invoices and Accountable handoff
+
+The optional `RIG_AUTOMATIC_INVOICES_ENABLED=yes` production feature requires
+additive migrations `0011_automatic_invoices.sql`, `0012_purchase_billing.sql`
+and `0013_invoice_delivery.sql`. Apply all three before enabling it. The fresh
+production schema includes them. Do not enable on the legacy TEST database.
+
+Checkout collects the legal buyer name/address and binds digital invoice
+consent to the immutable purchase acceptance. A paid order plus its exact
+credit event can issue one frozen snapshot and one sequential RIG invoice;
+repeated webhooks, reconciliation and scheduled repair do not reissue it.
+Legacy purchases without valid billing/consent or conflicting manual documents
+require review. A failed video does not cancel the credit-purchase invoice.
+
+Original PDFs use the private results bucket under `administration/invoices/`.
+Do not apply media expiry rules to that prefix. PDFs are conditional-write
+archived with snapshot and byte checksums; missing/corrupt original objects
+require investigation, not silent recreation. Customer downloads are bound to
+the authenticated order; the pinned owner can download originals/month ZIPs.
+
+Accountable Free supports PDF email intake, followed by manual verification.
+Zoho EU is optional and disabled until the owner completes its OAuth setup.
+Store `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN` and
+`ZOHO_MAIL_ACCOUNT_ID` as encrypted Worker Secrets. The runtime needs the
+`ZohoMail.messages.CREATE` scope; one-time account discovery may also need
+`ZohoMail.accounts.READ`. Never request `messages.READ` or `ALL` for this flow.
+The sender is pinned to `info@andyarijs.dev`, recipient to
+`inkomsten@accountable.eu`, and token/mail hosts to Zoho EU. Enable
+`RIG_ACCOUNTABLE_MAIL_ENABLED=yes`, `RIG_ACCOUNTABLE_ALIAS_CONFIRMED=yes` and
+`RIG_ACCOUNTABLE_SENDER=info@andyarijs.dev` only after the owner finishes setup
+and confirms the sender in Accountable. No paid mail subscription is created.
+
+The outbox atomically claims each invoice before sending once. A send receipt
+means accepted by Zoho, not booked by Accountable; an interrupted/uncertain
+send requires manual checking rather than blind resend. No dummy invoices
+should be emailed to test intake. See [the first-sale procedure](../docs/accountable-first-sale.md).

@@ -34,7 +34,7 @@ test('every public page works without an account and has restrictive document he
   const html=await response.text();
   assert.match(html,/^<!doctype html><html lang="nl">/);
   assert.match(html,/<meta name="viewport"/);
-  assert.match(html,/Versie rig-commerce-2026-11-09-v1/);
+  assert.match(html,/Versie rig-commerce-2026-11-09-v2/);
   for(const link of ['/',...paths])assert.ok(html.includes('href="'+link+'"'),path+' links '+link);
   assert.doesNotMatch(html,/<script|<iframe|<form|on(?:load|error|click)=/i);
   assert.match(html,/info@andyarijs\.dev/);
@@ -88,7 +88,9 @@ test('terms distinguish bank payments, reservations and refund requests without 
  assert.match(terms,/eerder gebruikt tegoed of een oudere aankoop/);
  assert.match(terms,/geen algemene afstand van wettelijke rechten/);
  assert.match(terms,/geen terugstorting op je bankrekening/);
- assert.match(terms,/geen factuur/);
+ assert.match(terms,/automatisch een factuur/);
+ assert.match(terms,/naam en volledige adres/);
+ assert.match(terms,/factuur digitaal als download/);
  assert.doesNotMatch(terms,/btw-vrij|OSS|voucher|automatisch.*boekhoud|aanbevolen prijs|30%|Accountable Connect/i);
  const seller=await commerceDocument('/bedrijfsgegevens').text();
  assert.match(seller,/ondernemingsnummer 1040\.495\.145/);

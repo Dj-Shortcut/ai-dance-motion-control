@@ -187,3 +187,49 @@ test('receipt terms are formatted as escaped text before malformed tags or entit
   }
  }finally{await f.mf.dispose();}
 });
+
+async function issuedInvoice(f,order,{sequence=1}={}){
+ const id=crypto.randomUUID(),number='RIG-2026-'+String(sequence).padStart(6,'0');await f.db.prepare('INSERT INTO rig_issued_invoices(id,order_id,user_id,order_request_id,invoice_number,issue_year,sequence,issued_date,issued_at,currency,amount_cents,credit_cents,snapshot_json,snapshot_sha256) VALUES(?,?,?,?,?,2026,?,?,?,\'EUR\',500,500,\'{}\',?)').bind(id,order.id,order.user,order.requestId,number,sequence,'2026-11-09',NOW,'a'.repeat(64)).run();return {id,number};
+}
+test('issued invoice metadata and delivery setup are shown without claiming Accountable validation or Peppol delivery',async()=>{
+ const f=await fixture();try{
+  const order=await f.order(),invoice=await issuedInvoice(f,order);let value=await(await f.call()).json();assert.equal(value.automaticInvoiceIssuance,false);assert.equal(value.accountableDeliveryConfigured,false);assert.equal(value.accountableAPIConnected,false);assert.equal(value.purchases[0].invoice.number,invoice.number);assert.equal(value.purchases[0].invoice.pdfReady,false);
+  f.env.RIG_AUTOMATIC_INVOICES_ENABLED='yes';f.env.RIG_ACCOUNTABLE_MAIL_ENABLED='yes';value=await(await f.call()).json();assert.equal(value.automaticInvoiceIssuance,true);assert.equal(value.accountableDeliveryConfigured,false);
+  Object.assign(f.env,{RIG_ACCOUNTABLE_ALIAS_CONFIRMED:'yes',RIG_ACCOUNTABLE_SENDER:'info@andyarijs.dev',ZOHO_CLIENT_ID:'fixture_client',ZOHO_CLIENT_SECRET:'fixture_secret',ZOHO_REFRESH_TOKEN:'fixture_refresh',ZOHO_MAIL_ACCOUNT_ID:'12345678'});
+  await f.db.prepare('INSERT INTO rig_invoice_archives(invoice_id,storage_key,snapshot_sha256,pdf_sha256,byte_length,created_at) VALUES(?,?,?,?,?,?)').bind(invoice.id,'administration/invoices/2026/'+invoice.id+'.pdf','a'.repeat(64),'b'.repeat(64),15000,NOW).run();
+  await f.db.prepare("INSERT INTO rig_invoice_mail_outbox(invoice_id,state,attempt_token,pdf_sha256,started_at,completed_at,provider_message_id) VALUES(?,'sent',?,?,?,?,?)").bind(invoice.id,crypto.randomUUID(),'b'.repeat(64),NOW,NOW+1000,'provider-message').run();
+  value=await(await f.call()).json();assert.equal(value.accountableDeliveryConfigured,true);assert.equal(value.accountableValidated,false);assert.equal(value.formalAccountingComplete,false);assert.equal(value.automaticPeppolDelivery,false);assert.equal(value.purchases[0].invoice.mailState,'sent');assert.equal(value.purchases[0].invoice.accountableValidated,false);assert.equal(value.purchases[0].invoice.peppolDeliveryVerified,false);assert.equal(value.purchases[0].invoice.pdfPath,'/api/owner/invoices/'+invoice.id+'/pdf');assert.equal(value.purchases[0].invoice.pdfReady,true);
+  const csv=await(await f.call('/api/owner/accounting/export/purchases.csv')).text();assert.match(csv,/rig_invoice_number/);assert.match(csv,/RIG-2026-000001/);assert.doesNotMatch(csv,/fixture_secret|fixture_refresh|provider-message|snapshot_json/);
+  f.env.RIG_AUTOMATIC_INVOICES_ENABLED='no';value=await(await f.call()).json();assert.equal(value.automaticInvoiceIssuance,false);assert.equal(value.purchases[0].invoice.number,invoice.number);
+ }finally{await f.mf.dispose();}
+});
+
+test('manual invoice references cannot create a second invoice or claim another issued RIG number',async()=>{
+ const f=await fixture();try{
+  const a=await f.order(),b=await f.order({user:OTHER}),invoice=await issuedInvoice(f,a),money=(await f.db.prepare('SELECT * FROM rig_ledger').all()).results;
+  for(const externalInvoiceReference of ['ACC-second-invoice','rig-2026-000001']){const data=f.document(a,{externalInvoiceReference});assert.equal((await f.call('/api/owner/accounting/documents',await f.signed(data))).status,409);}
+  for(const recordType of ['invoice','accounting-entry'])for(const externalInvoiceReference of [invoice.number,'rig-2026-000001','ＲＩＧ-２０２６-０００００１']){const data=f.document(b,{recordType,externalInvoiceReference});assert.equal((await f.call('/api/owner/accounting/documents',await f.signed(data))).status,409);}
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_accounting_references').first()).n,0);
+  const exact=f.document(a,{externalInvoiceReference:invoice.number,deliveryStatus:'recorded-in-accountable'}),response=await f.call('/api/owner/accounting/documents',await f.signed(exact));assert.equal(response.status,201);const saved=await response.json();assert.equal(saved.providerConfirmed,false);
+  const conflictingCorrection=f.document(a,{externalInvoiceReference:'ACC-replacement-invoice',replacesDocumentId:saved.id});assert.equal((await f.call('/api/owner/accounting/documents',await f.signed(conflictingCorrection))).status,409);
+  const bookReference=f.document(a,{externalInvoiceReference:'ACC-book-entry-001',recordType:'accounting-entry',replacesDocumentId:saved.id});assert.equal((await f.call('/api/owner/accounting/documents',await f.signed(bookReference))).status,201);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_issued_invoices').first()).n,1);assert.deepEqual((await f.db.prepare('SELECT * FROM rig_ledger').all()).results,money);
+ }finally{await f.mf.dispose();}
+});
+
+test('a concurrent automatic issuance is rechecked inside the manual document transaction',async()=>{
+ const f=await fixture();try{
+  const order=await f.order(),data=f.document(order,{externalInvoiceReference:'ACC-different-invoice'}),signed=await f.signed(data);let inserted=false;
+  const db={prepare:f.db.prepare.bind(f.db),async batch(statements){if(!inserted){inserted=true;await issuedInvoice(f,order);}return f.db.batch(statements);}};
+  const response=await f.call('/api/owner/accounting/documents',signed,{env:{...f.env,PRODUCTION_DB:db}});assert.equal(response.status,409);assert.equal(inserted,true);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_accounting_documents').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_accounting_references').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_issued_invoices').first()).n,1);
+ }finally{await f.mf.dispose();}
+});
+
+test('invoice issuance review remains visible on purchases without leaking source identity or claiming an issued document',async()=>{
+ const f=await fixture();try{
+  const paid=await f.order();f.env.RIG_AUTOMATIC_INVOICES_ENABLED='yes';await f.db.prepare('INSERT INTO rig_invoice_issuance_attempts(order_id,last_checked_at,last_state,last_reason) VALUES(?,?,?,?)').bind(paid.id,NOW,'review-required','billing_missing').run();
+  const response=await f.call(),value=await response.json(),purchase=value.purchases[0];assert.equal(response.status,200);assert.equal(purchase.invoice,null);assert.equal(purchase.invoiceIssueState,'review-required');assert.equal(purchase.invoiceIssueReason,'billing_missing');assert.equal(purchase.invoiceLastCheckedAt,NOW);assert.equal(value.accountableValidated,false);
+  const csv=await(await f.call('/api/owner/accounting/export/purchases.csv')).text();assert.match(csv,/rig_invoice_issue_state/);assert.match(csv,/billing_missing/);assert.doesNotMatch(csv,/billing_name|billing_street|Zoë/);
+  await issuedInvoice(f,paid);const next=(await(await f.call()).json()).purchases[0];assert.equal(next.invoiceIssueState,'issued');assert.equal(next.invoiceIssueReason,null);
+ }finally{await f.mf.dispose();}
+});

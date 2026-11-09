@@ -35,22 +35,43 @@
   function clearResume(){resumeUrl=null;resumeContext=null;byId('resumePayment').hidden=true;}
   function setPurchaseReady(ready){purchaseReady=ready&&canPurchase();for(const button of byId('packageList').children)button.disabled=!(purchaseReady&&consentReady());}
   const node=(tag,text)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
-  function consentReady(){return !commerce||(commerce.country==='BE'||commerce.country==='NL')&&commerce.accepted===true;}
+  function consentReady(){return !commerce||['BE','NL'].includes(commerce.country)&&commerce.accepted===true&&(!commerce.billingRequired||billingReady());}
+  function billingReady(){const b=commerce?.billing;return b&&['name','city'].every(key=>typeof b[key]==='string'&&b[key].trim().length>0)&&typeof b.street==='string'&&b.street.trim().length>=3&&(['BE','NL'].includes(commerce.country))&&(commerce.country==='BE'?/^\d{4}$/:/^\d{4}\s?[A-Za-z]{2}$/).test(b.postalCode.trim());}
   function resetCommerce(){commerce=null;byId('commerceChoice')?.remove();}
-  function applyCommerce(value){
+  async function applyCommerce(value,ctx,sequence){
     resetCommerce();
     if(value===undefined)return;
     if(value?.required!==true||typeof value.version!=='string'||!/^[a-z0-9-]{1,100}$/.test(value.version)||value.currency!=='EUR'||value.customerType!=='consumer'||!Array.isArray(value.countries)||value.countries.join(',')!=='BE,NL')throw Error('De aankoopvoorwaarden konden niet worden gecontroleerd.');
-    commerce={version:value.version,country:'',accepted:false};
+    if(value.billingRequired!==undefined&&(value.billingRequired!==true||value.electronicDelivery!=='rig-download-v1'))throw Error('De factuurinstellingen konden niet worden gecontroleerd.');
+    commerce={version:value.version,country:'',accepted:false,billingRequired:value.billingRequired===true,billingEdited:false,billing:{name:'',street:'',postalCode:'',city:''}};
     const box=node('div');box.id='commerceChoice';box.className='commerce-choice';
     const label=node('label','Ik koop als particulier in '),select=node('select');select.id='buyerCountry';select.setAttribute('aria-label','Land van de particuliere koper');
     for(const [code,title] of [['','Kies je land'],['BE','België'],['NL','Nederland']]){const option=node('option',title);option.value=code;select.append(option);}label.append(select);
     const consent=node('label'),checkbox=node('input');checkbox.type='checkbox';checkbox.id='acceptCommerce';
-    consent.append(checkbox,document.createTextNode(' Ik ga akkoord met de '));const terms=node('a','verkoopvoorwaarden');terms.href='/voorwaarden';terms.target='_blank';terms.rel='noopener noreferrer';consent.append(terms,document.createTextNode(' en vraag om het tegoed meteen beschikbaar te maken.'));
+    consent.append(checkbox,document.createTextNode(' Ik ga akkoord met de '));const terms=node('a','verkoopvoorwaarden');terms.href='/voorwaarden';terms.target='_blank';terms.rel='noopener noreferrer';consent.append(terms,document.createTextNode(commerce.billingRequired?' en ontvang mijn factuur digitaal in RIG. Ik vraag om het tegoed meteen beschikbaar te maken.':' en vraag om het tegoed meteen beschikbaar te maken.'));
     const privacy=node('a','Privacy en verkopersgegevens');privacy.href='/privacy';privacy.target='_blank';privacy.rel='noopener noreferrer';
-    select.addEventListener('change',()=>{if(commerce){commerce.country=select.value;setPurchaseReady(purchaseReady);}});
+    select.addEventListener('change',()=>{if(commerce){commerce.billingEdited=true;commerce.country=select.value;setPurchaseReady(purchaseReady);}});
     checkbox.addEventListener('change',()=>{if(commerce){commerce.accepted=checkbox.checked;setPurchaseReady(purchaseReady);}});
-    box.append(label,consent,privacy);byId('packageList').before(box);
+    box.append(label);
+    if(commerce.billingRequired){
+      const fields=node('div');fields.className='billing-fields';fields.append(node('strong','Factuurgegevens'),node('small','Voor je automatische factuur. We onthouden deze gegevens voor je volgende aankoop.'));
+      for(const [key,title,autocomplete,max]of [['name','Naam op de factuur','billing name',120],['street','Straat en huisnummer','billing address-line1',180],['postalCode','Postcode','billing postal-code',8],['city','Gemeente','billing address-level2',100]]){
+        const wrap=node('label',title),input=node('input');input.id='billing-'+key;input.type='text';input.autocomplete=autocomplete;input.required=true;input.maxLength=max;
+        input.addEventListener('input',()=>{if(commerce){commerce.billingEdited=true;commerce.billing[key]=input.value;setPurchaseReady(purchaseReady);}});wrap.append(input);fields.append(wrap);
+      }
+      box.append(fields);
+    }
+    box.append(consent,privacy);byId('packageList').before(box);
+    if(commerce.billingRequired){
+      const selected=commerce;
+      try{
+        const result=await request('/api/payments/billing',{},ctx);if(!current(ctx)||sequence!==dialogSequence||commerce!==selected)return;
+        const b=result.billing;
+        if(!selected.billingEdited&&b&&['BE','NL'].includes(b.country)&&['name','street','postalCode','city'].every(key=>typeof b[key]==='string')){
+          selected.country=b.country;select.value=b.country;for(const key of ['name','street','postalCode','city']){selected.billing[key]=b[key];byId('billing-'+key).value=b[key];}
+        }
+      }catch{ /* Manual entry stays available when a saved address cannot load. */ }
+    }
   }
   function clearHistory(){historySequence++;byId('customerHistory')?.remove();for(const url of downloadUrls)URL.revokeObjectURL(url);downloadUrls.clear();}
   async function download(path,filename,ctx,valid){
@@ -80,6 +101,9 @@
           if(order.state==='paid'){
             const receipt=node('button','Betalingsbewijs downloaden');receipt.type='button';receipt.addEventListener('click',()=>{receipt.disabled=true;void download(`/api/payments/orders/${encodeURIComponent(order.requestId)}/receipt`,`RIG-betalingsbewijs-${order.requestId}.html`,ctx,valid).catch(e=>{if(valid())feedback.textContent=e.message;}).finally(()=>{if(valid())receipt.disabled=false;});});row.append(receipt);
           }
+          if(order.invoiceAvailable===true){
+            const invoice=node('button','Factuur downloaden');invoice.type='button';invoice.addEventListener('click',()=>{invoice.disabled=true;void download(`/api/payments/orders/${encodeURIComponent(order.requestId)}/invoice`,`${/^RIG-20\d{2}-\d{6,12}$/.test(order.invoiceNumber||'')?order.invoiceNumber:'RIG-factuur'}.pdf`,ctx,valid).catch(e=>{if(valid())feedback.textContent=e.message;}).finally(()=>{if(valid())invoice.disabled=false;});});row.append(invoice);
+          }else if(order.state==='paid'&&data.automaticInvoices===true)row.append(node('small','Je factuur wordt klaargezet. Vernieuw dit overzicht later als ze nog ontbreekt.'));
           body.append(row);
         }
         const panel=node('div');panel.className='customer-help-form';const title=node('strong','Vraag hulp of herroeping'),orderLabel=node('label','Bestelling'),choice=node('select');choice.setAttribute('aria-label','Bestelling voor je verzoek');
@@ -157,10 +181,11 @@
   }
   async function showPackages(ctx=captureContext()){
     if(!canPurchase())return false;
+    const sequence=dialogSequence;
     setPurchaseReady(false);message('Tegoedpakketten ophalen…');byId('packageList').replaceChildren();
     try{
       const data=await request('/api/payments/packages',{},ctx),details=paymentDetails(data);
-      applyCommerce(data.commerce);
+      if(sequence!==dialogSequence||!current(ctx))return false;await applyCommerce(data.commerce,ctx,sequence);if(sequence!==dialogSequence||!current(ctx))return false;
       if(!details.enabled||details.mode!==payment.mode||details.frozen)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
       if(!Array.isArray(data.packages)||!data.packages.length)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
       for(const item of data.packages){
@@ -185,7 +210,7 @@
     try{
       if(ctx.storage.getItem(requestIdKey)){message('Er is al een betaling gestart. Controleer eerst de status.');return;}
       const id=crypto.randomUUID();ctx.storage.setItem(requestIdKey,id);message('Betaling wordt klaargezet…');
-      const data=await request('/api/payments/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageId,requestId:id,...(commerce?{commerce:{version:commerce.version,country:commerce.country,customerType:'consumer',accepted:true}}:{})})},ctx);
+      const data=await request('/api/payments/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageId,requestId:id,...(commerce?{commerce:{version:commerce.version,country:commerce.country,customerType:'consumer',accepted:true},...(commerce.billingRequired?{billing:{...commerce.billing}}:{})}:{})})},ctx);
       await navigateCheckout(data.checkoutUrl,ctx);
     }catch(error){if(current(ctx))message(`${error.message||'Betaling kon niet worden gestart.'} Controleer de status voordat je opnieuw probeert.`);}
     finally{if(current(ctx))setPurchaseReady(false);}

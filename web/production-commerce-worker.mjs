@@ -15,6 +15,8 @@ import {handleOwnerSecurity} from './owner-security.mjs';
 import {handleOwnerAccounting,handleOwnedPaymentReceipt} from './accounting-export.mjs';
 import {handleOwnerRecovery} from './owner-recovery.mjs';
 import {handleCustomerSupport,ownerSupportCases} from './customer-support.mjs';
+import {handleInvoiceRoute} from './invoice-delivery.mjs';
+import {handlePurchaseBilling} from './purchase-billing.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -30,12 +32,13 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
-   if(u.pathname.startsWith('/api/owner/accounting')||u.pathname.startsWith('/api/owner/recovery')||u.pathname==='/api/owner/support'){
+   if(u.pathname.startsWith('/api/owner/accounting')||u.pathname.startsWith('/api/owner/recovery')||u.pathname==='/api/owner/support'||u.pathname.startsWith('/api/owner/invoices')){
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
     const options={userId:authenticated.userId,network};
     if(u.pathname==='/api/owner/support')return ownerSupportCases(env,options);
+    if(u.pathname.startsWith('/api/owner/invoices'))return handleInvoiceRoute(authenticated.request,env,options);
     return u.pathname.startsWith('/api/owner/accounting')?handleOwnerAccounting(authenticated.request,env,options):handleOwnerRecovery(authenticated.request,env,options);
    }
    // Financial reporting stays available while generation is paused, and the
@@ -59,6 +62,8 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env);
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    if(u.pathname==='/api/payments/billing')return handlePurchaseBilling(authenticated.request,env,{userId:authenticated.userId});
+    if(/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/invoice$/.test(u.pathname))return handleInvoiceRoute(authenticated.request,env,{userId:authenticated.userId});
     if(u.pathname.startsWith('/api/payments/support-requests'))return handleCustomerSupport(authenticated.request,env,{userId:authenticated.userId});
     const receipt=/^\/api\/payments\/orders\/([A-Za-z0-9_-]{12,80})\/receipt$/.exec(u.pathname);
     if(receipt)return handleOwnedPaymentReceipt(authenticated.request,env,{userId:authenticated.userId,requestId:receipt[1]});
