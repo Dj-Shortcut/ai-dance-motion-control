@@ -247,3 +247,18 @@ test('capabilities default to motion only and reject malformed or invented quali
   try{const valid=qualities===undefined||Array.isArray(qualities)&&qualities.length===3;const enabled=await enableVideoIfAvailable({binding:{isActive:()=>true,request:async()=>Response.json({enabled:true,qualities})},window:w,document:w.document,loadScript:async()=>{}});assert.equal(enabled,valid);if(enabled)assert.deepEqual(w.rigVideoQualities,qualities??['standard','pro']);}finally{dom.window.close();}
  }
 });
+test('idea tiles preset only the video type and description, and hide types the server does not offer',()=>{
+ const f=fixture();
+ try{
+  const band=f.el('idea-band'),dance=f.el('idea-dans');
+  assert.equal(band.hidden,false);assert.equal(band.getAttribute('aria-pressed'),'false');
+  band.click();assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.el('editPrompt').value,band.dataset.ideaPrompt);assert.equal(band.getAttribute('aria-pressed'),'true');assert.equal(f.el('status').textContent,'Idee gekozen. Kies nu een foto.');assert.equal(f.calls.length,0);
+  dance.click();assert.equal(f.w.rigVideoMode(),'motion');assert.equal(f.el('editPrompt').value,dance.dataset.ideaPrompt);assert.equal(dance.getAttribute('aria-pressed'),'true');assert.equal(band.getAttribute('aria-pressed'),'false');
+  f.prompt('Mijn eigen idee.');assert.equal(dance.getAttribute('aria-pressed'),'false');
+ }finally{f.dom.window.close();}
+ const motionOnly=fixture({qualities:['standard','pro']});
+ try{
+  assert.equal(motionOnly.el('idea-band').hidden,true);assert.equal(motionOnly.el('idea-film').hidden,true);assert.equal(motionOnly.el('idea-dans').hidden,false);
+  motionOnly.el('idea-band').click();assert.equal(motionOnly.w.rigVideoMode(),'motion');assert.doesNotMatch(motionOnly.el('editPrompt').value,/muzikant/);
+ }finally{motionOnly.dom.window.close();}
+});

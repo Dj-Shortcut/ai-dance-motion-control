@@ -62,7 +62,7 @@ function updateModeUi(){
  $('personInput').accept=edit?'image/jpeg,image/png,image/webp':'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm';$('trialDurationNote').textContent=edit?'(3–15 s · begin met 5 s)':'(3–30 s)';
  $('settingsNote').textContent=edit?'Gebruik een duidelijke referentiefoto. Beoordeel eerst een korte proef.':'Referenties worden pas na je bevestiging naar fal.ai gestuurd. Achtergrond vervangen is nog niet beschikbaar in de webversie.';
  if($('status').textContent===editUnavailableMessage&&(!edit||editAvailable()))showError('Kies een foto en een video.');
- renderReferences();refreshButton();
+ renderReferences();refreshButton();renderIdeas();
 }
 function setMode(next){
  if(busy||!['motion','edit'].includes(next)||next==='edit'&&!editAvailable()||next==='motion'&&!availableQualities().some(q=>q==='standard'||q==='pro'))return;
@@ -82,7 +82,11 @@ function updateCapabilities(){
  updateModeUi();
 }
 $('motionModeButton').addEventListener('click',()=>setMode('motion'));$('editModeButton').addEventListener('click',()=>setMode('edit'));
-const promptChanged=()=>{modePrompts[videoMode]=$('editPrompt').value;invalidate();};
+// Idea tiles only preset the video type and description; files stay the user's own choice.
+function renderIdeas(){const prompt=$('editPrompt').value;let visible=0;for(const tile of document.querySelectorAll('[data-idea-mode]')){const mode=tile.dataset.ideaMode,available=mode==='edit'?editAvailable():availableQualities().some(q=>q==='standard'||q==='pro');tile.hidden=!available;tile.disabled=busy;if(available)visible++;tile.setAttribute('aria-pressed',String(available&&mode===videoMode&&tile.dataset.ideaPrompt===prompt));}const panel=document.querySelector('.ideas-panel');if(panel)panel.hidden=visible===0;}
+function chooseIdea(tile){if(busy)return;const mode=tile.dataset.ideaMode;setMode(mode);if(videoMode!==mode)return;$('editPrompt').value=tile.dataset.ideaPrompt;modePrompts[videoMode]=tile.dataset.ideaPrompt;invalidate();renderIdeas();showError(!personFile?'Idee gekozen. Kies nu een foto.':!motionFile?'Idee gekozen. Kies nu een video.':'Idee gekozen. Druk op Maak video.');if(!personFile)$('personStepTitle').scrollIntoView?.({behavior:'smooth',block:'start'});}
+for(const tile of document.querySelectorAll('[data-idea-mode]'))tile.addEventListener('click',()=>chooseIdea(tile));
+const promptChanged=()=>{modePrompts[videoMode]=$('editPrompt').value;invalidate();renderIdeas();};
 $('editPrompt').addEventListener('input',promptChanged);$('editPrompt').addEventListener('change',promptChanged);
 document.addEventListener('rig-video-availability',updateCapabilities);
 for(const [button,input] of [['personChoose','personInput'],['personName','personInput'],['motionChoose','motionInput'],['motionName','motionInput'],['resultName','resultInput']]) $(button).addEventListener('click',()=>$(input).click());
