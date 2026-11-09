@@ -1,3 +1,4 @@
+import {isProductionGenerationContext} from './production-generation-context.mjs';
 import {providerJSON,providerInputValidation} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
 import {isR2InputUrl} from './rig-r2-inputs.mjs';
@@ -33,7 +34,7 @@ function validEditVideo(video) { return video.durationVerified===true&&Number.is
 const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
 function editPrompt(prompt) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${prompt}`; }
 function configured(s) {
-  if (s?.mode !== 'test') return false; // live billing/settlement is not ready
+  if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
   return typeof s?.authenticate === 'function' && typeof s?.assets?.getOwned === 'function' && typeof s?.assets?.uploadOwned === 'function' && typeof s?.quotes?.create === 'function' && typeof s?.quotes?.getOwned === 'function' && typeof s?.jobs?.getByIdempotency === 'function' && typeof s?.jobs?.getRecent === 'function' && typeof s?.jobs?.begin === 'function' && typeof s?.jobs?.getOwned === 'function' && typeof s?.jobs?.authorizeDispatch === 'function' && typeof s?.jobs?.markSubmitted === 'function' && typeof s?.jobs?.markUnknown === 'function' && typeof s?.jobs?.markPreparationFailed === 'function' && typeof s?.jobs?.claimPoll === 'function' && typeof s?.jobs?.releasePoll === 'function' && typeof s?.jobs?.markCompleted === 'function' && typeof s?.jobs?.markProviderFailed === 'function' && typeof s?.results?.store === 'function' && typeof s?.results?.read === 'function' && typeof s?.falKey === 'string' && s.falKey.length>0 && s.falKey.length<1024 && Number.isSafeInteger(s?.pricing?.standard) && s.pricing.standard>0 && Number.isSafeInteger(s?.pricing?.pro) && s.pricing.pro>0 && typeof s.pricing.version==='string' && s.pricing.version.length>0;
 }
@@ -94,6 +95,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
     if (req.method==='POST' && path==='/api/generation-quotes') {
       const data=inputData(await readJSON(req)); if (!data) return fail('Controleer je invoer.',400);
       if (!qualityEnabled(services,data.quality)) return fail('Dit videomodel is nog niet beschikbaar.',503);
+      if(services.mode==='live'&&data.quality==='edit-standard'&&data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',400);
       // The verified media service limits concurrent work. Resolve assets one at
       // a time so one user's photo/video cannot exhaust that limit itself.
       let assets; try {assets=[];for(const id of [data.imageId,data.videoId,...(data.faceId?[data.faceId]:[]),...data.angleIds])assets.push(await services.assets.getOwned(user.id,id));} catch {return fail('Bestanden zijn tijdelijk niet beschikbaar.',503);}
@@ -129,6 +131,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let quote; try {quote=await services.quotes.getOwned(user.id,data.quoteId);} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || quote.userId!==user.id || !Object.values(MODEL).includes(quote.model) || !Number.isSafeInteger(quote.priceCents) || quote.priceCents<=0 || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now() || !quote.input || !inputData(quote.input.data) || !Array.isArray(quote.input.refs) || quote.input.refs.length<2 || quote.input.refs.length>6) return fail('Prijsopgave is niet geldig of verlopen.',409);
       if (quote.model!==MODEL[quote.input.data.quality] || !qualityEnabled(services,quote.input.data.quality)) return fail('Dit videomodel is niet beschikbaar. Vraag opnieuw de prijs op.',409);
+      if(services.mode==='live'&&quote.input.data.quality==='edit-standard'&&quote.input.data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',409);
       const temporaryLinks=quote.model===MODEL['edit-standard']&&quote.input.data.transferPolicy===TEMPORARY_FAL_LINKS;
       // Consent authorizes this quote only. Reject before credit reservation,
       // media export or provider work, while preserving prior-job recovery.

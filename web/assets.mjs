@@ -1,5 +1,6 @@
-// TEST ONLY: compose with an authenticated private media service, never expose
-// the service directly. Live billing and real provider access remain disabled.
+import {isProductionGenerationContext} from './production-generation-context.mjs';
+// Compose with an authenticated private media service; never expose it directly.
+// Live operation requires the validated production capability, never a request flag.
 import { uploadVerifiedAsset,TEMPORARY_LINK_POLICY } from './upload.mjs';
 import {mintProviderInput,verifyProviderInput} from './rig-provider-inputs.mjs';
 import {mintR2Input,verifyR2Input} from './rig-r2-inputs.mjs';
@@ -57,7 +58,7 @@ function mediaFailure(r){
  return Response.json({error:message},{status:503,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...(settled?{'X-Rig-Media-Settled':'1'}:{'X-Rig-Media-Uncertain':'1'})}});
 }
 const hex=b=>Array.from(new Uint8Array(b),v=>v.toString(16).padStart(2,'0')).join('');
-function optionsOk(o){try{return o.mode==='test'&&new URL(o.origin).origin===o.origin&&o.origin.startsWith('https://')&&o.media&&typeof o.media.fetch==='function'&&typeof o.mediaSecret==='string'&&o.mediaSecret.length>=32&&(o.ephemeral===true||typeof o.falKey==='string'&&o.falKey.length>0)&&typeof o.limit==='function'}catch{return false}}
+function optionsOk(o){try{return (o.mode==='test'||o.mode==='live'&&isProductionGenerationContext(o.productionContext,{origin:o.origin})&&o.media===o.productionContext.env.RIG_MEDIA&&o.falKey===o.productionContext.env.FAL_KEY)&&new URL(o.origin).origin===o.origin&&o.origin.startsWith('https://')&&o.media&&typeof o.media.fetch==='function'&&typeof o.mediaSecret==='string'&&o.mediaSecret.length>=32&&(o.ephemeral===true||typeof o.falKey==='string'&&o.falKey.length>0)&&typeof o.limit==='function'}catch{return false}}
 function validHeaders(h,size){const hsize=h.get('content-length');return hsize!==null&&/^\d+$/.test(hsize)&&+hsize===size}
 async function readBounded(stream,max,timeoutMs=30000){
  if(!stream)throw Error('missing body');let size=0,chunks=[],timer;const r=stream.getReader();

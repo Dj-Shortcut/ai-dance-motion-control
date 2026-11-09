@@ -1,4 +1,5 @@
-// Closed, ledger-funded test composition. Not routed or deployed by this module.
+import {isProductionGenerationContext} from './production-generation-context.mjs';
+// Shared, ledger-funded private composition; test remains the default. Not routed or deployed by this module.
 // The caller must authenticate the subject and provide an actual shared media
 // lease; client identity headers must never be passed as trustedUserId.
 import {createAssets} from './assets.mjs';
@@ -15,8 +16,9 @@ const version=/^[A-Za-z0-9_.-]{1,40}$/;
 const integer=(s,max)=>typeof s==='string'&&/^[1-9][0-9]*$/.test(s)&&Number.isSafeInteger(+s)&&+s<=max;
 const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&integer(env.RIG_PRICE_EDIT,250);
 const unavailable=()=>Response.json({error:'Videogeneratie is nog niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store'}});
-function valid(env){
- try{return env.RIG_CLOSED_VIDEO_ENABLED==='yes'&&env.RIG_MODE==='test'&&env.RIG_MOLLIE_MODE==='test'&&new URL(env.RIG_PUBLIC_ORIGIN).origin===env.RIG_PUBLIC_ORIGIN&&env.RIG_PUBLIC_ORIGIN.startsWith('https://')&&typeof env.DB?.prepare==='function'&&typeof env.DB?.batch==='function'&&typeof env.RIG_MEDIA?.fetch==='function'&&typeof env.RIG_MEDIA_SECRET==='string'&&env.RIG_MEDIA_SECRET.length>=32&&typeof env.BUCKET?.get==='function'&&typeof env.BUCKET?.put==='function'&&typeof env.BUCKET?.head==='function'&&typeof env.FAL_KEY==='string'&&env.FAL_KEY.length>0&&env.FAL_KEY.length<1024&&!/[\r\n]/.test(env.FAL_KEY)&&integer(env.RIG_PRICE_STANDARD,250)&&integer(env.RIG_PRICE_PRO,250)&&version.test(env.RIG_PRICE_VERSION||'')&&integer(env.RIG_CLOSED_VIDEO_MAX_CENTS,800)&&integer(env.RIG_CLOSED_VIDEO_MAX_USD_MICROS,6000000)}catch{return false}
+function valid(env,{productionContext}={}){
+ const modeOk=env?.RIG_MODE==='test'&&env.RIG_MOLLIE_MODE==='test'||env?.RIG_MODE==='live'&&env.RIG_MOLLIE_MODE==='live'&&isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN});
+ try{return env.RIG_CLOSED_VIDEO_ENABLED==='yes'&&modeOk&&new URL(env.RIG_PUBLIC_ORIGIN).origin===env.RIG_PUBLIC_ORIGIN&&env.RIG_PUBLIC_ORIGIN.startsWith('https://')&&typeof env.DB?.prepare==='function'&&typeof env.DB?.batch==='function'&&typeof env.RIG_MEDIA?.fetch==='function'&&typeof env.RIG_MEDIA_SECRET==='string'&&env.RIG_MEDIA_SECRET.length>=32&&typeof env.BUCKET?.get==='function'&&typeof env.BUCKET?.put==='function'&&typeof env.BUCKET?.head==='function'&&typeof env.FAL_KEY==='string'&&env.FAL_KEY.length>0&&env.FAL_KEY.length<1024&&!/[\r\n]/.test(env.FAL_KEY)&&integer(env.RIG_PRICE_STANDARD,250)&&integer(env.RIG_PRICE_PRO,250)&&version.test(env.RIG_PRICE_VERSION||'')&&integer(env.RIG_CLOSED_VIDEO_MAX_CENTS,800)&&integer(env.RIG_CLOSED_VIDEO_MAX_USD_MICROS,6000000)}catch{return false}
 }
 // Only provider hosts required by existing transfer/queue code. Redirects are
 // never followed: particularly important for Authorization and signed URLs.
@@ -49,28 +51,29 @@ function guard(env,priceFetch,{trustedUserId,accessMode}){return {
    WHERE j.id=? AND j.user_id=? AND q.id=? AND q.model=? AND q.price_cents=?
     AND q.price_cents=j.price_cents AND q.pricing_version=? AND q.duration_seconds=? AND q.expires_at>?
     AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL
-    AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='test')
+    AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=?)
     AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id)
     AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id='reserve:'||j.id AND l.user_id=j.user_id AND l.order_id IS NULL AND l.delta=-j.price_cents)
     AND NOT EXISTS(SELECT 1 FROM rig_ledger WHERE event_id IN ('release:'||j.id,'settle:'||j.id))
     AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=j.user_id),0)>=0
     AND NOT EXISTS(SELECT 1 FROM rig_generation_jobs active WHERE active.user_id=j.user_id AND active.id<>j.id AND active.state IN ('submitting','unknown','queued'))`)
-   .bind(jobId,userId,quote.id,quote.model,quote.priceCents,quote.pricingVersion,quote.durationSeconds,Date.now()).first();
+   .bind(jobId,userId,quote.id,quote.model,quote.priceCents,quote.pricingVersion,quote.durationSeconds,Date.now(),env.RIG_MODE).first();
   return row?.authorized===1;
  }
 };}
 // lease.acquire/complete must be durable, shared and never expire automatically.
 // No secrets or mock provider are created here; the host supplies dependencies.
-export async function createClosedVideoService(env,{trustedUserId,lease,verifyTenant,providerFetch=fetch,gatewayFetch=fetch,priceFetch,accessMode='owner'}={}){
- if(!valid(env)||!id.test(trustedUserId||'')||!['owner','sponsored'].includes(accessMode)||(accessMode==='sponsored'&&env.RIG_SPONSORED_ENABLED!=='yes')||typeof lease?.acquire!=='function'||typeof lease?.complete!=='function'||typeof verifyTenant!=='function'||typeof providerFetch!=='function'||(priceFetch!==undefined&&typeof priceFetch!=='function'))return unavailable;
- try{const state=await env.DB.prepare('SELECT mode FROM rig_payment_environment WHERE id=1').first();if(state?.mode!=='test')return unavailable;}catch{return unavailable;}
+export async function createClosedVideoService(env,{trustedUserId,lease,verifyTenant,providerFetch=fetch,gatewayFetch=fetch,priceFetch,accessMode='owner',productionContext}={}){
+ const paid=env.RIG_MODE==='live'&&accessMode==='paid'&&isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN});
+ if(!valid(env,{productionContext})||!id.test(trustedUserId||'')||(!paid&&!['owner','sponsored'].includes(accessMode))||(!paid&&env.RIG_MODE!=='test')||(accessMode==='sponsored'&&env.RIG_SPONSORED_ENABLED!=='yes')||typeof lease?.acquire!=='function'||typeof lease?.complete!=='function'||typeof verifyTenant!=='function'||typeof providerFetch!=='function'||(priceFetch!==undefined&&typeof priceFetch!=='function'))return unavailable;
+ try{const state=await env.DB.prepare('SELECT mode FROM rig_payment_environment WHERE id=1').first();if(state?.mode!==env.RIG_MODE)return unavailable;}catch{return unavailable;}
  const r2Inputs=env.RIG_R2_INPUTS_ENABLED==='yes'?r2InputsConfig(env):null;
  if(env.RIG_R2_INPUTS_ENABLED==='yes'&&!r2Inputs)return unavailable;
  const inlineO3Owner=env.RIG_O3_INLINE_INPUTS_ENABLED==='yes'&&accessMode==='owner'&&trustedUserId===env.RIG_VIDEO_OWNER_USER_ID?trustedUserId:undefined;
  const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env)}));
- const makeAssets=()=>createAssets({mode:'test',origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
- const router=createRouter({identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
-  const stores=createD1GenerationStores(env.DB,{mode:'test',dispatchMode:accessMode});
+ const makeAssets=()=>createAssets({mode:env.RIG_MODE,...(paid?{productionContext}:{}),origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
+ const router=createRouter({...(paid?{productionContext}:{}),identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
+  const stores=createD1GenerationStores(env.DB,{mode:env.RIG_MODE,dispatchMode:accessMode,...(paid?{productionContext}:{})});
   if(accessMode==='sponsored'){
    const baseProvider=stores.jobs.markProviderFailed;
    const baseConfirm=stores.jobs.confirmInputFailureRefund;
@@ -96,7 +99,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
     return result;
    };
   }
-  return {...stores,inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode})};
+  return {...stores,...(paid?{productionContext}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode})};
  },generationFactory:s=>createGenerationHandler(s,transport)});
  return async req=>{
   const p=new URL(req.url).pathname;

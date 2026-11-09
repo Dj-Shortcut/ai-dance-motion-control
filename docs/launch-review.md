@@ -1,5 +1,9 @@
 # RIG launch review
 
+Historical review. For the implemented but activation-gated native credit
+checkout added on 9 November, see [credits-release.md](credits-release.md).
+The findings below describe the earlier deployment, not a fresh launch approval.
+
 Reviewed 7 November 2026. Scope: the imported website, private Cloudflare
 services, and the original Mac GUI. The website is still a consumer test with
 Mollie in test mode. This review does not certify it for commercial billing.

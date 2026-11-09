@@ -37,17 +37,32 @@ export function createProductionPayment({transport}={}){
   // trustedUserId must be from the authenticated Sites bridge, not from an HTTP header.
   async user(req,env,trustedUserId){
    const mapped=await validateProductionTenant(env);if(!mapped||!USER.test(trustedUserId||''))return fail();
-   const url=new URL(req.url);if(url.origin!==mapped.RIG_PUBLIC_ORIGIN||url.pathname==='/api/payments/webhook'||!url.pathname.startsWith('/api/payments/'))return new Response(null,{status:404});
+   const url=new URL(req.url);if(url.origin!==mapped.RIG_PUBLIC_ORIGIN||url.search||url.pathname==='/api/payments/webhook'||!(url.pathname.startsWith('/api/payments/')||url.pathname==='/api/session'&&req.method==='GET'))return new Response(null,{status:404});
    if(!['GET','POST'].includes(req.method)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return new Response(null,{status:403});
    try{
-    if(await d1Limit({env:mapped,category:'payment',userId:trustedUserId,method:req.method})!==true)return Response.json({error:'Te veel aanvragen.'},{status:429});
-    return await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,trustedUserId)||new Response(null,{status:404});
+    if(await d1Limit({env:mapped,category:url.pathname==='/api/session'?'session':'payment',userId:trustedUserId,method:req.method})!==true)return Response.json({error:'Te veel aanvragen.'},{status:429});
+    if(url.pathname==='/api/session'){
+     const balance=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance, EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();
+     if(!Number.isSafeInteger(balance?.balance))return fail();
+     return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:true,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
+    }
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,trustedUserId)||new Response(null,{status:404});
+    if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
+     const value=await response.json();
+     return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:{}),currency:'EUR',mode:'live',purchasesEnabled:true},{status:response.status,headers:response.headers});
+    }
+    return response;
    }catch{return fail()}
   },
   async webhook(req,env){
    const mapped=await validateProductionTenant(env);if(!mapped)return fail();
    if(req.method!=='POST'||req.url!==mapped.RIG_WEBHOOK_URL)return new Response(null,{status:404});
-   try{return await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,null)||new Response(null,{status:404});}catch{return fail()}
+   try{
+    // Independent of edge/IP limits: even distributed untrusted notifications
+    // cannot trigger unlimited authenticated reads from the payment provider.
+    if(await d1Limit({env:mapped,category:'webhook',userId:null,method:'POST'})!==true)return Response.json({error:'Betaalmeldingen zijn tijdelijk begrensd. Probeer later opnieuw.'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
+    return await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,null)||new Response(null,{status:404});
+   }catch{return fail()}
   }
  };
 }

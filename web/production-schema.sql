@@ -136,3 +136,24 @@ CREATE TABLE rig_sites_bridge_nonces (
 CREATE INDEX rig_sites_bridge_nonce_expiry ON rig_sites_bridge_nonces(expires_at);
 
 CREATE TABLE rig_production_tenant (id INTEGER PRIMARY KEY CHECK(id=1), environment_id TEXT NOT NULL UNIQUE, mode TEXT NOT NULL CHECK(mode='live'), site_id TEXT NOT NULL, site_origin TEXT NOT NULL, bridge_origin TEXT NOT NULL, mollie_profile TEXT NOT NULL, webhook_url TEXT NOT NULL);
+
+-- Production-private preprocessing exclusion; no automatic expiry or unlock.
+CREATE TABLE rig_media_work_lock (
+ id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL UNIQUE,user_id TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('active','uncertain')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+);
+CREATE TABLE rig_chatgpt_approvals (
+ token_hash TEXT PRIMARY KEY CHECK(length(token_hash)=64),user_id TEXT NOT NULL,
+ quote_id TEXT NOT NULL REFERENCES rig_generation_quotes(id),idempotency_key TEXT NOT NULL,
+ expires_at INTEGER NOT NULL,used_at INTEGER
+);
+CREATE INDEX rig_chatgpt_approvals_quote ON rig_chatgpt_approvals(user_id,quote_id);
+CREATE TABLE rig_collector_attempts (
+ job_id TEXT PRIMARY KEY REFERENCES rig_generation_jobs(id),last_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX rig_collector_attempts_age ON rig_collector_attempts(last_attempt_at);
+CREATE TABLE rig_payment_reconciliation_attempts (
+ order_id TEXT PRIMARY KEY REFERENCES rig_orders(id),last_attempt_at INTEGER NOT NULL
+);
+CREATE INDEX rig_payment_reconciliation_attempts_age ON rig_payment_reconciliation_attempts(last_attempt_at);
