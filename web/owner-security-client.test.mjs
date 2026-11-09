@@ -201,3 +201,17 @@ test('a late status read cannot overwrite the status from a newly mounted panel'
   assert.match(next.textContent,/Extra verificatie actief/);assert.equal(next.querySelector('button').hidden,true);assert.equal(next.getAttribute('aria-busy'),'false');
  }finally{f.close();}
 });
+
+test('a failed old enrollment poll cannot overwrite a newer active status check',async()=>{
+ const delayed=deferred();let active=false;const f=fixture({handler:call=>{
+  if(call.path==='/api/owner/security')return Response.json({configured:active,activeCredentialCount:active?1:0});
+  if(call.path.endsWith('/registration/options'))return Response.json(options());
+  if(call.path.endsWith('/registration/verify'))return Response.json({candidateId,fingerprint:'test-only-public-fingerprint',status:'pending'});
+  return delayed.promise;
+ }});try{
+  f.mount();await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Stel eerst'));setup(f);await waitFor(()=>f.d.querySelector('.owner-security-pending').hidden===false);
+  await f.poll();active=true;refresh(f);await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Laatst gecontroleerd'));
+  delayed.resolve(Response.json({error:'Oude aanvraag is niet beschikbaar.'},{status:503}));await new Promise(r=>setTimeout(r,10));
+  assert.match(f.d.querySelector('.finance-status').textContent,/Extra verificatie actief/);assert.equal(f.d.querySelector('.finance-status').dataset.error,'false');assert.equal(f.d.querySelector('.owner-security-pending').hidden,true);
+ }finally{f.close();}
+});

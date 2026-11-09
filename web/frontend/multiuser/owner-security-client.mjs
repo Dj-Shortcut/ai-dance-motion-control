@@ -88,7 +88,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
    if(value.status==='active'){pending=null;stopPoll();pendingNode.replaceChildren();pendingNode.hidden=true;await refresh();return;}
    if(value.status==='expired'||value.status==='rejected'){pending=null;stopPoll();pendingNode.hidden=true;status('Deze aanvraag is niet actief. Je kunt opnieuw instellen.',true);return;}
    if(value.status!=='pending')throw failure('Controleer de status opnieuw.','security_unavailable');
-  }catch(error){status(error.message,true);}
+  }catch(error){if(current()&&pending?.candidateId===token)status(error.message,true);}
   if(current()&&pending){stopPoll();poll=browser.setTimeout(()=>void pendingStatus(),10000);}
  }
  async function enroll(){
