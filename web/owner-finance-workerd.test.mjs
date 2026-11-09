@@ -176,3 +176,16 @@ test('a zero correction voids an invoice without deleting history; generic cash 
   const value=await f.report();assert.equal(value.income.refundedCents,250);assert.equal(value.costs.fixedRecordedCents,0);assert.equal(value.costs.actualRecordedCents,0);assert.equal(value.costs.recordedResultCents,0);assert.equal(value.costs.actualProfitCents,null);assert.equal(value.credits.liabilityCents,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_expenses').first()).n,3);assert.equal(value.expenses.length,2);
  }finally{await f.mf.dispose();}
 });
+
+test('owner finances remain available when optional or paused video prices are unavailable',async()=>{
+ const f=await fixture();try{
+  await f.paid();await f.job();
+  for(const invalid of [undefined,'','NaN','Infinity','0','-1','251']){
+   const response=await f.call('/api/owner/finance',undefined,{extraEnv:{RIG_EDIT_ENABLED:'no',RIG_PRODUCTION_VIDEO_ENABLED:'no',RIG_PRICE_EDIT:invalid}});
+   assert.equal(response.status,200,await response.clone().text());const value=await response.json();
+   assert.equal(value.prices.editCentsPerSecond,null);assert.equal(value.prices.standardCentsPerSecond,30);assert.equal(value.income.cashReceivedCents,1000);assert.equal(value.income.earnedVideoCents,150);
+  }
+  const response=await f.call('/api/owner/finance',undefined,{extraEnv:{RIG_PRODUCTION_VIDEO_ENABLED:'no',RIG_PRICE_STANDARD:undefined,RIG_PRICE_PRO:undefined,RIG_PRICE_EDIT:undefined}});
+  assert.equal(response.status,200);const value=await response.json();assert.deepEqual(value.prices,{standardCentsPerSecond:null,proCentsPerSecond:null,editCentsPerSecond:null});assert.equal(value.credits.liabilityCents,850);
+ }finally{await f.mf.dispose();}
+});
