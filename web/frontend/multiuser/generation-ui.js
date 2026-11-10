@@ -38,7 +38,7 @@
   async function call(path, options={}) {
     const response=await window.rigRequest(path,{credentials:'same-origin',cache:'no-store',...options});
     let data; try { data=await response.json(); } catch { throw new Error('De dienst is momenteel niet beschikbaar.'); }
-    if (!response.ok) { const error=new Error(data.error || 'De dienst is momenteel niet beschikbaar.'); error.status=response.status;if([400,409].includes(response.status)&&data.code==='subject_rejected'&&data.generationStarted===false){error.code='subject_rejected';error.generationStarted=false;}throw error; }
+    if (!response.ok) { const error=new Error(data.error || 'De dienst is momenteel niet beschikbaar.'); error.status=response.status;if([400,409].includes(response.status)&&data.code==='subject_rejected'&&data.generationStarted===false){error.code='subject_rejected';error.generationStarted=false;}if(response.status===400&&data.code==='provider_limit_exceeded'&&typeof data.error==='string'&&data.error.length>0&&data.error.length<=300)error.code='provider_limit_exceeded';throw error; }
     return data;
   }
   const delay = ms => new Promise(resolve=>setTimeout(resolve,ms));
@@ -83,6 +83,7 @@
       }else if(ownerProvider(data)||!Number.isSafeInteger(data.priceCents)||data.priceCents<1||data.currency!=='EUR')throw new Error('De prijs kon niet worden bevestigd.');
       if((recast?data.quality!==media.quality:data.quality!==undefined&&data.quality!==media.quality)||data.durationSeconds>limit||recast&&data.durationSeconds<5)throw new Error('De prijs hoort niet bij je gekozen videobewerking.');
       if(edit&&data.transferPolicy!==falTransferPolicy||!edit&&data.transferPolicy!==undefined)throw new Error('De bestandsoverdracht kon niet worden bevestigd. Bereid je bestanden opnieuw voor.');
+      if(recast&&data.outputResolution!=='1080P')throw new Error('De 1080p-kwaliteit kon niet worden bevestigd. Vraag opnieuw de prijs op.');
       const hasApproval=Object.hasOwn(data,'approvalToken')||Object.hasOwn(data,'idempotencyKey');
       if(hasApproval&&(!/^[A-Za-z0-9_-]{43}$/.test(data.approvalToken||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(data.idempotencyKey||'')))throw new Error('De prijsbevestiging is niet beschikbaar. Bereid je bestanden opnieuw voor.');
       const approved={funding:window.rigVideoFunding,...(hasApproval?{approvalToken:data.approvalToken,idempotencyKey:data.idempotencyKey}:{}),...(edit?{transferPolicy:falTransferPolicy}:{})};
@@ -114,7 +115,7 @@
           quote={id:data.id,media,...approved};note(`Als je bevestigt, kost deze video ${currency(data.priceCents)}. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
         }
       }
-      if(recast)showQuotePortrait(media);
+      if(recast){note(el('quoteMessage').textContent+'\nKwaliteit: '+data.outputResolution.toLowerCase()+'.');showQuotePortrait(media);}
       if(edit)note(el('quoteMessage').textContent+'\n\n'+(recast?falRecastNotice:falTransferNotice));
       el('confirmGeneration').hidden=false;
     } catch(error) { quote=null;clearQuotePortrait();note(error.message || 'De prijs kon niet worden berekend.'); }
@@ -242,7 +243,7 @@
       lastEstimateKey=key;lastEstimate=data;
       const checked=/^\d{4}-\d{2}-\d{2}$/.test(data.providerEstimate.rateCheckedOn||'')?` (tarief gecontroleerd op ${data.providerEstimate.rateCheckedOn})`:'';
       target.textContent=`fal.ai-raming: ${usd} · ${data.billedSeconds} s${checked}. De uiteindelijke fal-kost kan afwijken.`;target.hidden=false;
-    }catch(error){if(seq===estimateSequence){target.textContent=error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':['sponsored','credits'].includes(window.rigVideoFunding)?'De prijsraming is tijdelijk niet beschikbaar.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
+    }catch(error){if(seq===estimateSequence){target.textContent=window.rigVideoFunding==='owner-provider'&&quality==='human-recast'&&error?.status===400&&error.code==='provider_limit_exceeded'?error.message:error?.status===429?'Te veel prijsaanvragen. Wacht even en probeer opnieuw.':['sponsored','credits'].includes(window.rigVideoFunding)?'De prijsraming is tijdelijk niet beschikbaar.':'De fal.ai-raming is tijdelijk niet beschikbaar.';target.hidden=false;}}
   }
   function scheduleProviderEstimate(){
     const seq=++estimateSequence;

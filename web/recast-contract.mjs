@@ -2,8 +2,8 @@
 export const RECAST_QUALITY='human-recast';
 export const RECAST_MODEL='minimax/h3-max/recast';
 export const RECAST_QUEUE_FAMILY='minimax/h3-max';
-export const RECAST_PROVIDER_CONTRACT='human-recast-v1';
-export const RECAST_RESOLUTION='768P';
+export const RECAST_PROVIDER_CONTRACT='human-recast-1080p-v2';
+export const RECAST_RESOLUTION='1080P';
 export const RECAST_MIN_DURATION=5;
 export const RECAST_MAX_DURATION=15;
 export const RECAST_SETTINGS=Object.freeze({resolution:RECAST_RESOLUTION,enhance_realism:true,enable_safety_checker:true});

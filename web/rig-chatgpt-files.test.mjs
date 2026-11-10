@@ -37,7 +37,7 @@ test('disabled current capability, missing edit activation or unavailable sponso
  }
  for(const allowance of [{state:'unavailable'},{state:'eligible',remainingCents:0},{state:'eligible',remainingCents:501},{state:'eligible',remainingCents:NaN}]){const f=fixture({allowance});await assert.rejects(f.prepare(f.ctx,args));assert.equal(f.downloads.length,0);}
 });
-test('legacy capability supports only the two existing qualities and standard defaults keep offset zero',async()=>{
+test('legacy capability supports the two existing qualities and the Pro default keeps offset zero',async()=>{
  const f=fixture({cap:{enabled:true,funding:'owner'}});const result=await f.prepare(f.ctx,{reference_file:args.reference_file,motion_file:args.motion_file,seconds:5});assert.equal(result.durationSeconds,5);assert.equal(f.calls.filter(x=>x.path==='/api/sponsor-invitations/status').length,0);
  const h=new Headers(f.calls.at(-1).init.headers);assert.equal(h.get('x-rig-start-seconds'),'0');assert.equal(h.get('x-rig-keep-sound'),'true');
 });
@@ -59,4 +59,11 @@ test('only authoritative prepared duration and identifiers are returned; bad or 
  for(const duration of [2.99,5.2,15.01,NaN]){const bad=fixture({duration});await assert.rejects(bad.prepare(bad.ctx,args));assert.ok(bad.calls.every(x=>!x.path.includes('generation')));}
  const g=fixture({upload:async()=>Response.json({status:'ready',kind:'image',id:'not-a-uuid'})});await assert.rejects(g.prepare(g.ctx,args));assert.equal(g.calls.filter(x=>x.path==='/api/assets').length,1);
  const h=fixture({upload:async(role)=>role==='image'?Response.json({status:'ready',kind:'image',id:imageId}):Response.json({error:'private-provider-secret-detail'},{status:503})});await assert.rejects(h.prepare(h.ctx,args),e=>!e.message.includes('private-provider-secret-detail'));assert.ok(h.calls.every(x=>!x.path.includes('generation')));
+});
+
+
+test('omitted attachment quality requires Pro without silently falling back, while explicit Standard remains accepted',async()=>{
+ const input={reference_file:args.reference_file,motion_file:args.motion_file,seconds:5};
+ const pro=fixture({cap:{enabled:true,funding:'owner',qualities:['pro']}});assert.equal((await pro.prepare(pro.ctx,input)).durationSeconds,5);assert.equal(pro.downloads.length,2);assert.equal(pro.calls.some(x=>x.path.includes('generation')),false);
+ const standard=fixture({cap:{enabled:true,funding:'owner',qualities:['standard']}});await assert.rejects(standard.prepare(standard.ctx,input));assert.equal(standard.downloads.length,0);assert.equal(standard.calls.filter(x=>x.path==='/api/assets').length,0);assert.equal((await standard.prepare(standard.ctx,{...input,quality:'standard'})).durationSeconds,5);assert.equal(standard.downloads.length,2);assert.equal(standard.calls.some(x=>x.path.includes('generation')),false);
 });

@@ -56,7 +56,8 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     const prices=await currentPrice(mapped.FAL_KEY,quality),providerRate=recast?recastPricePerSecond(prices):prices?.prices?.[quality];
     if(prices?.currency!=='USD'||prices?.unit!=='second'||!Number.isFinite(providerRate)||providerRate<=0||providerRate>1000)return unavailable();
     const rateUsdMicrosPerSecond=Math.ceil(providerRate*1e6),usdMicros=rateUsdMicrosPerSecond*billedSeconds;
-    if(!Number.isSafeInteger(usdMicros)||usdMicros<=0||usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return unavailable();
+    if(!Number.isSafeInteger(usdMicros)||usdMicros<=0)return unavailable();
+    if(usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return recast&&funding==='owner-provider'?reply({error:'Dit fragment valt buiten de ingestelde Fal-limiet per video. Kies een korter fragment.',code:'provider_limit_exceeded'},400):unavailable();
     const cents=retailPriceCents(policy,{quality,billedSeconds,rateCents:rate,providerEstimateUsdMicros:usdMicros,fundingKind:funding,maxPriceCents:+mapped.RIG_CLOSED_VIDEO_MAX_CENTS});
     if(!profitable(createProfitSnapshot({policy,fundingKind:funding,retailPriceCents:cents,providerEstimateUsdMicros:usdMicros})))return unavailable();
     // Provider costs are private business information. Customers receive only

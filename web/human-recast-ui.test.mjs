@@ -6,7 +6,7 @@ const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.ur
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Recast UI did not settle');};
-function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94}={}){
+function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94,outputResolution='1080P',omitResolution=false,estimateLimit=false,estimateFailureCode='provider_limit_exceeded'}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],images=[],videos=[],storage=new Map(),verifications=[],created=[],revoked=[];
  w.Blob=Blob;el('rigStudio').hidden=false;el('authGate').hidden=true;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding='owner-provider';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.URL.createObjectURL=blob=>{const url=`blob:fixture-${created.length}`;created.push({url,blob});return url;};w.URL.revokeObjectURL=url=>revoked.push(url);w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
@@ -23,9 +23,9 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
   else if(path==='/api/assets')value={id:'asset'+(++assets),status:'ready',kind:options.headers['X-Rig-Asset-Kind']};
   else if(path==='/api/generation-quotes'){
    const input=JSON.parse(options.body),duration=verifiedDuration??Number(el('duration').value),id='quote'+(++quotes);
-   value={id,quality:input.quality,funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:987654,durationSeconds:duration,billedSeconds:Math.ceil(duration),transferPolicy:input.transferPolicy,approvalToken:'t'.repeat(43),idempotencyKey:'approval-'+id};
+   value={id,quality:input.quality,...(input.quality==='human-recast'&&!omitResolution?{outputResolution}:{}),funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:987654,durationSeconds:duration,billedSeconds:Math.ceil(duration),transferPolicy:input.transferPolicy,approvalToken:'t'.repeat(43),idempotencyKey:'approval-'+id};
   }else if(path==='/api/generations')value={id:'job-recast',state:'failed',funding:'owner-provider',providerEstimateUsdMicros:987654,finalizationConfirmed:true};
-  else if(path.startsWith('/api/estimate/fal?')){const p=new URL(path,w.location.origin).searchParams,duration=Number(p.get('duration'));value={quality:p.get('quality'),durationSeconds:duration,billedSeconds:Math.ceil(duration),funding:'owner-provider',providerEstimate:{currency:'USD',usdMicros:987654,binding:false}};}
+  else if(path.startsWith('/api/estimate/fal?')){const p=new URL(path,w.location.origin).searchParams,duration=Number(p.get('duration')),micros=estimateLimit?Math.ceil(duration)*450000:987654;if(estimateLimit&&p.get('quality')==='human-recast'&&micros>6000000)return {ok:false,status:400,json:async()=>({error:'Dit fragment valt buiten de ingestelde Fal-limiet per video. Kies een korter fragment.',code:estimateFailureCode})};value={quality:p.get('quality'),durationSeconds:duration,billedSeconds:Math.ceil(duration),funding:'owner-provider',providerEstimate:{currency:'USD',usdMicros:micros,binding:false}};}
   else throw Error('unexpected '+path);
   return {ok:true,json:async()=>value};
  };
@@ -60,7 +60,7 @@ test('recast retains selected files and unused references, uses one fixed portra
   const media=f.w.rigPreparedMedia();assert.equal(media.quality,'human-recast');assert.equal(media.image.blob,main);assert.equal(media.face,null);assert.equal(media.angles.length,0);assert.equal(media.steady,false);assert.equal(media.keepSound,true);assert.equal(media.prompt,'Vervang de persoon door mij.');assert.equal(f.videos.length,1);assert.equal(f.videos[0][2],9.5);assert.equal(f.videos[0][3],6);assert.equal(f.images.length,5);
   assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'),false);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden);
   const uploads=f.calls.filter(([p])=>p==='/api/assets');assert.equal(uploads.length,2);assert.equal(uploads[0][1].body,main);assert.equal(uploads[1][1].headers['X-Rig-Duration-Seconds'],'6');const quote=JSON.parse(f.calls.find(([p])=>p==='/api/generation-quotes')[1].body);assert.equal(quote.quality,'human-recast');assert.equal(quote.faceId,null);assert.deepEqual(quote.angleIds,[]);assert.equal(quote.prompt,'Vervang de persoon door mij.');assert.equal(quote.transferPolicy,'fal-temporary-links-v1');assert.equal(Object.hasOwn(quote,'steadyCamera'),false);
-  assert.match(f.el('quoteMessage').textContent,/0,988.*6 seconden/);assert.match(f.el('quoteMessage').textContent,/24 uur/);assert.equal(f.el('quoteTitle').textContent,'In de video');assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  assert.match(f.el('quoteMessage').textContent,/0,988.*6 seconden/);assert.match(f.el('quoteMessage').textContent,/Kwaliteit: 1080p/);assert.match(f.el('quoteMessage').textContent,/24 uur/);assert.equal(f.el('quoteTitle').textContent,'In de video');assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
   f.el('confirmGeneration').click();await settle(()=>f.verifications.length===1);await settle(()=>!f.el('confirmGeneration').disabled);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
   f.w.rigOwnerVerification.prepare=async(operation,payload)=>{f.verifications.push({operation,payload});return {proof:'device-confirmed'};};f.el('confirmGeneration').click();await settle(()=>f.calls.some(([p])=>p==='/api/generations'));assert.equal(f.calls.filter(([p])=>p==='/api/generations').length,1);const submitted=JSON.parse(f.calls.find(([p])=>p==='/api/generations')[1].body);assert.equal(submitted.transferConsent,'fal-temporary-links-v1');assert.deepEqual(submitted.verification,{proof:'device-confirmed'});assert.equal(f.verifications[1].operation,'owner-generation');
   f.el('closeQuote').click();f.el('motionModeButton').click();assert.equal(f.el('personInput').files[0],portraitFile);assert.equal(f.el('motionInput').files[0],motionFile);assert.equal(f.el('motionVideo').src,motionURL);assert.equal(f.el('faceReference').hidden,false);assert.equal(f.el('angleReference2').hidden,false);assert.equal(f.el('captureFace').hidden,false);assert.equal(f.el('sound').checked,false);assert.equal(f.el('sound').disabled,false);assert.equal(f.el('editPrompt').value,'Mijn bewaarde bewegingsbeschrijving.');assert.equal(f.el('duration').value,'5');
@@ -113,4 +113,29 @@ test('a reference video requires an explicit recast main frame before preparatio
   f.el('frameTime').value='37.5';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureMain').click();await settle(()=>!f.el('mainReference').hidden);const main=f.images[0];assert.equal(main.source,reference);assert.equal(main.crop.x,10);assert.equal(main.crop.w,90);
   f.prepare();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden);const uploads=f.calls.filter(([p])=>p==='/api/assets');assert.equal(uploads.length,2);assert.equal(uploads[0][1].body,main.image.blob);assert.equal(uploads[1][1].headers['X-Rig-Duration-Seconds'],'6');assert.equal(f.el('quotePortraitPreview').hidden,false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
  }finally{f.dom.window.close();}
+});
+
+
+test('recast quality is shown only after an exact 1080P quote and a missing or different resolution blocks confirmation',async()=>{
+ for(const options of [{omitResolution:true},{outputResolution:'768P'},{outputResolution:'720P'},{outputResolution:'1080p'},{outputResolution:1080},{outputResolution:null}]){
+  const f=fixture(options);try{f.load();f.el('editModeButton').click();f.prepare();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>f.el('quoteMessage').textContent.includes('1080p-kwaliteit'));assert.equal(f.el('confirmGeneration').hidden,true);assert.equal(f.el('quotePortraitPreview').hidden,true);assert.doesNotMatch(f.el('quoteMessage').textContent,/Kwaliteit: 1080p/);f.el('confirmGeneration').click();assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);}finally{f.dom.window.close();}
+ }
+});
+
+test('Motion defaults to Pro, retains an explicit Standard choice and never silently changes quality when availability changes',()=>{
+ const f=fixture();try{f.load();const standard=f.d.querySelector('input[name=quality][value=standard]'),pro=f.d.querySelector('input[name=quality][value=pro]');assert.equal(pro.checked,true);assert.equal(f.w.rigGenerationQuality(),'pro');
+  f.w.rigVideoQualities=['standard'];f.d.dispatchEvent(new f.w.Event('rig-video-availability'));assert.equal(pro.checked,true);assert.equal(f.w.rigGenerationQuality(),'pro');assert.equal(f.el('prepare').disabled,true);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  f.w.rigVideoQualities=['standard','pro','human-recast'];f.d.dispatchEvent(new f.w.Event('rig-video-availability'));assert.equal(f.w.rigGenerationQuality(),'pro');standard.checked=true;standard.dispatchEvent(new f.w.Event('change'));assert.equal(f.w.rigGenerationQuality(),'standard');f.el('editModeButton').click();f.el('motionModeButton').click();assert.equal(f.w.rigGenerationQuality(),'standard');assert.equal(standard.checked,true);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+
+
+test('an owner Recast estimate shows the fixed Fal-limit rejection without changing duration, quality or starting preparation',async()=>{
+ const f=fixture({estimateLimit:true});try{f.load();f.el('editModeButton').click();f.change('duration',14);await settle(()=>f.el('providerEstimate').textContent.includes('Fal-limiet'));assert.match(f.el('providerEstimate').textContent,/Kies een korter fragment/);assert.equal(f.el('duration').value,'14');assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.calls.some(([p])=>['/api/assets','/api/generation-quotes','/api/generations'].includes(p)),false);
+  f.change('duration',13);await settle(()=>f.el('providerEstimate').textContent.includes('5,85'));assert.match(f.el('providerEstimate').textContent,/13 s/);assert.equal(f.el('duration').value,'13');assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+
+test('unknown limit errors and non-owner funding do not display an owner provider-limit message',async()=>{
+ for(const options of [{estimateFailureCode:'unknown_provider_error'},{funding:'credits'}]){const f=fixture({estimateLimit:true,...options});try{f.load();f.el('editModeButton').click();if(options.funding)f.w.rigVideoFunding=options.funding;f.change('duration',14);await settle(()=>f.el('providerEstimate').textContent.includes('tijdelijk niet beschikbaar'));assert.doesNotMatch(f.el('providerEstimate').textContent,/Fal-limiet/);assert.equal(f.el('duration').value,'14');assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);}finally{f.dom.window.close();}}
 });

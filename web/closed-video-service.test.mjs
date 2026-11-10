@@ -11,7 +11,7 @@ test('a Recast flag cannot enable legacy owners, sponsored testers, or a forged 
  let reads=0;const price=async()=>{reads++;throw Error('must not query prices')};
  for(const accessMode of ['owner','sponsored','paid']){
   const guard=closedVideoTesting.guard({...config,RIG_OWNER_RECAST_VALIDATION_ENABLED:'yes',RIG_PRICE_RECAST:'30'},price,{trustedUserId:'alice',accessMode,productionContext:{env:{RIG_PRODUCTION_OWNER_USER_ID:'alice'}}});
-  await assert.rejects(guard.estimate('human-recast',6));await assert.rejects(guard.retailPrice('human-recast',6,1800000));
+  await assert.rejects(guard.estimate('human-recast',6));await assert.rejects(guard.retailPrice('human-recast',6,2700000));
  }
  assert.equal(reads,0);
 });

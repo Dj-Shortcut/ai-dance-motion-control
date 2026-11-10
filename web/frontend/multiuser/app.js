@@ -10,6 +10,7 @@ let cropTarget = null;
 const modeStorageKey='rig-video-mode:v1';
 function savedMode(){try{const value=window.rigScopedStorage?.getItem(modeStorageKey);return value==='motion'||value==='edit'?value:null;}catch{return null;}}
 let videoMode=savedMode()??'motion',draftRevision=0;
+const qualityUnavailableMessage='Je gekozen kwaliteit is nu niet beschikbaar. Kies zelf een kwaliteit in Instellingen.';
 const editUnavailableMessage='Videobewerking is nu niet beschikbaar. Kies zelf een ander videotype of probeer later opnieuw.';
 const modeDurations={motion:null,edit:5,'human-recast':6};
 const modeSound={motion:true,edit:true,'human-recast':true};
@@ -133,7 +134,10 @@ function setMode(next,{quality}={}){
 function updateCapabilities(){
  if(selectedEditQuality===null&&editAvailable()){selectedEditQuality=preferredEditQuality();if(recasting()){$('duration').value='6';$('editPrompt').value=modePrompts['human-recast'];}}
  for(const radio of document.querySelectorAll('input[name=quality]'))radio.disabled=!availableQualities().includes(radio.value);
- const selected=document.querySelector('input[name=quality]:checked');if(selected?.disabled){const first=[...document.querySelectorAll('input[name=quality]')].find(input=>!input.disabled);if(first)first.checked=true;}
+ const selected=document.querySelector('input[name=quality]:checked');
+ // Keep an explicit quality choice through availability changes. A missing
+ // default Pro capability must not silently downgrade a new draft.
+ if(!editing()&&selected?.disabled&&availableQualities().some(q=>q==='standard'||q==='pro'))showError(qualityUnavailableMessage);else if($('status').textContent===qualityUnavailableMessage)showError(personFile&&motionFile?'Klaar? Druk op Maak video.':'Kies een foto en een video.');
  if(editing()&&!availableQualities().includes(selectedQuality())){invalidate();showError(editUnavailableMessage);}
  updateModeUi();
 }

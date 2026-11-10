@@ -10,14 +10,14 @@ const EDIT_ENDPOINT = 'fal-ai/kling-video/o3/standard/video-to-video/edit';
 const PRICING = 'https://api.fal.ai/v1/models/pricing';
 
 // The API's generic USD0.05 "units" is NOT a per-second rate. The exact
-// Recast endpoint publishes USD0.30/output-second at 768P, images included:
+// Recast endpoint publishes USD0.45/output-second at 1080P, images included:
 // https://fal.ai/models/minimax/h3-max/recast (reviewed 2026-11-10).
 // Pin both observations as one explicit resolution-specific contract. A
 // changed API unit/rate requires review; never infer another model's billing.
-export const RECAST_BILLING=Object.freeze({id:'minimax-h3-max-recast-768p-20261110',endpoint:RECAST_MODEL,resolution:RECAST_RESOLUTION,providerUnit:'units',providerUnitPrice:0.05,usdMicrosPerSecond:300000});
+export const RECAST_BILLING=Object.freeze({id:'minimax-h3-max-recast-1080p-20261110',endpoint:RECAST_MODEL,resolution:RECAST_RESOLUTION,providerUnit:'units',providerUnitPrice:0.05,usdMicrosPerSecond:450000});
 export function recastPricePerSecond(value){
   const contract=value?.billingContracts?.[RECAST_QUALITY];
-  if(value?.provider!=='fal'||value.currency!=='USD'||value.unit!=='second'||value.prices?.[RECAST_QUALITY]!==0.3||!contract||typeof contract!=='object'||Array.isArray(contract)||Object.keys(contract).length!==Object.keys(RECAST_BILLING).length||!Object.keys(RECAST_BILLING).every(key=>Object.hasOwn(contract,key)&&Object.is(contract[key],RECAST_BILLING[key])))throw Error('Recast billing unavailable');
+  if(value?.provider!=='fal'||value.currency!=='USD'||value.unit!=='second'||value.prices?.[RECAST_QUALITY]!==RECAST_BILLING.usdMicrosPerSecond/1e6||!contract||typeof contract!=='object'||Array.isArray(contract)||Object.keys(contract).length!==Object.keys(RECAST_BILLING).length||!Object.keys(RECAST_BILLING).every(key=>Object.hasOwn(contract,key)&&Object.is(contract[key],RECAST_BILLING[key])))throw Error('Recast billing unavailable');
   return RECAST_BILLING.usdMicrosPerSecond/1e6;
 }
 

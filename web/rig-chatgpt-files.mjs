@@ -52,7 +52,7 @@ export function createChatgptFilePreparer({fetchImpl=fetch,downloadTimeoutMs=300
  return async function prepareFiles(ctx,args){
   try{
    if(!object(ctx)||!USER.test(ctx.userId||'')||ctx.frozen===true||ctx.session?.frozen===true||typeof ctx.request!=='function'||!exact(args,['reference_file','motion_file','seconds','startSeconds','quality','prompt','steadyCamera','keepSound']))reject();
-   const quality=args.quality??'standard',start=args.startSeconds??0,keepSound=args.keepSound??true;
+   const quality=args.quality??'pro',start=args.startSeconds??0,keepSound=args.keepSound??true;
    if(!QUALITIES.includes(quality)||!Number.isInteger(args.seconds)||args.seconds<3||args.seconds>(quality==='edit-standard'?15:30)||!Number.isFinite(start)||start<0||start>3600||Math.round(start*1000)/1000!==start||typeof keepSound!=='boolean'||args.prompt!==undefined&&(typeof args.prompt!=='string'||args.prompt.length>1900)||args.steadyCamera!==undefined&&typeof args.steadyCamera!=='boolean'||quality==='edit-standard'&&args.steadyCamera===true)reject();
    const reference=attachment(args.reference_file,IMAGE),motion=attachment(args.motion_file,VIDEO);
    const cap=await api(ctx,'/api/video-config');

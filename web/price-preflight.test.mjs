@@ -21,16 +21,17 @@ test('the quality selector cannot choose an arbitrary model, URL or disabled edi
   const f=fixture(x=>[x]);await assert.rejects(getFalPricePreflight('fixture-key',f.fetch,{quality}));assert.equal(f.endpoints.length,0);
  }
 });
-test('Recast explicitly binds the exact endpoint generic-unit baseline to its published 768P per-output-second contract',async()=>{
+test('Recast explicitly binds the exact endpoint generic-unit baseline to its published 1080P per-output-second contract',async()=>{
  const calls=[],fetcher=async(url,options)=>{const u=new URL(url);calls.push(u.searchParams.get('endpoint_id'));assert.equal(options.redirect,'manual');return Response.json({prices:[{endpoint_id:'minimax/h3-max/recast',currency:'USD',unit:'units',unit_price:.05}]});};
  const p=await getFalPricePreflight('fixture-key',fetcher,{includeRecast:true,quality:'human-recast'});
- assert.deepEqual(calls,['minimax/h3-max/recast']);assert.equal(p.prices['human-recast'],.30);assert.equal(recastPricePerSecond(p),.30);assert.equal(Math.ceil(recastPricePerSecond(p)*1e6)*6,1800000);assert.deepEqual(p.billingContracts['human-recast'],RECAST_BILLING);
+ assert.deepEqual(calls,['minimax/h3-max/recast']);assert.equal(p.prices['human-recast'],.45);assert.equal(recastPricePerSecond(p),.45);assert.equal(Math.ceil(recastPricePerSecond(p)*1e6)*6,2700000);assert.deepEqual(p.billingContracts['human-recast'],RECAST_BILLING);assert.equal(p.billingContracts['human-recast'].resolution,'1080P');
 });
 test('Recast cannot be selected by default or fall back from unknown units, changed baseline, currency, model or resolution',async()=>{
  let calls=0;const baseline={endpoint_id:'minimax/h3-max/recast',currency:'USD',unit:'units',unit_price:.05};
  await assert.rejects(getFalPricePreflight('key',async()=>{calls++;},{quality:'human-recast'}));assert.equal(calls,0);
  for(const patch of [{unit:'seconds'},{unit:'second'},{unit:'unit'},{unit_price:.06},{unit_price:.30},{currency:'EUR'},{endpoint_id:'minimax/h3-max/text-to-video'}])await assert.rejects(getFalPricePreflight('key',async()=>Response.json({prices:[{...baseline,...patch}]}),{includeRecast:true,quality:'human-recast'}));
  const valid=await getFalPricePreflight('key',async()=>Response.json({prices:[baseline]}),{includeRecast:true,quality:'human-recast'});
- for(const patch of [{resolution:'1080P'},{usdMicrosPerSecond:50000},{providerUnit:'seconds'},{endpoint:'fal-ai/kling-video/o3/standard/video-to-video/edit'}])assert.throws(()=>recastPricePerSecond({...valid,billingContracts:{'human-recast':{...RECAST_BILLING,...patch}}}));
+ for(const patch of [{resolution:'768P'},{id:'minimax-h3-max-recast-768p-20261110'},{usdMicrosPerSecond:300000},{usdMicrosPerSecond:50000},{providerUnit:'seconds'},{endpoint:'fal-ai/kling-video/o3/standard/video-to-video/edit'}])assert.throws(()=>recastPricePerSecond({...valid,billingContracts:{'human-recast':{...RECAST_BILLING,...patch}}}));
  assert.throws(()=>recastPricePerSecond({...valid,billingContracts:undefined}));assert.throws(()=>recastPricePerSecond({...valid,unit:'units'}));assert.throws(()=>recastPricePerSecond({...valid,prices:{'human-recast':.05}}));
+ assert.throws(()=>recastPricePerSecond({...valid,prices:{'human-recast':.30}}));
 });

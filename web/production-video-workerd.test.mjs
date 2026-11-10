@@ -25,7 +25,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_TESTPROFILE',BRIDGE+'/api/payments/webhook').run();
  await legacy.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1000)').bind('legacy-only',ALICE).run();
  const image=new Uint8Array(await readFile(new URL('./test/fixtures/input.jpg',import.meta.url))),video=new Uint8Array(await readFile(new URL('./test/fixtures/silent.mp4',import.meta.url)));
- const assets=new Map(),cdn=new Map(),temporaryCdn=new Set();let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null,temporaryResult=false,recastPricing={provider:'fal',currency:'USD',unit:'second',prices:{'human-recast':.3},billingContracts:{'human-recast':{...RECAST_BILLING}}};
+ const assets=new Map(),cdn=new Map(),temporaryCdn=new Set(),priceReads=[];let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null,temporaryResult=false,recastPricing={provider:'fal',currency:'USD',unit:'second',prices:{'human-recast':RECAST_BILLING.usdMicrosPerSecond/1e6},billingContracts:{'human-recast':{...RECAST_BILLING}}};
  async function source(kind,owner=ALICE){const bytes=kind==='image'?image:video,id=crypto.randomUUID(),sha256=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');assets.set(id,{id,kind,bytes,owner,sha256});return id}
  const imageId=await source('image'),videoId=await source('video');
  const media={async fetch(req){mediaCalls++;const u=new URL(req.url);if(req.headers.get('authorization')!=='Bearer '+'x'.repeat(40))return new Response(null,{status:401});
@@ -48,7 +48,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   if(u.origin==='https://queue.fal.run')return Response.json({video:{url:'https://v3b.fal.media/files/b/fixture/result.mp4'}});
   throw Error('Unexpected provider destination');
  };
- const priceFetch=async(_key,quality)=>quality==='human-recast'?recastPricing:({currency:'USD',unit:'second',prices:{standard:priceRate,pro:priceRate,'edit-standard':.14}});
+ const priceFetch=async(_key,quality)=>{priceReads.push(quality);return quality==='human-recast'?recastPricing:({currency:'USD',unit:'second',prices:{standard:priceRate,pro:priceRate,'edit-standard':.14}});};
  const service=async(user=ALICE,extra={})=>createProductionVideoService({...env,...extra},{trustedUserId:user,providerFetch:provider,priceFetch});
  const call=async(handler,path,data)=>{
   if(owner&&path==='/api/generations'&&data&&!data.verification){
@@ -64,7 +64,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   const payments=createProductionPayment({transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
   for(let i=0;i<2;i++)assert.equal((await payments.webhook(new Request(env.RIG_PRODUCTION_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'id='+payment.id}),env)).status,200);
  }
- return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},stats:()=>({mediaCalls,dispatches})};
+ return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches})};
 }
 
 test('fresh paid wallet: verified purchase, owned quote, one reserve, private result and isolated test balance',async()=>{
@@ -152,12 +152,12 @@ test('Recast is a separate default-off owner capability, never a customer flag, 
   assert.deepEqual(f.stats(),{mediaCalls:0,dispatches:0});assert.equal(await f.balance(),0);
  }finally{await f.mf.dispose()}
 });
-test('Recast prices six seconds at USD1.80 and keeps normal consent, passkey, one dispatch and recovery after disabling it',async()=>{
+test('1080P Recast prices six seconds at USD2.70 and keeps normal consent, passkey, one dispatch and recovery after disabling it',async()=>{
  const f=await fixture({owner:true,recastVideoDuration:6});try{
   const env={...f.env,...recastFlags},h=await f.service(ALICE,recastFlags),selection={...recastSelection,imageId:f.imageId,videoId:f.videoId};
-  let response=await f.call(h,'/api/estimate/fal?quality=human-recast&duration=6');assert.equal(response.status,200);assert.equal((await response.json()).providerEstimate.usdMicros,1800000);
-  response=await f.call(h,'/api/generation-quotes',selection);assert.equal(response.status,201,await response.clone().text());const q=await response.json();assert.equal(q.quality,'human-recast');assert.equal(q.funding,'owner-provider');assert.equal(q.providerEstimateUsdMicros,1800000);assert.equal(q.durationSeconds,6);assert.equal(q.priceCents,undefined);assert.equal(q.transferConsentRequired,true);
-  const stored=await f.db.prepare('SELECT model,input_json FROM rig_generation_quotes WHERE id=?').bind(q.id).first();assert.equal(stored.model,'minimax/h3-max/recast');assert.deepEqual(JSON.parse(stored.input_json).providerSettings,{resolution:'768P',enhance_realism:true,enable_safety_checker:true});
+  let response=await f.call(h,'/api/estimate/fal?quality=human-recast&duration=6');assert.equal(response.status,200);assert.equal((await response.json()).providerEstimate.usdMicros,2700000);
+  response=await f.call(h,'/api/generation-quotes',selection);assert.equal(response.status,201,await response.clone().text());const q=await response.json();assert.equal(q.quality,'human-recast');assert.equal(q.funding,'owner-provider');assert.equal(q.providerEstimateUsdMicros,2700000);assert.equal(q.durationSeconds,6);assert.equal(q.priceCents,undefined);assert.equal(q.transferConsentRequired,true);
+  const stored=await f.db.prepare('SELECT model,input_json FROM rig_generation_quotes WHERE id=?').bind(q.id).first();assert.equal(stored.model,'minimax/h3-max/recast');assert.deepEqual(JSON.parse(stored.input_json).providerSettings,{resolution:'1080P',enhance_realism:true,enable_safety_checker:true});
   const context=await createProductionGenerationContext(env),approvals=createChatgptApprovals(f.db,{mode:'live',productionContext:context}),approval=await approvals.issue(ALICE,{quoteId:q.id});assert.ok(approval);
   const submit={quoteId:q.id,idempotencyKey:approval.idempotencyKey,transferConsent:'fal-temporary-links-v1'},raw=data=>h(new Request(SITE+'/api/generations',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}));
   assert.equal((await raw({quoteId:q.id,idempotencyKey:submit.idempotencyKey})).status,400);response=await raw(submit);assert.equal(response.status,428);assert.equal((await response.json()).code,'step_up_required');assert.equal(f.stats().dispatches,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);
@@ -165,17 +165,29 @@ test('Recast prices six seconds at USD1.80 and keeps normal consent, passkey, on
   response=await raw({...submit,verification});assert.equal(response.status,202,await response.clone().text());const job=await response.json();assert.equal(f.stats().dispatches,1);
   const paused=await f.service(ALICE,{...recastFlags,RIG_OWNER_RECAST_VALIDATION_ENABLED:'no'});assert.deepEqual((await(await f.call(paused,'/api/video-config')).json()).qualities,['standard','pro']);
   assert.equal((await f.call(paused,'/api/generation-quotes',selection)).status,503);response=await f.call(paused,'/api/generations/'+job.id);assert.equal(response.status,200,await response.clone().text());const completed=await response.json();assert.equal(completed.state,'completed');assert.equal((await f.call(paused,completed.videoPath)).status,200);assert.equal((await f.call(paused,'/api/generations',submit)).status,200);assert.equal(f.stats().dispatches,1);
-  const usage=await f.db.prepare('SELECT state,estimated_usd_micros FROM rig_owner_provider_usage WHERE job_id=?').bind(job.id).first();assert.deepEqual(usage,{state:'completed',estimated_usd_micros:1800000});
-  await f.db.prepare("UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=2000000,version='recast-budget-fixture' WHERE id=1").run();
+  const usage=await f.db.prepare('SELECT state,estimated_usd_micros FROM rig_owner_provider_usage WHERE job_id=?').bind(job.id).first();assert.deepEqual(usage,{state:'completed',estimated_usd_micros:2700000});
+  await f.db.prepare("UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=4000000,version='recast-budget-fixture' WHERE id=1").run();
   const next=await f.call(h,'/api/generation-quotes',selection);assert.equal(next.status,201,await next.clone().text());const nextQuote=await next.json();
   response=await f.call(h,'/api/generations',{quoteId:nextQuote.id,idempotencyKey:'recast-over-daily-cap',transferConsent:'fal-temporary-links-v1'});assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).state,'failed');assert.equal(f.stats().dispatches,1);
   assert.equal(await f.balance(),0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
  }finally{await f.mf.dispose()}
 });
+test('1080P Recast keeps the USD6 cap: thirteen seconds fits and fourteen is refused without another quality or higher limit',async()=>{
+ const f=await fixture({owner:true,recastVideoDuration:13});try{
+  const h=await f.service(ALICE,recastFlags);
+  let r=await f.call(h,'/api/estimate/fal?quality=human-recast&duration=13');assert.equal(r.status,200);const estimate=await r.json();assert.equal(estimate.providerEstimate.usdMicros,5850000);assert.equal(estimate.providerEstimate.rateUsdMicrosPerSecond,450000);
+  r=await f.call(h,'/api/generation-quotes',{...recastSelection,imageId:f.imageId,videoId:f.videoId});assert.equal(r.status,201,await r.clone().text());const q=await r.json();assert.equal(q.providerEstimateUsdMicros,5850000);assert.equal(JSON.parse((await f.db.prepare('SELECT input_json FROM rig_generation_quotes WHERE id=?').bind(q.id).first()).input_json).providerSettings.resolution,'1080P');
+  for(const duration of ['13.001','14','15']){r=await f.call(h,'/api/estimate/fal?quality=human-recast&duration='+duration);assert.equal(r.status,400);const denied=await r.json();assert.equal(denied.code,'provider_limit_exceeded');assert.match(denied.error,/Fal-limiet.*korter/);}
+  assert.ok(f.priceReads().every(quality=>quality==='human-recast'));assert.equal(f.env.RIG_CLOSED_VIDEO_MAX_USD_MICROS,'6000000');assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);
+ }finally{await f.mf.dispose()}
+ const over=await fixture({owner:true,recastVideoDuration:14});try{
+  const h=await over.service(ALICE,recastFlags),r=await over.call(h,'/api/generation-quotes',{...recastSelection,imageId:over.imageId,videoId:over.videoId});assert.equal(r.status,503);assert.equal((await over.db.prepare('SELECT COUNT(*) n FROM rig_generation_quotes').first()).n,0);assert.equal(over.stats().dispatches,0);
+ }finally{await over.mf.dispose()}
+});
 test('Recast never treats generic units as seconds, exceeds the provider cap, or extends a too-short verified source to five seconds',async()=>{
  const f=await fixture({owner:true,recastVideoDuration:6});try{
   const selection={...recastSelection,imageId:f.imageId,videoId:f.videoId};
-  const capped=await f.service(ALICE,{...recastFlags,RIG_CLOSED_VIDEO_MAX_USD_MICROS:'1000000'});assert.equal((await f.call(capped,'/api/estimate/fal?quality=human-recast&duration=6')).status,503);assert.equal((await f.call(capped,'/api/generation-quotes',selection)).status,503);
+  const capped=await f.service(ALICE,{...recastFlags,RIG_CLOSED_VIDEO_MAX_USD_MICROS:'1000000'}),denied=await f.call(capped,'/api/estimate/fal?quality=human-recast&duration=6');assert.equal(denied.status,400);assert.match((await denied.json()).error,/korter/);assert.equal((await f.call(capped,'/api/generation-quotes',selection)).status,503);
   f.setRecastPricing({provider:'fal',currency:'USD',unit:'units',prices:{'human-recast':.05}});const h=await f.service(ALICE,recastFlags);assert.equal((await f.call(h,'/api/estimate/fal?quality=human-recast&duration=6')).status,503);assert.equal((await f.call(h,'/api/generation-quotes',selection)).status,503);assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),0);
  }finally{await f.mf.dispose()}
  const short=await fixture({owner:true,recastVideoDuration:4.99});try{

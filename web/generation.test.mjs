@@ -264,13 +264,13 @@ function temporaryFixture(){
 const recastSelection={imageId:'image',videoId:'video',quality:RECAST_QUALITY,prompt:'Replace the foreground man with the person in the supplied portrait.',keepSound:true,transferPolicy:temporaryPolicy};
 function recastFixture(){const f=temporaryFixture();f.services.pricing.recast=40;f.assets.video.durationSeconds=5.94;return f;}
 test('human Recast binds one portrait, verified source and fixed settings, then submits and polls its own namespace after consent only',async()=>{
- const f=recastFixture(),r=await quote(f,recastSelection),price=await r.json();assert.equal(r.status,201);assert.equal(price.billedSeconds,6);assert.equal(price.durationSeconds,5.94);assert.equal(price.priceCents,240);
+ const f=recastFixture(),r=await quote(f,recastSelection),price=await r.json();assert.equal(r.status,201);assert.equal(price.billedSeconds,6);assert.equal(price.durationSeconds,5.94);assert.equal(price.priceCents,240);assert.equal(price.outputResolution,'1080P');
  const stored=f.qs.get('quote1');assert.equal(stored.model,RECAST_MODEL);assert.equal(stored.input.providerContract,RECAST_PROVIDER_CONTRACT);assert.deepEqual(stored.input.providerSettings,RECAST_SETTINGS);assert.equal(stored.input.prompt,recastSelection.prompt);assert.equal(stored.input.data.prompt,recastSelection.prompt);assert.deepEqual(stored.input.refs.map(ref=>ref.id),['image','video']);
  assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,0);
  assert.equal((await submit(f)).status,400);assert.equal(f.calls().reserveCount,0);
  assert.equal((await submit(f,temporaryConfirmation)).status,202);assert.equal(f.calls().providerCalls,1);assert.equal(f.calls().uploadCalls,2);
  assert.deepEqual(f.contexts,[{jobId:'job1',model:RECAST_MODEL,transferPolicy:temporaryPolicy},{jobId:'job1',model:RECAST_MODEL,transferPolicy:temporaryPolicy}]);
- const sent=f.calls().submitted;assert.equal(sent.url,'https://queue.fal.run/minimax/h3-max/recast');assert.deepEqual(sent.body,{video_url:f.assets.video.url,reference_image_urls:[f.assets.image.url],prompt:recastSelection.prompt,resolution:'768P',enhance_realism:true,enable_safety_checker:true});assert.equal(Object.hasOwn(sent.body,'image_urls'),false);assert.equal(Object.hasOwn(sent.body,'elements'),false);assert.doesNotMatch(sent.body.prompt,/Remove all visible text|@Element1|@Image1|tripod/);
+ const sent=f.calls().submitted;assert.equal(sent.url,'https://queue.fal.run/minimax/h3-max/recast');assert.deepEqual(sent.body,{video_url:f.assets.video.url,reference_image_urls:[f.assets.image.url],prompt:recastSelection.prompt,resolution:'1080P',enhance_realism:true,enable_safety_checker:true});assert.equal(Object.hasOwn(sent.body,'image_urls'),false);assert.equal(Object.hasOwn(sent.body,'elements'),false);assert.doesNotMatch(sent.body.prompt,/Remove all visible text|@Element1|@Image1|tripod/);
  assert.deepEqual(JSON.parse(sent.headers['X-Fal-Object-Lifecycle-Preference']),{expiration_duration_seconds:86400});assert.equal(sent.headers['X-Fal-No-Retry'],'1');assert.equal(sent.headers['x-app-fal-disable-fallback'],'true');
  assert.equal((await submit(f,temporaryConfirmation)).status,200);assert.equal(f.calls().providerCalls,1);
  let delivery;f.services.results.store=async(_job,_url,options)=>{delivery=options;return 'private-recast-result';};
@@ -280,7 +280,7 @@ test('human Recast binds one portrait, verified source and fixed settings, then 
 });
 test('human Recast requires its configured price, one portrait, exact consent and actual five-second minimum before any funded work',async()=>{
  for(const rate of [undefined,0,-1,1.5]){const f=recastFixture();f.services.pricing.recast=rate;assert.equal((await quote(f,recastSelection)).status,503);assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().uploadCalls,0);}
- for(const patch of [{faceId:'face'},{faceId:'face',angleIds:['angle']},{steadyCamera:true},{keepSound:false},{transferPolicy:undefined},{transferPolicy:'private'},{prompt:' '},{prompt:'a'.repeat(1901)},{resolution:'1080P'},{enable_safety_checker:false},{imageId:'video',videoId:'image'}]){
+ for(const patch of [{faceId:'face'},{faceId:'face',angleIds:['angle']},{steadyCamera:true},{keepSound:false},{transferPolicy:undefined},{transferPolicy:'private'},{prompt:' '},{prompt:'a'.repeat(1901)},{resolution:'1080P'},{resolution:'768P'},{enable_safety_checker:false},{imageId:'video',videoId:'image'}]){
   const f=recastFixture();assert.equal((await quote(f,{...recastSelection,...patch})).status,400);assert.equal(f.qs.size,0);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
  }
  for(const duration of [4.92,4.999,15.001]){const f=recastFixture();f.assets.video.durationSeconds=duration;const response=await quote(f,recastSelection);assert.equal(response.status,400);assert.match((await response.json()).error,/minstens 5.*maximaal 15/);assert.equal(f.qs.size,0);assert.equal(f.calls().providerCalls,0);}
@@ -288,7 +288,7 @@ test('human Recast requires its configured price, one portrait, exact consent an
  const maximum=recastFixture(),prompt='😀'.repeat(950);assert.equal((await quote(maximum,{...recastSelection,prompt})).status,201);assert.equal(maximum.qs.get('quote1').input.prompt,prompt);
 });
 test('human Recast quote settings cannot drift or inherit old model contracts before reservation, and changed inputs cannot dispatch',async()=>{
- for(const change of [q=>{delete q.input.providerContract;},q=>{q.input.providerContract='old-recast';},q=>{q.input.providerSettings.resolution='1080P';},q=>{q.input.providerSettings.enable_safety_checker=false;},q=>{q.input.prompt='Different operation';},q=>{q.input.refs.push({id:'face',kind:'image',sha256:'a'.repeat(64)});},q=>{q.model='fal-ai/kling-video/o3/standard/video-to-video/edit';}]){
+ for(const change of [q=>{delete q.input.providerContract;},q=>{q.input.providerContract='old-recast';},q=>{q.input.providerSettings.resolution='768P';},q=>{q.input.providerSettings.enable_safety_checker=false;},q=>{q.input.prompt='Different operation';},q=>{q.input.refs.push({id:'face',kind:'image',sha256:'a'.repeat(64)});},q=>{q.model='fal-ai/kling-video/o3/standard/video-to-video/edit';}]){
   const f=recastFixture();await quote(f,recastSelection);change(f.qs.get('quote1'));assert.equal((await submit(f,temporaryConfirmation)).status,409);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
  }
  for(const kind of ['image','video']){const f=recastFixture();await quote(f,recastSelection);f.assets[kind].sha256='b'.repeat(64);const failed=await(await submit(f,temporaryConfirmation)).json();assert.equal(failed.state,'failed');assert.equal(failed.refundConfirmed,true);assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().releaseCount,1);}
@@ -298,6 +298,20 @@ test('already dispatched Recast and Kling jobs retain their exact polling famili
  for(const recast of [false,true]){const f=recast?recastFixture():temporaryFixture();await quote(f,recast?recastSelection:temporarySelection);assert.equal((await submit(f,temporaryConfirmation)).status,202);f.services.pricing.recast=undefined;f.services.pricing.editStandard=undefined;f.qs.get('quote1').expiresAt=Date.now()-1;
   assert.equal((await submit(f,temporaryConfirmation)).status,200);const result=await(await f.handler(get('/api/generations/job1'))).json();assert.equal(result.state,'completed');const family=recast?'minimax/h3-max':'fal-ai/kling-video';assert.equal(f.calls().providerRequests[1].url,`https://queue.fal.run/${family}/requests/abc-123/status`);assert.equal(f.calls().providerRequests.filter(req=>req.method==='POST').length,1);
  }
+});
+test('unstarted 768P Recast quotes need a new 1080P price before any funding or media transfer',async()=>{
+ const f=recastFixture();await quote(f,recastSelection);const legacy=f.qs.get('quote1');legacy.input.providerContract='human-recast-v1';legacy.input.providerSettings.resolution='768P';legacy.input.providerEstimateUsdMicros=1800000;
+ const response=await submit(f,temporaryConfirmation);assert.equal(response.status,409);assert.match((await response.json()).error,/opnieuw de prijs/);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
+ const current=recastFixture();const response1080=await quote(current,recastSelection);assert.equal((await response1080.json()).outputResolution,'1080P');assert.equal(current.qs.get('quote1').input.providerContract,'human-recast-1080p-v2');
+});
+test('an accepted historical 768P Recast job still replays, polls and stores a private result without a new paid submission',async()=>{
+ const f=recastFixture();await quote(f,recastSelection);const legacy=f.qs.get('quote1');legacy.input.providerContract='human-recast-v1';legacy.input.providerSettings.resolution='768P';legacy.input.providerEstimateUsdMicros=1800000;
+ await f.services.jobs.begin({userId:'u1',quoteId:legacy.id,idempotencyKey:'attempt',quote:legacy});await f.services.jobs.markSubmitted('u1','job1','abc-123');f.services.pricing.recast=undefined;legacy.expiresAt=Date.now()-1;
+ const replay=await submit(f,temporaryConfirmation);assert.equal(replay.status,200);assert.equal((await replay.json()).state,'queued');assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,1);
+ let delivered;f.services.results.store=async(job,url,options)=>{delivered={job,url,options};return 'private-legacy-768-result';};
+ const status=await f.handler(get('/api/generations/job1')),result=await status.json();assert.equal(status.status,200);assert.equal(result.state,'completed');assert.equal(result.videoPath,'/api/generations/job1/video');assert.equal(result.videoUrl,undefined);assert.equal(delivered.options.transferPolicy,temporaryPolicy);
+ assert.deepEqual(f.calls().providerRequests,[{url:'https://queue.fal.run/minimax/h3-max/requests/abc-123/status',method:'GET'},{url:'https://queue.fal.run/minimax/h3-max/requests/abc-123',method:'GET'}]);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,1);assert.equal(legacy.input.providerSettings.resolution,'768P');
+ assert.equal((await f.handler(get(result.videoPath))).status,200);f.setUser('u2');assert.equal((await f.handler(get(result.videoPath))).status,404);
 });
 test('text cleanup is bound before the price and sent in the same single motion or edit generation within the provider prompt limit',async()=>{
  const variants=[];
