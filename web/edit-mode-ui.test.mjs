@@ -18,7 +18,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   video.pause=()=>{video.paused=true;};video.play=async()=>{video.paused=false;};
  }
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(_value){this.onload();}};
- w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
+ w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,sourceTime:Number.isFinite(source.currentTime)?source.currentTime:null,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
  w.rigScopedStorage=scopedStorage??{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>{removed.push(key);storage.delete(key);}};
  let uploads=0,quotes=0;
  w.rigRequest=async(path,options={})=>{
@@ -99,7 +99,7 @@ test('editing has a visible description, five-second first fragment and clear so
   f.load();assert.equal(f.el('duration').value,'30');f.el('editModeButton').click();
   assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'5');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
   assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,true);assert.equal(f.el('moreOptions').hidden,true);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
-  assert.equal(f.el('personChooseText').textContent,'Kies een foto');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*video blijft/);assert.equal(f.el('sound').checked,true);
+  assert.equal(f.el('personChooseText').textContent,'Kies een foto of video');assert.equal(f.el('personInput').accept,'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*video blijft/);assert.equal(f.el('sound').checked,true);
   f.prompt('Vervang de zanger door mijn hond.');assert.equal(f.el('prepare').disabled,false);
   f.el('motionModeButton').click();assert.equal(f.el('duration').value,'30');assert.equal(f.el('duration').max,'30');assert.equal(f.el('motionQualitySettings').hidden,false);assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');
  }finally{f.dom.window.close();}
@@ -122,6 +122,34 @@ test('an edit uses the current reference crop while preserving an older motion s
   f.prepare();await waitFor(()=>f.w.rigPreparedMedia()!==null);
   assert.equal(f.imagePreparations.length,2);assert.equal(f.imagePreparations[1].crop.x,10);assert.equal(f.imagePreparations[1].crop.w,90);assert.notEqual(f.w.rigPreparedMedia().image.blob,original);
   f.el('motionModeButton').click();assert.equal(f.el('mainReference').hidden,false);
+ }finally{f.dom.window.close();}
+});
+test('editing extracts a chosen cropped JPEG from a long reference video without uploading that source or changing the motion clip',async()=>{
+ const f=fixture({withGeneration:true});
+ try{
+  f.el('editModeButton').click();f.load();f.change('start','9.5');f.prompt('Vervang de zanger door mij op het gekozen referentiebeeld.');
+  const motion=f.el('motionVideo'),motionSource=motion.src;
+  f.file('personInput','my-reference-3min.mp4','video/mp4');
+  const reference=f.el('personVideo'),referenceFile=f.el('personInput').files[0];reference.duration=180;reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));
+  assert.equal(f.el('frameControl').hidden,false);assert.equal(f.el('frameTime').max,'179.99');assert.equal(f.el('personCropButton').hidden,false);assert.equal(f.el('prepare').disabled,false);
+  f.el('frameTime').value='47.25';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));
+  f.el('personCropButton').click();f.el('cropX').value='10';f.el('cropY').value='5';f.el('cropW').value='80';f.el('cropH').value='90';f.el('applyCrop').click();
+  f.prepare();await waitFor(()=>f.el('uploadDialog').open);
+  const image=f.imagePreparations.at(-1),firstMedia=f.w.rigPreparedMedia();
+  assert.equal(image.source,reference);assert.equal(image.sourceTime,47.25);assert.deepEqual(image.crop,{x:10,y:5,w:80,h:90});assert.equal(firstMedia.image.blob.type,'image/jpeg');assert.notEqual(firstMedia.image.blob,referenceFile);
+  assert.equal(f.prepared.length,1);assert.equal(f.prepared[0][0],motion);assert.equal(f.prepared[0][2],9.5);assert.equal(f.prepared[0][3],5);assert.equal(motion.duration,60);assert.equal(motion.src,motionSource);assert.equal(f.el('duration').value,'5');assert.equal(f.el('start').value,'9.5');
+  assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false,'choosing a frame and preparing it stays local until the upload confirmation');
+  f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
+  const uploads=f.calls.filter(([path])=>path==='/api/assets');assert.equal(uploads.length,2);
+  const photoUpload=uploads.find(([,options])=>options.headers['X-Rig-Asset-Kind']==='image')[1];assert.equal(photoUpload.headers['Content-Type'],'image/jpeg');assert.equal(photoUpload.body,firstMedia.image.blob);
+  const motionUpload=uploads.find(([,options])=>options.headers['X-Rig-Asset-Kind']==='video')[1];assert.equal(motionUpload.body,firstMedia.video.blob);assert.equal(motionUpload.headers['X-Rig-Duration-Seconds'],'5');
+  assert.equal(uploads.some(([,options])=>options.body===referenceFile),false);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.match(f.el('quoteMessage').textContent,/tijdelijke links/);
+  f.el('closeQuote').click();f.el('frameTime').value='80.5';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));
+  assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  f.prepare();await waitFor(()=>f.el('uploadDialog').open);const secondMedia=f.w.rigPreparedMedia(),nextImage=f.imagePreparations.at(-1);assert.equal(nextImage.sourceTime,80.5);assert.deepEqual(nextImage.crop,{x:10,y:5,w:80,h:90});assert.notEqual(secondMedia.image.blob,firstMedia.image.blob);
+  assert.equal(f.el('duration').value,'5');assert.equal(f.el('start').value,'9.5');assert.equal(motion.duration,60);assert.equal(motion.src,motionSource);
+  f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));const confirmations=f.calls.filter(([path])=>path==='/api/generations');assert.equal(confirmations.length,1);assert.equal(JSON.parse(confirmations[0][1].body).quoteId,'quote-edit-2');assert.equal(JSON.parse(confirmations[0][1].body).transferConsent,'fal-temporary-links-v1');
  }finally{f.dom.window.close();}
 });
 test('editing shows the EUR gift price before one explicit approved generation',async()=>{

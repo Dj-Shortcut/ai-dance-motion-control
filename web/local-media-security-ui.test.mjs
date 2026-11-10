@@ -34,7 +34,8 @@ test('every local media input rejects active documents and wrong media roles bef
   }
   for(const id of ['motionInput','resultInput'])f.files(id,f.file('not-a-video.jpg','image/jpeg'));
   for(const id of ['faceInput','anglesInput'])f.files(id,f.file('not-a-photo.mp4','video/mp4'));
-  f.el('editModeButton').click();f.files('personInput',f.file('not-an-edit-reference.mp4','video/mp4'));
+  f.el('editModeButton').click();
+  for(const type of ['text/html','image/svg+xml','application/javascript'])f.files('personInput',f.file('not-media.mp4',type));
   assert.equal(f.created.length,0);assert.equal(f.el('resultVideo').hasAttribute('src'),false);assert.equal(f.el('export').hasAttribute('href'),false);
  }finally{f.dom.window.close();}
 });
@@ -42,12 +43,15 @@ test('every local media input rejects active documents and wrong media roles bef
 test('previews and downloads use new blobs with fixed non-active MIME types, never the selected File',async()=>{
  const f=fixture(),payload='<html><script>window.injected=true</script></html>';
  try{
-  for(const type of ['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','video/webm']){
+  for(const mode of ['motion','edit']){
+   f.el(mode==='edit'?'editModeButton':'motionModeButton').click();
+   for(const type of ['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','video/webm']){
    // An OS-reported MIME type can be spoofed. The wrapper fixes interpretation
    // independently of the filename and bytes; media decoders reject bad data.
    const source=f.file('untrusted.html',type,payload);f.files('personInput',source);
    const {blob}=f.created.at(-1);assert.notEqual(blob,source);assert.equal(blob.type,type);assert.equal(await f.text(blob),payload);
-   assert.equal(f.el('personName').textContent,'untrusted.html');assert.equal(f.w.injected,undefined);
+    assert.equal(f.el('personName').textContent,'untrusted.html');assert.equal(f.w.injected,undefined);
+   }
   }
   f.files('motionInput',f.file('clip.mp4','video/mp4;codecs=avc1.42E01E'));
   assert.equal(f.created.at(-1).blob.type,'video/mp4');assert.equal(f.el('motionVideo').src,f.created.at(-1).url);
