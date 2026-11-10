@@ -32,7 +32,7 @@ function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
 const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
-function editPrompt(prompt) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${prompt}`; }
+function editPrompt(prompt,hasIdentity=false) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${hasIdentity?'Use @Element1 for the replacement subject identity and its appearance from different angles. ':''}${prompt}`; }
 function configured(s) {
   if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
@@ -76,7 +76,10 @@ function inputData(o) {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
   const { imageId, videoId, faceId=null, angleIds=[], quality, prompt='', keepSound=true, steadyCamera=quality!=='edit-standard', transferPolicy }=o;
   if (!ID.test(imageId??'') || !ID.test(videoId??'') || !Object.hasOwn(MODEL, quality) || typeof prompt!=='string' || prompt.length>1900 || typeof keepSound!=='boolean' || typeof steadyCamera!=='boolean' || !(faceId===null || ID.test(faceId)) || !Array.isArray(angleIds) || angleIds.length>3 || angleIds.some(x=>typeof x!=='string'||!ID.test(x)) || (angleIds.length>0 && !faceId)) return null;
-  if (quality==='edit-standard' && (!prompt.trim() || faceId!==null || angleIds.length>0 || steadyCamera)) return null;
+  if (quality==='edit-standard' && (!prompt.trim() || steadyCamera)) return null;
+  // Extra edit identities use the current quote-bound temporary transfer.
+  // Historical gateway/inline probes remain limited to their original pair.
+  if (quality==='edit-standard' && faceId!==null && transferPolicy!==TEMPORARY_FAL_LINKS) return null;
   if(Object.hasOwn(o,'transferPolicy')&&(quality!=='edit-standard'||transferPolicy!==TEMPORARY_FAL_LINKS))return null;
   return {imageId,videoId,faceId,angleIds:[...angleIds],quality,prompt,keepSound,steadyCamera,...(transferPolicy?{transferPolicy}:{})};
 }
@@ -133,7 +136,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(services.mode!=='live'&&services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
       // Store only owned asset identifiers and hashes; sending bytes to fal is
       // deferred until the customer confirms the quote and funds are reserved.
-      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
+      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt,Boolean(data.faceId)):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
       return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null&&!(services.mode==='live'&&quote.fundingKind==='credits')?{providerEstimateUsdMicros}:{})},201);
@@ -205,6 +208,13 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if(selected.quality==='edit-standard'){
           if(!validEditVideo(video)||!quote.input.prompt.includes('@Image1')||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
           providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,...(temporaryLinks?{shot_type:'customize'}:{})};
+          // O3 accepts identity elements with 1–3 angle images. Keep the main
+          // image and one element instead of exceeding its four-reference cap
+          // by flattening a main image, close-up and three angles into image_urls.
+          if(selected.faceId){
+            if(!quote.input.prompt.includes('@Element1'))throw Error('Invalid edit identity');
+            providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];
+          }
         }else{
           providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
           if(selected.faceId){providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];if(!providerInput.prompt.includes('@Element1'))providerInput.prompt+=' The person is @Element1.';}

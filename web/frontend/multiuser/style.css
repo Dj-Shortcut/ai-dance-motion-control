@@ -65,3 +65,5 @@ footer{position:sticky;bottom:0;z-index:2;padding:12px 0;background:#111416;bord
 @media(max-width:700px){.idea{flex-direction:column;align-items:flex-start;gap:8px;padding:12px}}
 
 .brief-actions{display:flex;gap:10px;flex-wrap:wrap}.brief-actions button{flex:1 1 190px;padding:12px 14px}#briefDialog .brief-actions .primary{width:auto;margin:0}#tryShortVideo:disabled{opacity:.45;cursor:not-allowed}#shortTrialHint{color:var(--muted,#aebcb8)}
+
+#briefDialog .brief-feedback{margin:14px 0;line-height:1.5}#briefDialog .brief-correction{margin:0 0 14px}#briefDialog[aria-busy="true"] .brief-feedback{color:var(--mint,#88d6ba)}

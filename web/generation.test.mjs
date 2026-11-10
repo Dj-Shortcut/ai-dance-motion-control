@@ -115,9 +115,10 @@ test('fractional output is conservatively rounded up before showing the customer
 
 const editBody={imageId:'image',videoId:'video',quality:'edit-standard',prompt:'Replace the foreground soloist with the dog. Preserve the orchestra.',keepSound:true};
 function editFixture(){const f=fixture();f.services.pricing.editStandard=20;f.services.inputGatewayOrigin='https://gateway.example';const mockedUrl=(assetId,ext)=>{const raw=JSON.stringify({v:1,jobId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',assetId,sha256:'a'.repeat(64),exp:Date.now()+300000});return 'https://gateway.example/provider-inputs/'+Buffer.from(raw).toString('base64url')+'.'+'a'.repeat(64)+'/'+assetId+'.'+ext};f.assets.image.url=mockedUrl('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','jpg');f.assets.video.url=mockedUrl('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','mp4');Object.assign(f.assets.video,{durationSeconds:5,width:1280,height:720,fps:30});return f;}
-test('edit route is unavailable without an explicit configured price and rejects V3-only controls',async()=>{
+test('edit route is unavailable without an explicit configured price and rejects fixed-camera or incomplete identity controls',async()=>{
  const f=fixture();assert.equal((await quote(f,editBody)).status,503);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
- const g=editFixture();for(const patch of [{faceId:'face'},{faceId:'face',angleIds:['angle']},{steadyCamera:true}])assert.equal((await quote(g,{...editBody,...patch})).status,400);
+ const g=editFixture();for(const patch of [{angleIds:['angle']},{faceId:'face',angleIds:['angle','angle','angle','angle']},{steadyCamera:true}])assert.equal((await quote(g,{...editBody,...patch})).status,400);
+ for(const patch of [{faceId:'face'},{faceId:'face',angleIds:['angle']}])assert.equal((await quote(g,{...editBody,...patch})).status,400,'historical transfer paths keep their original two-input scope');
  assert.equal(g.calls().uploadCalls,0);assert.equal(g.calls().providerCalls,0);
 });
 test('edit quote needs independently verified dimensions, frame rate and a 3–15 second clip',async()=>{
@@ -293,6 +294,45 @@ test('confirmed temporary edit uses exact O3 CDN body and one-day lifecycle whil
  // without another consent field; it cannot trigger a second export/charge.
  f.qs.get('quote1').expiresAt=Date.now()-1;assert.equal((await submit(f)).status,200);
  assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().uploadCalls,2);assert.equal(f.calls().providerCalls,1);
+});
+function addEditAngles(f){
+ for(const id of ['angle2','angle3'])f.assets[id]={id,kind:'image',verified:true,sha256:'a'.repeat(64),size:32,url:`https://v3b.fal.media/files/b/fixture/${id}.jpg`};
+ return {...temporarySelection,faceId:'face',angleIds:['angle','angle2','angle3']};
+}
+test('temporary edit binds a close-up and three angles to the price and transfers all six owned inputs only after consent',async()=>{
+ const f=temporaryFixture(),selection=addEditAngles(f),r=await quote(f,selection),q=await r.json();
+ assert.equal(r.status,201);assert.equal(q.priceCents,100);assert.equal(q.billedSeconds,5);
+ assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().providerCalls,0);
+ const ids=['image','video','face','angle','angle2','angle3'];
+ assert.deepEqual(f.qs.get('quote1').input.refs,ids.map(id=>({id,kind:f.assets[id].kind,sha256:f.assets[id].sha256})));
+ assert.equal((await submit(f)).status,400);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().reserveCount,0);
+ assert.equal((await submit(f,temporaryConfirmation)).status,202);
+ assert.equal(f.calls().uploadCalls,6);assert.equal(f.calls().reserveCount,1);assert.equal(f.calls().providerCalls,1);
+ assert.deepEqual(f.contexts,ids.map(()=>({jobId:'job1',model:'fal-ai/kling-video/o3/standard/video-to-video/edit',transferPolicy:temporaryPolicy})));
+ const payload=f.calls().submitted.body;
+ assert.deepEqual(payload.image_urls,[f.assets.image.url]);
+ assert.deepEqual(payload.elements,[{frontal_image_url:f.assets.face.url,reference_image_urls:selection.angleIds.map(id=>f.assets[id].url)}]);
+ assert.match(payload.prompt,/@Image1/);assert.match(payload.prompt,/@Video1/);assert.match(payload.prompt,/@Element1/);assert.ok(payload.prompt.endsWith(selection.prompt));
+ assert.equal(payload.keep_audio,true);assert.equal(payload.enable_safety_checker,true);assert.equal(payload.shot_type,'customize');
+ assert.deepEqual(JSON.parse(f.calls().submitted.headers['X-Fal-Object-Lifecycle-Preference']),{expiration_duration_seconds:86400});
+ assert.equal((await submit(f,temporaryConfirmation)).status,200);assert.equal(f.calls().providerCalls,1);assert.equal(f.calls().uploadCalls,6);
+});
+test('an edit close-up uses the main image as its required angle when no extra angles are selected',async()=>{
+ const f=temporaryFixture();assert.equal((await quote(f,{...temporarySelection,faceId:'face'})).status,201);
+ assert.equal((await submit(f,temporaryConfirmation)).status,202);
+ assert.deepEqual(f.calls().submitted.body.elements,[{frontal_image_url:f.assets.face.url,reference_image_urls:[f.assets.image.url]}]);
+ assert.equal(f.calls().uploadCalls,3);
+});
+test('foreign or modified edit identity inputs never reach the paid provider dispatch',async()=>{
+ const foreign=temporaryFixture(),selection=addEditAngles(foreign),owned=foreign.services.assets.getOwned;
+ foreign.services.assets.getOwned=async(user,id)=>id==='angle3'?null:owned(user,id);
+ assert.equal((await quote(foreign,selection)).status,400);assert.equal(foreign.qs.size,0);assert.equal(foreign.calls().uploadCalls,0);assert.equal(foreign.calls().reserveCount,0);assert.equal(foreign.calls().providerCalls,0);
+ for(const id of ['face','angle','angle2','angle3']){
+  const f=temporaryFixture();await quote(f,addEditAngles(f));f.assets[id].sha256='b'.repeat(64);
+  const response=await submit(f,temporaryConfirmation),failed=await response.json();
+  assert.equal(failed.state,'failed');assert.equal(failed.refundConfirmed,true);assert.equal(f.calls().providerCalls,0);assert.equal(f.calls().releaseCount,1);
+  assert.equal((await(await submit(f,temporaryConfirmation)).json()).state,'failed');assert.equal(f.calls().releaseCount,1);
+ }
 });
 test('temporary transfer bypasses the old owner-only inline restriction but keeps actual O3 duration checks',async()=>{
  const f=temporaryFixture();f.assets.video.durationSeconds=8.2;assert.equal((await quote(f,temporarySelection)).status,201);assert.equal((await submit(f,temporaryConfirmation)).status,202);

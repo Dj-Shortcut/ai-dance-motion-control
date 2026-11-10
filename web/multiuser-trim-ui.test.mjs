@@ -97,7 +97,7 @@ test('preparation accepts the selected 30 seconds and rejects values outside the
   }
   f.change('duration','30');f.change('start','9.5');f.prepare();await waitFor(()=>f.win.rigPreparedMedia()!==null);
   assert.equal(f.prepared.length,1);assert.equal(f.prepared[0].duration,30);assert.equal(f.prepared[0].start,9.5);
-  f.loadMotion(8.9);f.change('duration','9');f.prepare();await waitFor(()=>f.byId('status').textContent.includes('3 tot 30'));
+  f.loadMotion(8.9);f.change('duration','9');f.prepare();await waitFor(()=>f.byId('status').textContent.includes('3 tot 8'));
   assert.equal(f.prepared.length,1,'a fragment longer than the source maximum is not prepared');
  }finally{f.close()}
 });
