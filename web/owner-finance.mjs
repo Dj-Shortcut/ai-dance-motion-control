@@ -3,6 +3,7 @@ import {validateProductionTenant} from './production-tenant.mjs';
 import {parseProfitPolicy,profitPolicyRow,validProfitSnapshot} from './profit-policy.mjs';
 import {d1Limit} from './router.mjs';
 import {prepareOwnerMutation} from './owner-security.mjs';
+import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -73,6 +74,7 @@ const dispatched=`(c.job_id IS NOT NULL OR j.fal_request_id IS NOT NULL OR j.pol
 const reportAt=`CASE WHEN j.state='completed' AND j.finalized_at IS NOT NULL THEN j.finalized_at ELSE COALESCE(c.authorized_at,j.created_at) END`;
 
 async function summary(mapped,period,now){
+ const pendingProviderBudget=workflowProviderBudgetPredicate({enabled:mapped.RIG_OWNER_CLEANUP_VALIDATION_ENABLED==='yes',job:'j'});
  const db=mapped.DB,p=periodArgs(period),rows=await db.batch([
   db.prepare('SELECT * FROM rig_finance_policy WHERE id=1'),
   db.prepare(`SELECT COALESCE(SUM(amount_cents),0) cash,COALESCE(SUM(credits),0) issued,COALESCE(SUM(CASE WHEN state='reversal_review' THEN amount_cents ELSE 0 END),0) review FROM (${purchases}) WHERE ${periodSQL('credited_at')}`).bind(...p),
@@ -95,7 +97,7 @@ async function summary(mapped,period,now){
    ${dispatched} AS dispatched FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
    LEFT JOIN rig_generation_costs c ON c.job_id=j.id LEFT JOIN earned e ON e.job_id=j.id WHERE ${periodSQL(reportAt)} ORDER BY recognized_at DESC,j.id DESC LIMIT 50`).bind(...p),
   db.prepare(`SELECT id,category,expense_date,amount_cents,note,job_id,replaces_expense_id,created_at FROM (${effectiveExpenses}) WHERE (? IS NULL OR substr(expense_date,1,7)=?) ORDER BY expense_date DESC,created_at DESC,id DESC LIMIT 100`).bind(period.month,period.month),
-  db.prepare(`SELECT COALESCE(SUM(c.provider_estimate_usd_micros),0) used FROM rig_generation_costs c JOIN rig_generation_jobs j ON j.id=c.job_id WHERE c.budget_day=? OR j.state IN ('unknown','submitting')`).bind(new Date(now).toISOString().slice(0,10)),
+  db.prepare(`SELECT COALESCE(SUM(c.provider_estimate_usd_micros),0) used FROM rig_generation_costs c JOIN rig_generation_jobs j ON j.id=c.job_id WHERE ${pendingProviderBudget}`).bind(new Date(now).toISOString().slice(0,10)),
   db.prepare("SELECT COUNT(*) count FROM rig_orders WHERE state IN ('reversal_review','credit_pending_review')")
  ]);
  if(rows.some(row=>row.success!==true))throw Error('Financial read failed');

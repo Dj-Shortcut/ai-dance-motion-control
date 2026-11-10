@@ -267,3 +267,22 @@ test('Motion continuation restores explicit Standard, audio, camera, crops and e
   f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);const media=f.w.rigPreparedMedia();assert.equal(media.quality,'standard');assert.equal(media.keepSound,false);assert.equal(media.steady,true);assert.equal(media.image.blob,blobs[0]);assert.equal(media.face,blobs[1]);assert.deepEqual([...media.angles],blobs.slice(2));assert.equal(f.videos.at(-1)[3],20);assert.equal(f.calls.filter(([p])=>p==='/api/generations').length,1);
  }finally{f.dom.window.close();}
 });
+
+test('status control visibly locks while one check runs, then disappears after completion without submitting a new generation',async()=>{
+ const saved=new Map([['rig-generation-job','job-recast']]),f=fixture({storage:saved,jobState:'completed'});let release,checks=0;
+ try{
+  const original=f.w.rigRequest;f.w.rigRequest=(path,options)=>{if(path==='/api/generations/job-recast'){checks++;return new Promise(resolve=>release=()=>resolve(original(path,options)));}return original(path,options);};
+  assert.equal(f.el('checkGeneration').hidden,false);f.el('checkGeneration').click();await settle(()=>checks===1);
+  assert.equal(f.el('checkGeneration').disabled,true);assert.match(f.el('checkGeneration').textContent,/wordt gecontroleerd/);f.el('checkGeneration').click();assert.equal(checks,1);
+  release();await settle(()=>f.el('checkGeneration').hidden&&!f.w.rigGenerationBusy());assert.equal(f.el('checkGeneration').disabled,false);assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+
+test('angle chooser requires a close-up and removing it preserves angles while blocking preparation until it is restored',async()=>{
+ const f=fixture();try{
+  f.load();assert.equal(f.el('anglesInput').disabled,true);assert.match(f.el('anglesChooseLabel').textContent,/eerst een close-up/);
+  f.file('faceInput','face.jpg','image/jpeg');await settle(()=>!f.el('faceReference').hidden);assert.equal(f.el('anglesInput').disabled,false);
+  f.file('anglesInput','angle.jpg','image/jpeg');await settle(()=>!f.el('angleReference0').hidden);f.el('removeFace').click();assert.equal(f.el('angleReference0').hidden,false);assert.equal(f.el('anglesInput').disabled,true);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('tryShortVideo').disabled,true);
+  f.file('faceInput','new-face.jpg','image/jpeg');await settle(()=>!f.el('faceReference').hidden);assert.equal(f.el('angleReference0').hidden,false);assert.equal(f.el('prepare').disabled,false);
+ }finally{f.dom.window.close();}
+});

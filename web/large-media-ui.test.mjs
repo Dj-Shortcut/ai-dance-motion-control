@@ -9,6 +9,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 function fixture(){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),created=[],revoked=[],images=[],paints=[];
  w.Blob=Blob;w.File=File;w.rigVideoEnabled=true;w.rigSessionActive=()=>true;w.rigVideoQualities=['standard','pro','edit-standard'];
+ w.MediaRecorder=class{static isTypeSupported(){return true;}};w.HTMLCanvasElement.prototype.captureStream=()=>{};w.HTMLMediaElement.prototype.captureStream=()=>{};
  w.URL.createObjectURL=blob=>{const url='blob:local-'+created.length;created.push({blob,url});return url;};w.URL.revokeObjectURL=url=>revoked.push(url);
  let automatic=true;
  w.Image=class{

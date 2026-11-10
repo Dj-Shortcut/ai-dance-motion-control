@@ -18,7 +18,12 @@ export async function collectProduction(env,{network=fetch,videoFactory=createPr
  if(!Number.isInteger(limit)||limit<1||limit>4)throw Error('Invalid collection limit');
  const context=await createProductionGenerationContext(env);if(!context)return stats;
  const mapped=context.env,now=clock();if(!Number.isSafeInteger(now)||now<1)throw Error('Invalid collection time');
- const jobs=await mapped.DB.prepare("SELECT j.id,j.user_id FROM rig_generation_jobs j LEFT JOIN rig_collector_attempts a ON a.job_id=j.id WHERE j.state='queued' AND j.fal_request_id IS NOT NULL ORDER BY COALESCE(a.last_attempt_at,0),j.created_at,j.id LIMIT ?").bind(limit).all();
+ // Accepted workflows keep provider IDs per step. Keep collecting those exact
+ // known requests even after dispatch flags are disabled; never advance a new
+ // paid step here. A deployment without the optional migration stays valid.
+ const workflowTables=await mapped.DB.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name IN ('rig_generation_workflows','rig_generation_workflow_steps')").first();
+ const knownProvider=workflowTables?.n===2?"(j.fal_request_id IS NOT NULL OR EXISTS(SELECT 1 FROM rig_generation_workflow_steps s WHERE s.job_id=j.id AND s.state='queued' AND s.fal_request_id IS NOT NULL))":"j.fal_request_id IS NOT NULL";
+ const jobs=await mapped.DB.prepare("SELECT j.id,j.user_id FROM rig_generation_jobs j LEFT JOIN rig_collector_attempts a ON a.job_id=j.id WHERE j.state='queued' AND "+knownProvider+" ORDER BY COALESCE(a.last_attempt_at,0),j.created_at,j.id LIMIT ?").bind(limit).all();
  for(const job of jobs.results??[]){
   if(!ID.test(job.id||'')||!USER.test(job.user_id||'')){stats.needsReview++;continue}
   let response;
@@ -29,7 +34,7 @@ export async function collectProduction(env,{network=fetch,videoFactory=createPr
    response=await handler(new Request(mapped.RIG_PUBLIC_ORIGIN+'/api/generations/'+job.id));
    if(!response?.ok)throw Error('Collection unavailable');
    const status=await statusJSON(response);
-   if(status?.id!==job.id||!['queued','processing','completed','failed','unknown','needs_review'].includes(status.state))throw Error('Invalid owned status');
+   if(status?.id!==job.id||!['queued','processing','completed','failed','unknown','needs_review','awaiting_client_processing','ready_to_advance'].includes(status.state))throw Error('Invalid owned status');
    stats.videosChecked++;
    if(['failed','unknown','needs_review'].includes(status.state))stats.needsReview++;
   }catch{stats.unavailable++}finally{try{await response?.body?.cancel()}catch{}}

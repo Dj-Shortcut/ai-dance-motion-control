@@ -327,8 +327,7 @@ test('text cleanup is bound before the price and sent in the same single motion 
   assert.match(stored.prompt,/Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays/);
   assert.match(stored.prompt,/preserving the subject, movement, camera and audio/);
   if(edit){assert.match(stored.prompt,/@Video1/);assert.match(stored.prompt,/@Element1/);assert.doesNotMatch(stored.prompt,/@Image1/);assert.ok(stored.prompt.endsWith(userPrompt));}
-  else if(variant.steadyCamera)assert.match(stored.prompt,/tripod camera remains stationary/);
-  else assert.ok(stored.prompt.endsWith(userPrompt));
+  else {if(variant.steadyCamera)assert.match(stored.prompt,/tripod camera remains stationary/);assert.ok(stored.prompt.endsWith(userPrompt),'the complete user description must reach Fal, also with camera and identity guidance');}
   if(variant.identity)assert.match(stored.prompt,/@Element1/);
   assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
   assert.equal((await submit(f,edit?temporaryConfirmation:undefined)).status,202);

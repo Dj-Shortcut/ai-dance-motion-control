@@ -7,6 +7,14 @@ let motionFile = null, motionLoadingFile = null;
 let busy = false;
 let prepared = null;
 let cropTarget = null;
+let cleanupReview=null,cleanupEpoch=0,cleanupWork=false,returnBriefFromCrop=false;
+let cleanupModulePromise=null;
+const cleanupBinding=()=>({request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage});
+const loadCleanup=()=>cleanupModulePromise??=(typeof window.rigLoadCleanupModule==='function'?window.rigLoadCleanupModule():import('/multiuser/cleanup-client.js')).catch(error=>{cleanupModulePromise=null;throw error;});
+function cleanupAvailable(){const c=window.rigVideoCleanup;return recasting()&&window.rigVideoFunding==='owner-provider'&&window.rigVideoMode==='live'&&c?.enabled===true&&c.version==='owner-cleanup-v1'&&c.quality==='human-recast'&&c.maxDurationSeconds===15&&['VideoEncoder','VideoDecoder','AudioEncoder','AudioDecoder','Worker'].every(k=>typeof window[k]==='function')&&typeof window.crypto?.subtle?.digest==='function';}
+function disposeCleanup(){cleanupEpoch++;cleanupReview?.client?.dispose();cleanupReview?.editor?.dispose();if(cleanupReview?.canvas)cleanupReview.canvas.width=cleanupReview.canvas.height=1;cleanupReview=null;for(const name of ['cleanupSource','cleanupMask'])if(urls[name]){URL.revokeObjectURL(urls[name]);delete urls[name];}for(const name of ['cleanupSourcePreview','cleanupMaskPreview']){const v=$(name);v?.pause();v?.removeAttribute('src');}if($('cleanupReview'))$('cleanupReview').hidden=true;if($('cleanupMaskFigure'))$('cleanupMaskFigure').hidden=true;}
+window.rigCleanupDispose=()=>{disposeCleanup();if(prepared?.cleanup){prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared;}document.dispatchEvent(new Event('rig-prepared-change'));}$('cleanupEnabled').checked=false;};
+
 const modeStorageKey='rig-video-mode:v1';
 function savedMode(){try{const value=window.rigScopedStorage?.getItem(modeStorageKey);return value==='motion'||value==='edit'?value:null;}catch{return null;}}
 let videoMode=savedMode()??'motion',draftRevision=0;
@@ -15,7 +23,7 @@ const editUnavailableMessage='Videobewerking is nu niet beschikbaar. Kies zelf e
 const modeDurations={motion:null,edit:5,'human-recast':6};
 const modeSound={motion:true,edit:true,'human-recast':true};
 let selectedEditQuality=null;
-const defaultPrompts={motion:"Laat de persoon of het dier op mijn foto de bewegingen uit de video natuurlijk nadoen. Behoud het uiterlijk van mijn foto.",edit:"Vervang de hoofdpersoon in de video door de persoon of het dier op mijn foto. Behoud de bewegingen, de timing, de achtergrond en de camera van de video."};
+const defaultPrompts={motion:"Laat de persoon op mijn foto de bewegingen uit de video natuurlijk nadoen. Behoud het uiterlijk van mijn foto.",edit:"Vervang de hoofdpersoon in de video door de persoon of het dier op mijn foto. Behoud de bewegingen, de timing, de achtergrond en de camera van de video."};
 const modePrompts={...defaultPrompts,'human-recast':'Vervang de persoon in de video door de persoon op mijn foto.'};
 const editing=()=>videoMode==='edit';
 const availableQualities=()=>Array.isArray(window.rigVideoQualities)?window.rigVideoQualities:['standard','pro'];
@@ -36,6 +44,7 @@ window.rigGenerationQuality=selectedQuality;
 let mainReferenceSelection=null;
 let mainReferenceBlob=null, faceReferenceBlob=null, angleReferenceBlobs=[], referenceRevision=0;const referenceWork={capture:null,face:null,angles:null},thumbBlobs={};
 const referencesBusy=()=>Object.values(referenceWork).some(Boolean);
+const missingAngleCloseup=()=>!recasting()&&angleReferenceBlobs.length>0&&!faceReferenceBlob;
 function referenceThumb(id,blob){const angle=id.startsWith('angle'),item=$(angle?'angleReference'+id.slice(5):id+'Reference'),img=$(angle?'angleThumb'+id.slice(5):id+'Thumb');item.hidden=!blob;if(thumbBlobs[id]===blob)return;thumbBlobs[id]=blob;if(blob)img.src=setURL('ref-'+id,blob);else {if(typeof img.removeAttribute==='function')img.removeAttribute('src');else img.src='';if(urls['ref-'+id]){URL.revokeObjectURL(urls['ref-'+id]);delete urls['ref-'+id]}}}
 function renderReferences(){
  const recast=recasting(),limit=angleLimit();$('referencePanel').hidden=!personFile;$('moreOptions').hidden=$('referencePanel').hidden;
@@ -44,8 +53,9 @@ function renderReferences(){
  if(recast){$('faceReference').hidden=true;for(let i=0;i<3;i++)$('angleReference'+i).hidden=true;}
  $('captureFace').hidden=recast;$('captureAngle').hidden=recast;
  $('captureAngle').disabled=recast||busy||referencesBusy()||!imageSource||!faceReferenceBlob||angleReferenceBlobs.length>=limit;
+ $('anglesInput').disabled=recast||busy||referencesBusy()||!faceReferenceBlob||angleReferenceBlobs.length>=limit;$('anglesChooseLabel').setAttribute?.('aria-disabled',String($('anglesInput').disabled));$('anglesChooseLabel').textContent=faceReferenceBlob?'Kies hoeken':'Voeg eerst een close-up toe';$('anglesChooseLabel').style.opacity=$('anglesInput').disabled?'.55':'1';
  $('captureMain').disabled=busy||referencesBusy()||!imageSource;$('captureFace').disabled=recast||busy||referencesBusy()||!imageSource;
- $('referenceHint').textContent=recast?'Alleen je hoofdbeeld wordt gebruikt.':!personFile?.type.startsWith('video/')?'Voeg een close-up en andere hoeken toe.':!mainReferenceBlob?'Kies een beeld en zet het vast als hoofdbeeld.':!faceReferenceBlob?'Kies een close-up met de schuif.':angleReferenceBlobs.length>limit?`Kies maximaal ${limit} hoeken voor deze bewerking.`:angleReferenceBlobs.length<limit?`Kies maximaal ${limit} hoeken met de schuif.`:'Referenties klaar.';
+ $('referenceHint').textContent=recast?'Alleen je hoofdbeeld wordt gebruikt.':!personFile?.type.startsWith('video/')?'Voeg een close-up en andere hoeken toe.':!mainReferenceBlob?'Kies een beeld en zet het vast als hoofdbeeld.':!faceReferenceBlob?(angleReferenceBlobs.length?'Voeg opnieuw een close-up toe; je hoeken blijven bewaard.':'Kies een close-up met de schuif.'):angleReferenceBlobs.length>limit?`Kies maximaal ${limit} hoeken voor deze bewerking.`:angleReferenceBlobs.length<limit?`Kies maximaal ${limit} hoeken met de schuif.`:'Referenties klaar.';
 }
 function clearReferences(){referenceRevision++;for(const key of Object.keys(referenceWork))referenceWork[key]=null;mainReferenceBlob=null;mainReferenceSelection=null;faceReferenceBlob=null;angleReferenceBlobs=[];$('faceInput').value='';$('anglesInput').value='';renderReferences();$('referenceStatus').textContent=''}
 async function captureReference(kind){
@@ -106,9 +116,17 @@ function previewBlob(file){
 }
 function setURL(key,file){const blob=previewBlob(file),url=URL.createObjectURL(blob);if(urls[key]) URL.revokeObjectURL(urls[key]);urls[key]=url;return url}
 function showError(text){$('status').textContent=text}
-function invalidate(){draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton()}
+function invalidate(){cancelAutoCrop();disposeCleanup();draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton()}
 // Server capability controls the interface; the server enforces authorization.
-function refreshButton(){const enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality());const promptReady=$('editPrompt').value.trim().length>0;$('prepare').disabled=!enabled||busy||referencesBusy()||!imageSource||!motionFile;$('prepare').textContent=enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';$('confirmBrief').disabled=!enabled||busy||referencesBusy()||!promptReady;$('confirmBrief').textContent=prepared?'Verder':'Bekijk de prijs';const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=trialSeconds()-1e-7;$('tryShortVideo').disabled=!enabled||busy||referencesBusy()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=!motionFile||hasTrial;$('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();}
+function localPreparationCapability(){
+ if(typeof window.rigMedia?.preparationCapability!=='function')return {supported:true};
+ let result;try{result=window.rigMedia.preparationCapability({keepSound:recasting()||$('sound').checked});}catch{}
+ if(result?.supported===true)return result;
+ let message=typeof result?.message==='string'&&result.message.length<=400?result.message:'Deze browser kan deze video niet lokaal voorbereiden. Kies een andere browser die MP4-opname ondersteunt.';
+ if(result?.code==='source-audio')message+=recasting()?' Deze bewerking houdt het originele geluid verplicht aan.':' Je kunt ook zelf in Instellingen het geluid uitzetten.';
+ return {supported:false,message};
+}
+function refreshButton(){const capability=localPreparationCapability(),enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality()),ready=enabled&&capability.supported;let note=$('preparationBrowserNote');if(!note){note=document.createElement('small');note.id='preparationBrowserNote';note.setAttribute('role','status');$('videoAvailabilityNote').after(note);}note.hidden=capability.supported||window.rigSessionActive?.()!==true;note.textContent=capability.supported?'':capability.message;const promptReady=$('editPrompt').value.trim().length>0;$('prepare').disabled=!ready||busy||referencesBusy()||missingAngleCloseup()||!imageSource||!motionFile;$('prepare').textContent=enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';$('confirmBrief').disabled=!ready||busy||cleanupWork||referencesBusy()||missingAngleCloseup()||!promptReady;$('confirmBrief').textContent=cleanupReview?(cleanupReview.mask?'Gebruik masker en bekijk prijs':'Zoek tekst en toon masker'):cleanupAvailable()&&$('cleanupEnabled').checked?'Controleer tekst en overlays':prepared?'Verder':'Bekijk de prijs';$('cleanupOption').hidden=!cleanupAvailable();$('cleanupEnabled').disabled=busy||cleanupWork||!cleanupAvailable();$('briefCrop').disabled=busy||cleanupWork||!motionFile;const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=trialSeconds()-1e-7;$('tryShortVideo').disabled=!ready||busy||cleanupWork||!!cleanupReview||referencesBusy()||missingAngleCloseup()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=!motionFile||hasTrial;$('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();}
 function updateModeUi(){
  const edit=editing(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'In de video':'Op je foto';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
  $('videoModeHint').textContent=edit?(availableQualities().includes(selectedQuality())?(recasting()?'Vervang een persoon met één portret. Begin met een korte proef.':'Vervang een persoon of dier met je foto. Controleer het resultaat met een korte proef.'):editUnavailableMessage):'Werkt het best met een duidelijk zichtbaar lichaam.';
@@ -133,6 +151,7 @@ function setMode(next,{quality}={}){
  invalidate();updateModeUi();if(needsRecastFrame()){$('moreOptions').open=true;showError(recastFrameHint);}document.dispatchEvent(new Event('rig-generation-mode-change'));
 }
 function updateCapabilities(){
+ if((cleanupReview||prepared?.cleanup)&&!cleanupAvailable())invalidate();
  if(selectedEditQuality===null&&editAvailable()){selectedEditQuality=preferredEditQuality();if(recasting()){$('duration').value='6';$('editPrompt').value=modePrompts['human-recast'];}}
  for(const radio of document.querySelectorAll('input[name=quality]'))radio.disabled=!availableQualities().includes(radio.value);
  const selected=document.querySelector('input[name=quality]:checked');
@@ -169,9 +188,32 @@ $('faceInput').addEventListener('change',e=>importReferences('face',[...e.target
 $('anglesInput').addEventListener('change',e=>importReferences('angles',[...e.target.files]));
 function cropValues(){return {x:Number($('cropX').value),y:Number($('cropY').value),w:Number($('cropW').value),h:Number($('cropH').value)}}
 function cropSource(){return cropTarget==='person'?imageSource:$('motionVideo')}
-function previewCrop(){try{const canvas=$('cropPreview'),selection=$('cropSelection'),crop=window.rigMedia.bounds(cropValues());window.rigMedia.dimensions(cropSource(),crop,1280,1280);window.rigMedia.paint(canvas,cropSource(),fullCrop(),640,360);if(canvas.width>0&&canvas.height>0)$('cropStage').style.width=`min(100%, ${Math.floor(260*canvas.width/canvas.height)}px)`;Object.assign(selection.style,{left:`${crop.x}%`,top:`${crop.y}%`,width:`${crop.w}%`,height:`${crop.h}%`});$('cropError').textContent='';$('applyCrop').disabled=false}catch(e){$('cropError').textContent=e.message;$('applyCrop').disabled=true}}
-for(const [id,target] of [['personCropButton','person'],['motionCropButton','motion']])$(id).addEventListener('click',()=>{cropTarget=target;for(const k of ['x','y','w','h'])$('crop'+k.toUpperCase()).value=crops[target][k];$('cropTitle').textContent=target==='person'?'Jouw beeld uitsnijden':'Beweging uitsnijden';$('cropDialog').showModal();previewCrop()});
-for(const k of ['X','Y','W','H'])$('crop'+k).addEventListener('input',previewCrop);
+function previewCrop(){try{const canvas=$('cropPreview'),selection=$('cropSelection'),crop=window.rigMedia.bounds(cropValues());const size=window.rigMedia.dimensions(cropSource(),crop,1280,1280);if(size.width<340||size.height<340)throw Error('Kies een uitsnede van minstens 340 × 340 pixels.');if(cropTarget==='person'&&(size.width/size.height<.4||size.width/size.height>2.5))throw Error('Kies een uitsnede met passende verhoudingen.');if(cropTarget==='motion'&&editing()&&typeof window.rigMedia.videoDimensions==='function')window.rigMedia.videoDimensions(cropSource(),crop,{minSide:720});window.rigMedia.paint(canvas,cropSource(),fullCrop(),640,360);if(canvas.width>0&&canvas.height>0)$('cropStage').style.width=`min(100%, ${Math.floor(260*canvas.width/canvas.height)}px)`;Object.assign(selection.style,{left:`${crop.x}%`,top:`${crop.y}%`,width:`${crop.w}%`,height:`${crop.h}%`});$('cropError').textContent='';$('applyCrop').disabled=false}catch(e){$('cropError').textContent=e.message;$('applyCrop').disabled=true}}
+// Screen-recording analysis uses a separate local video decoder. It only
+// proposes the frame in this popout; the normal Apply action commits it.
+let autoCropOperation=null;
+function cancelAutoCrop(){if(autoCropOperation)autoCropOperation.abort.abort();autoCropOperation=null;$('autoCrop').disabled=false;}
+async function suggestMotionCrop(){
+ if(cropTarget!=='motion'||!motionFile||!$('cropDialog').open||busy)return;
+ cancelAutoCrop();const operation={abort:new AbortController(),file:motionFile,revision:draftRevision,fields:JSON.stringify(cropValues()),request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage};autoCropOperation=operation;
+ const current=()=>autoCropOperation===operation&&!operation.abort.signal.aborted&&cropTarget==='motion'&&$('cropDialog').open&&motionFile===operation.file&&draftRevision===operation.revision&&JSON.stringify(cropValues())===operation.fields&&window.rigRequest===operation.request&&window.rigSessionActive===operation.active&&window.rigScopedStorage===operation.storage&&operation.active?.()===true;
+ $('autoCrop').disabled=true;$('autoCropStatus').hidden=false;$('autoCropStatus').textContent='Videovlak zoeken…';
+ try{
+  const suggest=window.rigSuggestScreenCrop??(await import('/multiuser/screen-recording-crop.mjs')).suggestScreenRecordingCrop;
+  if(!current())return;
+  const result=await suggest(operation.file,{signal:operation.abort.signal});if(!current())return;
+  if(!result?.proposal||result.confidence<.9){$('autoCropStatus').textContent='Geen duidelijk videovlak gevonden. Sleep het kader zelf.';return;}
+  const crop=window.rigMedia.bounds(result.proposal);window.rigMedia.dimensions(cropSource(),crop,1280,1280);
+  setCropFields(crop);$('autoCropStatus').textContent='Uitsnede voorgesteld. Controleer het kader en bewaar.';
+ }catch(error){if(current())$('autoCropStatus').textContent=error?.code==='canceled'?'Zoeken gestopt.': 'Geen voorstel beschikbaar. Je kunt de hoeken zelf slepen.';}
+ finally{if(autoCropOperation===operation){autoCropOperation=null;$('autoCrop').disabled=false;}}
+}
+for(const [id,target] of [['personCropButton','person'],['motionCropButton','motion']])$(id).addEventListener('click',()=>{cancelAutoCrop();cropTarget=target;for(const k of ['x','y','w','h'])$('crop'+k.toUpperCase()).value=crops[target][k];$('cropTitle').textContent=target==='person'?'Jouw beeld uitsnijden':'Bronvideo bijsnijden';$('autoCrop').hidden=target!=='motion';$('autoCropStatus').hidden=true;$('cropDialog').showModal();previewCrop();if(target==='motion'&&!motionHasCrop())suggestMotionCrop();});
+$('autoCrop').addEventListener('click',suggestMotionCrop);
+$('cropDialog').addEventListener('close',cancelAutoCrop);
+$('cropDialog').addEventListener('cancel',cancelAutoCrop);
+window.addEventListener('pagehide',cancelAutoCrop);
+for(const k of ['X','Y','W','H'])$('crop'+k).addEventListener('input',()=>{cancelAutoCrop();$('autoCropStatus').hidden=true;previewCrop();});
 // Crop coordinates are percentages of the visible full source, not the viewport.
 // Pointer capture keeps mouse/touch drags stable outside the selection.
 function adjustedCrop(initial,handle,dx,dy){
@@ -190,11 +232,11 @@ function adjustedCrop(initial,handle,dx,dy){
 }
 function setCropFields(crop){for(const k of ['x','y','w','h'])$('crop'+k.toUpperCase()).value=crop[k];previewCrop()}
 let cropDrag=null;
-$('cropStage').addEventListener('pointerdown',e=>{const handle=e.target.closest('[data-crop-handle]')?.dataset.cropHandle;if(!['move','nw','ne','sw','se'].includes(handle))return;const rect=$('cropStage').getBoundingClientRect();if(!rect.width||!rect.height)return;cropDrag={handle,initial:cropValues(),x:e.clientX,y:e.clientY,width:rect.width,height:rect.height,pointerId:e.pointerId};$('cropStage').setPointerCapture(e.pointerId);e.preventDefault()});
+$('cropStage').addEventListener('pointerdown',e=>{const handle=e.target.closest('[data-crop-handle]')?.dataset.cropHandle;if(!['move','nw','ne','sw','se'].includes(handle))return;cancelAutoCrop();$('autoCropStatus').hidden=true;const rect=$('cropStage').getBoundingClientRect();if(!rect.width||!rect.height)return;cropDrag={handle,initial:cropValues(),x:e.clientX,y:e.clientY,width:rect.width,height:rect.height,pointerId:e.pointerId};$('cropStage').setPointerCapture(e.pointerId);e.preventDefault()});
 $('cropStage').addEventListener('pointermove',e=>{if(!cropDrag||cropDrag.pointerId!==e.pointerId)return;setCropFields(adjustedCrop(cropDrag.initial,cropDrag.handle,(e.clientX-cropDrag.x)*100/cropDrag.width,(e.clientY-cropDrag.y)*100/cropDrag.height));e.preventDefault()});
 for(const type of ['pointerup','pointercancel','lostpointercapture'])$('cropStage').addEventListener(type,e=>{if(cropDrag?.pointerId===e.pointerId)cropDrag=null});
-$('cropStage').addEventListener('keydown',e=>{const handle=e.target.closest('[data-crop-handle]')?.dataset.cropHandle;if(!['nw','ne','sw','se'].includes(handle))return;const step=e.shiftKey?5:1,delta={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[e.key];if(!delta)return;setCropFields(adjustedCrop(cropValues(),handle,...delta));e.preventDefault()});
-$('resetCrop').addEventListener('click',()=>{for(const [k,v] of Object.entries(fullCrop()))$('crop'+k.toUpperCase()).value=v;previewCrop()});
+$('cropStage').addEventListener('keydown',e=>{const handle=e.target.closest('[data-crop-handle]')?.dataset.cropHandle;if(!['nw','ne','sw','se'].includes(handle))return;const step=e.shiftKey?5:1,delta={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[e.key];if(!delta)return;cancelAutoCrop();$('autoCropStatus').hidden=true;setCropFields(adjustedCrop(cropValues(),handle,...delta));e.preventDefault()});
+$('resetCrop').addEventListener('click',()=>{cancelAutoCrop();$('autoCropStatus').hidden=true;for(const [k,v] of Object.entries(fullCrop()))$('crop'+k.toUpperCase()).value=v;previewCrop()});
 function motionHasCrop(){const c=crops.motion;return c.x!==0||c.y!==0||c.w!==100||c.h!==100}
 let motionAnimation=0;
 function updateMotionPreview(){const v=$('motionVideo'),active=!!motionFile&&motionHasCrop();$('motionCropped').hidden=!active;$('motionCropControls').hidden=!active;v.hidden=active||!motionFile;if(active&&v.readyState>=2){try{window.rigMedia.paint($('motionCropped'),v,crops.motion,1280,1280)}catch{}}$('motionSeek').value=Number.isFinite(v.currentTime)?v.currentTime:0;$('motionTime').textContent=`${(v.currentTime||0).toFixed(1)} s`;$('motionPlay').textContent=v.paused?'▶ Afspelen':'❚❚ Pauzeren'}
@@ -204,7 +246,7 @@ $('motionSeek').addEventListener('input',e=>{$('motionVideo').currentTime=Number
 for(const event of ['seeked','pause','loadeddata'])$('motionVideo').addEventListener(event,updateMotionPreview);
 $('motionVideo').addEventListener('timeupdate',updateMotionPreview);
 $('motionVideo').addEventListener('play',()=>{updateMotionPreview();animateMotionPreview()});
-$('applyCrop').addEventListener('click',()=>{try{window.rigMedia.bounds(cropValues());crops[cropTarget]=cropValues();$('cropDialog').close();invalidate();if(cropTarget==='person'&&imageSource)drawImage(imageSource);else if(cropTarget==='motion')updateMotionPreview();showError(cropTarget==='person'&&mainReferenceBlob?'Uitsnede gekozen. Zet het hoofdbeeld opnieuw vast als je deze uitsnede wilt gebruiken.':'Uitsnede gekozen. Bereid de beelden opnieuw voor.')}catch(e){$('cropError').textContent=e.message}});
+$('applyCrop').addEventListener('click',()=>{cancelAutoCrop();try{window.rigMedia.bounds(cropValues());crops[cropTarget]=cropValues();$('cropDialog').close();invalidate();if(cropTarget==='person'&&imageSource)drawImage(imageSource);else if(cropTarget==='motion')updateMotionPreview();showError(cropTarget==='person'&&mainReferenceBlob?'Uitsnede gekozen. Zet het hoofdbeeld opnieuw vast als je deze uitsnede wilt gebruiken.':'Uitsnede gekozen. Bereid de beelden opnieuw voor.')}catch(e){$('cropError').textContent=e.message}});
 function clearBriefFeedback(){
  $('briefError').textContent='';$('briefError').hidden=true;$('correctBriefDuration').hidden=true;
 }
@@ -213,10 +255,36 @@ function availableBriefDuration(){
  const start=Number($('start').value),sourceDuration=$('motionVideo').duration;
  return Number.isFinite(start)&&start>=0&&Number.isFinite(sourceDuration)?Math.min(durationLimit(),Math.floor(sourceDuration-start+1e-7)):0;
 }
+function cleanupProgress(progress){const stage=progress.stage,done=progress.completedFrames,total=progress.totalFrames;const text=stage==='detect-text'?'Tekst zoeken op dit apparaat':stage==='encode-mask'?'Masker maken':stage==='prepare-cfr-source'?'Fragment precies voorbereiden':stage==='private-source'?'Privéfragment controleren':'Fragment controleren';$('cleanupStatus').textContent=text+(Number.isFinite(progress.fraction)?`… ${Math.round(progress.fraction*100)}%`:Number.isFinite(done)&&total?`… ${done}/${total}`:'…');}
+async function beginCleanupReview(base,revision,start){
+ const epoch=cleanupEpoch,sourceToken=crypto.randomUUID(),portraitToken=crypto.randomUUID();
+ const readSelection=()=>({revision:draftRevision,sourceToken,portraitToken,startSeconds:Number($('start').value),selectedSeconds:base.selectedSeconds,crop:{...crops.motion},quality:selectedQuality(),keepSound:$('sound').checked,prompt:$('editPrompt').value.trim()});
+ const current=()=>epoch===cleanupEpoch&&revision===draftRevision&&window.rigSessionActive?.()===true&&cleanupAvailable()&&$('cleanupEnabled').checked;
+ let client,editor;
+ try{
+  const module=await loadCleanup();if(!current())throw Error('Je selectie of aanmelding is gewijzigd.');
+  client=module.createCleanupClient({getBinding:cleanupBinding,readSelection,onProgress:cleanupProgress});cleanupReview={client,editor:null,base,mask:null,current};$('closeBrief').disabled=false;$('cleanupReview').hidden=false;$('cleanupStatus').textContent='Fragment precies voorbereiden…';
+  const owned=await client.prepareSource({workingBlob:base.video.blob,selectedSeconds:base.selectedSeconds});if(!current())throw Error('Je selectie of aanmelding is gewijzigd.');
+  const canvas=await client.sourceFrame();if(!current()){canvas.width=canvas.height=1;throw Error('Je selectie of aanmelding is gewijzigd.');}
+  const review=cleanupReview;review.owned=owned;review.canvas=canvas;review.base={...base,video:{...base.video,blob:owned.blob}};$('cleanupSourcePreview').src=setURL('cleanupSource',owned.blob);$('cleanupMaskFigure').hidden=true;
+  editor=client.mountEditor({container:$('cleanupEditor'),sourceCanvas:canvas,sourceKey:owned.manifest.id,isBusy:()=>cleanupWork,onChange:()=>{if(cleanupReview!==review)return;review.mask=null;client.invalidateMask();prepared=null;$('previewPrepared').hidden=true;$('cleanupMaskFigure').hidden=true;if(urls.cleanupMask){URL.revokeObjectURL(urls.cleanupMask);delete urls.cleanupMask;}$('cleanupMaskPreview').removeAttribute('src');document.dispatchEvent(new Event('rig-prepared-change'));refreshButton();}});review.editor=editor;
+  $('cleanupStatus').textContent='Bekijk het fragment. Markeer zo nodig extra tekst of iconen en laat daarna het masker maken.';briefFeedback('Er is nog geen video gestart en er is nog geen Fal-tegoed gebruikt.');
+ }catch(error){client?.dispose();editor?.dispose();if(current()){disposeCleanup();throw error;}}
+}
+async function advanceCleanupReview(){
+ const review=cleanupReview;if(!review||cleanupWork||busy)return;cleanupWork=true;refreshButton();
+ try{
+  if(!review.current())throw Error('Je selectie is gewijzigd. Bereid opnieuw voor.');
+  if(!review.mask){const mask=await review.client.prepareMask({readOptions:()=>review.editor.getConfig()});if(cleanupReview!==review||!review.current())return;review.mask=mask;$('cleanupMaskPreview').src=setURL('cleanupMask',mask.blob);$('cleanupMaskFigure').hidden=false;$('cleanupStatus').textContent='Speel het masker af. Alleen witte vakken worden bijgewerkt. Controleer ook gezichten en bewegingen.';briefFeedback('Klopt het masker? Gebruik het dan om de totale prijs te bekijken.');}
+  else{const cleanup=await review.client.acceptMask();if(cleanupReview!==review||!review.current())return;prepared={...review.base,cleanup};setURL('prepared',prepared.video.blob);$('previewPrepared').hidden=false;clearBriefFeedback();$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));}
+ }catch(error){if(cleanupReview===review)briefFeedback(error.message||'Het masker kon niet worden voorbereid.');}
+ finally{cleanupWork=false;refreshButton();}
+}
 async function prepareWithPrompt({trial=false}={}){
  if(window.rigVideoEnabled!==true||window.rigSessionActive?.()!==true||busy||referencesBusy()||!imageSource||!motionFile)return;
  clearBriefFeedback();
- const edit=editing(),quality=selectedQuality(),prompt=$('editPrompt').value.trim(),start=Number($('start').value),duration=trial?trialSeconds():Number($('duration').value),limit=edit?15:30,max=availableBriefDuration();
+ const capability=localPreparationCapability();if(!capability.supported){refreshButton();briefFeedback(capability.message);return;}
+ const edit=editing(),quality=selectedQuality(),prompt=$('editPrompt').value.trim(),start=Number($('start').value),duration=cleanupReview?cleanupReview.base.selectedSeconds:trial?trialSeconds():Number($('duration').value),limit=edit?15:30,max=availableBriefDuration();
  if(!availableQualities().includes(quality)){briefFeedback('Deze videobewerking is momenteel niet beschikbaar.');return;}
  if(recasting()&&!$('sound').checked){briefFeedback('Deze bewerking behoudt het originele geluid. Kies de bewerking opnieuw.');return;}
  if(!prompt){briefFeedback(edit?'Beschrijf wat je in de video wilt veranderen.':'Beschrijf wat je wilt maken.');$('editPrompt').reportValidity?.();$('editPrompt').focus();return;}
@@ -230,7 +298,9 @@ async function prepareWithPrompt({trial=false}={}){
  if(editing()&&!recasting()&&angleReferenceBlobs.length>angleLimit()){briefFeedback('Kies maximaal twee extra hoeken voor deze videobewerking.');return;}
  if(!recasting()&&personFile?.type.startsWith('video/')&&(faceReferenceBlob||angleReferenceBlobs.length)&&!mainReferenceBlob){briefFeedback('Zet eerst je hoofdbeeld vast.');return;}
  modePrompts[modeKey()]=$('editPrompt').value;
- if(prepared&&prepared.prompt===prompt&&prepared.quality===quality&&prepared.selectedSeconds===duration&&Boolean(prepared.trialToken)===trial){$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));return;}
+ if(cleanupReview){await advanceCleanupReview();return;}
+ const useCleanup=cleanupAvailable()&&$('cleanupEnabled').checked;
+ if(prepared&&prepared.prompt===prompt&&prepared.quality===quality&&prepared.selectedSeconds===duration&&Boolean(prepared.trialToken)===trial&&Boolean(prepared.cleanup)===useCleanup){$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));return;}
  const trialToken=trial?startTrialContinuation():null;
  busy=true;$('briefDialog').setAttribute('aria-busy','true');const disabledBefore=new Map();for(const el of document.querySelectorAll('button,input,textarea')){disabledBefore.set(el,el.disabled);el.disabled=true;}
  refreshButton();invalidate();const revision=draftRevision;let complete=false;
@@ -241,7 +311,8 @@ async function prepareWithPrompt({trial=false}={}){
   const video=edit?await window.rigMedia.prepareVideo($('motionVideo'),crops.motion,start,duration,$('sound').checked,progress,{minSide:720,maxDuration:15}):await window.rigMedia.prepareVideo($('motionVideo'),crops.motion,start,duration,$('sound').checked,progress);
   if(revision!==draftRevision||editing()!==edit||window.rigSessionActive?.()!==true)throw Error('Je instellingen zijn gewijzigd. Bereid je beelden opnieuw voor.');
   prepared={image,video,selectedSeconds:duration,...(trialToken?{trialToken}:{}),face:recasting()?null:faceReferenceBlob,angles:recasting()?[]:[...angleReferenceBlobs],quality,keepSound:$('sound').checked,steady:edit?false:$('steady').checked,prompt};
-  setURL('prepared',video.blob);$('previewPrepared').hidden=false;showError('Beelden lokaal voorbereid.');complete=true;
+  if(useCleanup){const base=prepared;prepared=null;await beginCleanupReview(base,revision,start);}
+  else{setURL('prepared',video.blob);$('previewPrepared').hidden=false;showError('Beelden lokaal voorbereid.');complete=true;}
  }catch(e){briefFeedback(e.message||'Voorbereiden is mislukt.');}
  finally{for(const [el,wasDisabled] of disabledBefore)el.disabled=wasDisabled;busy=false;$('briefDialog').setAttribute('aria-busy','false');updateCapabilities();}
  if(complete){clearBriefFeedback();$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));}
@@ -263,8 +334,13 @@ $('tryShortVideo').addEventListener('click',()=>{
  prepareWithPrompt({trial:true});
 });
 
-$('closeBrief').addEventListener('click',()=>{if(!busy)$('briefDialog').close();});
-$('briefDialog').addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+$('closeBrief').addEventListener('click',()=>{if(!busy||cleanupReview){disposeCleanup();$('briefDialog').close();refreshButton();}});
+$('briefDialog').addEventListener('cancel',event=>{if(busy&&!cleanupReview)event.preventDefault();else{disposeCleanup();refreshButton();}});
+$('cleanupEnabled').addEventListener('change',()=>{if(busy||cleanupWork)return;invalidate();clearBriefFeedback();});
+$('briefCrop').addEventListener('click',()=>{if(busy||cleanupWork||!motionFile)return;returnBriefFromCrop=true;$('briefDialog').close();$('motionCropButton').click();});
+$('cropDialog').addEventListener('close',()=>{if(returnBriefFromCrop){returnBriefFromCrop=false;if(window.rigSessionActive?.()===true){$('briefDialog').showModal();refreshButton();}}});
+window.addEventListener('pagehide',disposeCleanup);
+
 // Trial continuation metadata is account-scoped and bounded. Source files,
 // image bytes and private URLs stay in memory and are never persisted here.
 const trialStorageKey='rig-trial-continuation:v1';
@@ -275,7 +351,7 @@ const copyMainSelection=value=>value?{time:value.time,crop:{...value.crop}}:null
 const continuationIds=['makeFullVideo','makeFullFromResult'];
 const draftFile=file=>file?{name:file.name,type:file.type,size:file.size,lastModified:file.lastModified}:null;
 const sameFile=(file,meta)=>!!file&&!!meta&&file.name===meta.name&&file.type===meta.type&&file.size===meta.size&&file.lastModified===meta.lastModified;
-function continuationSnapshot(){return {personFile,motionFile,person:draftFile(personFile),motion:draftFile(motionFile),mode:videoMode,editQuality:selectedEditQuality,quality:selectedQuality(),start:Number($('start').value),seconds:Number($('duration').value),prompt:$('editPrompt').value,sound:$('sound').checked,steady:$('steady').checked,frameTime:Number($('frameTime').value),crops:{person:{...crops.person},motion:{...crops.motion}},mainReferenceBlob,mainSelection:mainReferenceSelection?copyMainSelection(mainReferenceSelection):null,faceReferenceBlob,angleReferenceBlobs:[...angleReferenceBlobs],faceRequired:!!faceReferenceBlob,angleCount:angleReferenceBlobs.length};}
+function continuationSnapshot(){return {personFile,motionFile,person:draftFile(personFile),motion:draftFile(motionFile),mode:videoMode,editQuality:selectedEditQuality,quality:selectedQuality(),start:Number($('start').value),seconds:Number($('duration').value),prompt:$('editPrompt').value,sound:$('sound').checked,steady:$('steady').checked,cleanup:$('cleanupEnabled').checked,frameTime:Number($('frameTime').value),crops:{person:{...crops.person},motion:{...crops.motion}},mainReferenceBlob,mainSelection:mainReferenceSelection?copyMainSelection(mainReferenceSelection):null,faceReferenceBlob,angleReferenceBlobs:[...angleReferenceBlobs],faceRequired:!!faceReferenceBlob,angleCount:angleReferenceBlobs.length};}
 function persistTrialContinuation(){
  try{if(!trialContinuation?.quoteId){window.rigScopedStorage?.removeItem(trialStorageKey);return;}const {personFile,motionFile,mainReferenceBlob,faceReferenceBlob,angleReferenceBlobs,...draft}=trialContinuation.draft;window.rigScopedStorage?.setItem(trialStorageKey,JSON.stringify({version:1,token:trialContinuation.token,createdAt:trialContinuation.createdAt,state:trialContinuation.state,quoteId:trialContinuation.quoteId,jobId:trialContinuation.jobId??null,draft}));}catch{}
 }
@@ -317,7 +393,7 @@ async function restoreFullDraft(d){
   }else if(!main&&d.mainSelection){const snapshot=await window.rigMedia.prepareImage(imageSource,d.mainSelection.crop);assertCurrent();main=snapshot.blob;}
   videoMode=d.mode;selectedEditQuality=d.mode==='edit'?d.quality:d.editQuality;
   if(d.mode==='motion')for(const radio of document.querySelectorAll('input[name=quality]'))radio.checked=radio.value===d.quality;
-  crops.person={...d.crops.person};crops.motion={...d.crops.motion};$('editPrompt').value=d.prompt;modePrompts[modeKey()]=d.prompt;modeDurations[modeKey()]=d.seconds;modeSound[modeKey()]=d.sound;$('sound').checked=d.sound;$('steady').checked=d.steady;
+  crops.person={...d.crops.person};crops.motion={...d.crops.motion};$('editPrompt').value=d.prompt;modePrompts[modeKey()]=d.prompt;modeDurations[modeKey()]=d.seconds;modeSound[modeKey()]=d.sound;$('sound').checked=d.sound;$('steady').checked=d.steady;$('cleanupEnabled').checked=d.cleanup===true;
   $('duration').max=String(Math.min(durationLimit(),Math.floor($('motionVideo').duration)));$('duration').value=String(d.seconds);$('duration').setCustomValidity('');$('start').value=String(d.start);updateStartMax();$('motionVideo').currentTime=d.start;
   mainReferenceBlob=main;mainReferenceSelection=d.mainSelection?copyMainSelection(d.mainSelection):null;
   if(originalPerson.type.startsWith('video/')){$('frameTime').value=String(d.frameTime);$('frameOutput').textContent=`${d.frameTime.toFixed(1)} s`;}
@@ -349,7 +425,7 @@ document.addEventListener('rig-prepared-ready',()=>{completionPopup=false;render
 $('resultInput').addEventListener('change',event=>{if(event.target.files[0]&&acceptsMedia(event.target.files[0],'video')){lastCompletedResult=null;completionPopup=false;renderContinuation();}});
 $('duration').addEventListener('change',()=>{if(legacyWaitingForDuration)legacyDurationReviewed=true;});
 window.rigTrialTokenForQuote=quoteId=>trialContinuation?.quoteId===quoteId?trialContinuation.token:null;
-window.rigTrialDispose=()=>{if(restoreOperation)restoreOperation.canceled=true;trialContinuation=null;lastCompletedResult=null;nonTrialJobs.clear();renderContinuation();};
+window.rigTrialDispose=()=>{cancelAutoCrop();if(restoreOperation)restoreOperation.canceled=true;trialContinuation=null;lastCompletedResult=null;nonTrialJobs.clear();renderContinuation();};
 window.rigMotionSelected=()=>Boolean(motionFile);
 document.addEventListener('rig-generation-intent',event=>{const info=event.detail;if(info?.trialToken&&trialContinuation?.token===info.trialToken){trialContinuation.quoteId=info.quoteId;trialContinuation.state='pending';persistTrialContinuation();}});
 document.addEventListener('rig-generation-accepted',event=>{const info=event.detail;if(info?.trialToken&&trialContinuation?.token===info.trialToken){trialContinuation.jobId=info.id;trialContinuation.state='accepted';persistTrialContinuation();}else if(!info?.trialToken){if(info?.fromCurrent)nonTrialJobs.add(info.id);trialContinuation=null;try{window.rigScopedStorage?.removeItem(trialStorageKey);}catch{}}lastCompletedResult=null;renderContinuation();});

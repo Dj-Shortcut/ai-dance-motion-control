@@ -76,3 +76,32 @@ test('collector rejects a successful response for another job and reports review
   assert.equal(stats.videosChecked,1);assert.equal(stats.needsReview,1);
  }finally{await f.mf.dispose()}
 });
+
+test('collector polls exact known workflow steps with dispatch disabled and never advances local processing',async()=>{
+ const f=await fixture();try{
+  const id=await f.job(USERS[0],1),row=await f.db.prepare('SELECT quote_id FROM rig_generation_jobs WHERE id=?').bind(id).first();
+  await f.db.prepare('UPDATE rig_generation_jobs SET fal_request_id=NULL WHERE id=?').bind(id).run();
+  await f.db.prepare("INSERT INTO rig_generation_workflows(job_id,quote_id,user_id,plan_version,base_step_id,plan_hash,plan_json,step_count,base_retail_cents,cleanup_retail_cents,provider_estimate_usd_micros,created_at) VALUES(?,?,?,'rig-workflow-v2','base',?,'{}',2,100,0,2200000,1)").bind(id,row.quote_id,USERS[0],'a'.repeat(64)).run();
+  await f.db.prepare("INSERT INTO rig_generation_workflow_steps(job_id,step_id,step_index,step_json,state,dispatch_token,fal_request_id) VALUES(?,'source-cleanup',0,'{}','queued',?,?)").bind(id,crypto.randomUUID(),'provider-cleanup').run();
+  f.env.RIG_OWNER_CLEANUP_VALIDATION_ENABLED='no';f.env.RIG_OWNER_RECAST_VALIDATION_ENABLED='no';
+  let reads=0;
+  const videoFactory=async(raw,{trustedUserId})=>async req=>{
+   reads++;assert.equal(trustedUserId,USERS[0]);assert.equal(req.method,'GET');assert.equal(req.body,null);assert.equal(new URL(req.url).pathname,'/api/generations/'+id);
+   await f.db.prepare("UPDATE rig_generation_workflow_steps SET state='completed',result_key='owned-result',output_sha256=?,output_metadata_json='{}' WHERE job_id=?").bind('b'.repeat(64),id).run();
+   return Response.json({id,state:'awaiting_client_processing',workflowVersion:'rig-workflow-v2'});
+  };
+  let result=await collectProduction(f.env,{network:f.network,videoFactory,clock:()=>1000000});
+  assert.deepEqual(result,{videosChecked:1,paymentsChecked:0,needsReview:0,unavailable:0});assert.equal(reads,1);assert.equal(f.external.length,0);
+  result=await collectProduction(f.env,{network:f.network,videoFactory,clock:()=>1060000});
+  assert.equal(result.videosChecked,0);assert.equal(reads,1,'a step waiting for the browser must never be advanced by scheduled reads');
+ }finally{await f.mf.dispose()}
+});
+
+test('legacy collector remains valid without optional workflow tables',async()=>{
+ const f=await fixture();try{
+  for(const table of ['rig_generation_workflow_client_processing','rig_generation_workflow_settlements','rig_generation_workflow_steps','rig_generation_workflows'])await f.db.prepare('DROP TABLE '+table).run();
+  await f.job(USERS[0],1);
+  const result=await collectProduction(f.env,{network:f.network,videoFactory:f.videoFactory,clock:()=>1000000});
+  assert.equal(result.videosChecked,1);assert.equal(result.unavailable,0);
+ }finally{await f.mf.dispose()}
+});

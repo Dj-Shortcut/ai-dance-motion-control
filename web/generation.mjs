@@ -10,7 +10,7 @@ const ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const REQ_ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const QUEUE = 'https://queue.fal.run';
 const SUBJECT_REJECTED='Deze foto is niet geschikt voor persoonsbeweging. Kies Video bewerken, of gebruik een foto met een duidelijk zichtbaar menselijk bovenlichaam.';
-const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at a fixed distance and focal length throughout. Keep the person centered and their complete body visible from the top of the head to both shoes, with generous space above the head, below the feet and on both sides for all dance movements. Maintain the initial wide framing throughout the entire clip, with a stable background and realistic proportions. ';
+const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at fixed distance and focal length. Keep the person centered, visible from head to both shoes, with generous space above, below and beside them for every dance movement. Maintain the initial framing, stable background and realistic proportions throughout. ';
 // Ask for clean output in the existing generation, without a separate paid
 // cleanup job. This does not modify source files or guarantee text removal.
 const TEXT_CLEANUP_PROMPT = 'Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays. Restore the scene beneath, preserving the subject, movement, camera and audio. ';
@@ -43,11 +43,9 @@ function generationPrompt(data){
  if(data.quality===RECAST_QUALITY)return data.prompt;
  if(data.quality==='edit-standard')return data.transferPolicy===TEMPORARY_FAL_LINKS?identityEditPrompt(data.prompt):editPrompt(data.prompt,Boolean(data.faceId));
  const prefix=(data.steadyCamera?CAMERA_PROMPT:'')+TEXT_CLEANUP_PROMPT+(data.faceId?'The replacement subject is @Element1. ':'');
- // Preserve the existing steady-camera user limit and keep the complete
- // provider prompt <=2500 UTF-16 units without splitting a surrogate pair.
- const selected=data.steadyCamera?Array.from(data.prompt).slice(0,1300).join(''):data.prompt;
- let userPrompt='';for(const character of selected){if(prefix.length+userPrompt.length+character.length>2500)break;userPrompt+=character;}
- return prefix+userPrompt;
+ // Every permitted1900-unit user description fits with the fixed prefixes,
+ // including identity and camera guidance. Never silently discard its ending.
+ return prefix+data.prompt;
 }
 function configured(s) {
   if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
