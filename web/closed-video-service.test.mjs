@@ -7,6 +7,14 @@ async function migrate(db,file){const sql=(await readFile(file,'utf8')).replace(
 const config={LOCAL_FIXTURE:'yes',RIG_MODE:'test',RIG_MOLLIE_MODE:'test',RIG_PUBLIC_ORIGIN:'https://rig.local',RIG_SITES_BRIDGE_ORIGIN:'https://gateway.example',RIG_CLOSED_VIDEO_ENABLED:'yes',RIG_MEDIA_SECRET:'x'.repeat(40),FAL_KEY:'local-fake-not-a-key',RIG_PRICE_STANDARD:'25',RIG_PRICE_PRO:'25',RIG_PRICE_VERSION:'fixture-1',RIG_CLOSED_VIDEO_MAX_CENTS:'300',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'500000'};
 const send=(mf,user,path,{method='GET',body,headers={}}={})=>mf.dispatchFetch('https://rig.local'+path,{method,headers:{'x-local-user':user,...(method==='POST'?{origin:'https://rig.local'}:{}),...headers},...(body?{body}:{})});
 const json=(mf,user,path,obj)=>send(mf,user,path,{method:'POST',body:JSON.stringify(obj),headers:{'content-type':'application/json'}});
+test('a Recast flag cannot enable legacy owners, sponsored testers, or a forged production capability',async()=>{
+ let reads=0;const price=async()=>{reads++;throw Error('must not query prices')};
+ for(const accessMode of ['owner','sponsored','paid']){
+  const guard=closedVideoTesting.guard({...config,RIG_OWNER_RECAST_VALIDATION_ENABLED:'yes',RIG_PRICE_RECAST:'30'},price,{trustedUserId:'alice',accessMode,productionContext:{env:{RIG_PRODUCTION_OWNER_USER_ID:'alice'}}});
+  await assert.rejects(guard.estimate('human-recast',6));await assert.rejects(guard.retailPrice('human-recast',6,1800000));
+ }
+ assert.equal(reads,0);
+});
 test('30-second owner media is prepared and priced without submitting a generation',async()=>{
  const dir=await mkdtemp(join(process.cwd(),'.closed-video-30-'));let mf;try{
   const videoPath=join(dir,'thirty.mp4');await promisify(execFile)('ffmpeg',['-hide_banner','-v','error','-f','lavfi','-i','color=c=blue:s=360x360:r=30:d=30','-an','-c:v','libx264','-threads','2','-movflags','+faststart','-y',videoPath]);

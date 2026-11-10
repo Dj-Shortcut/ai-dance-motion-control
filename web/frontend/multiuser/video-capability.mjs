@@ -1,7 +1,7 @@
 // UI convenience only: the private service independently enforces identity,
 // enabled state and spending limits for every video request.
 export async function enableVideoIfAvailable({binding,window,document,loadScript}) {
- const unavailable=()=>{const changed=window.rigVideoEnabled===true||window.rigVideoQualities?.includes('edit-standard');window.rigVideoEnabled=false;window.rigVideoQualities=[];if(changed&&binding.isActive())document.dispatchEvent(new window.Event('rig-video-availability'));return false;};
+ const unavailable=()=>{const changed=window.rigVideoEnabled===true||Array.isArray(window.rigVideoQualities)&&window.rigVideoQualities.some(q=>q==='edit-standard'||q==='human-recast');window.rigVideoEnabled=false;window.rigVideoQualities=[];if(changed&&binding.isActive())document.dispatchEvent(new window.Event('rig-video-availability'));return false;};
  const loadGenerationUi=async()=>{
   if(window.rigGenerationUiLoaded===true||window.rigVideoEnabled===true){window.rigGenerationUiLoaded=true;return;}
   if(!window.rigGenerationUiLoading)window.rigGenerationUiLoading=Promise.resolve().then(()=>loadScript('generation-ui.js'));
@@ -21,7 +21,8 @@ export async function enableVideoIfAvailable({binding,window,document,loadScript
   }
   if (!binding.isActive() || config?.enabled!==true) return unavailable();
   const qualities=config.qualities===undefined?['standard','pro']:config.qualities;
-  if(!Array.isArray(qualities)||!qualities.length||qualities.some(value=>!['standard','pro','edit-standard'].includes(value))||new Set(qualities).size!==qualities.length)return unavailable();
+  if(!Array.isArray(qualities)||!qualities.length||qualities.some(value=>!['standard','pro','edit-standard','human-recast'].includes(value))||new Set(qualities).size!==qualities.length)return unavailable();
+  if(qualities.includes('human-recast')&&config.funding!=='owner-provider')return unavailable();
   if(config.funding==='credits'&&(config.mode!=='live'||config.currency!=='EUR'))return unavailable();
   if(config.funding==='owner-provider'&&(config.mode!=='live'||config.providerCurrency!=='USD'))return unavailable();
   window.rigVideoFunding=['credits','sponsored','owner-provider'].includes(config.funding)?config.funding:'owner';

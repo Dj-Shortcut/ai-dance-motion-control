@@ -1,6 +1,7 @@
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {prepareOwnerMutation} from './owner-security.mjs';
 import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} from './profit-policy.mjs';
+import {RECAST_QUALITY} from './recast-contract.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -87,7 +88,7 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
    if(!quote||quote.id!==quoteId||quote.userId!==userId||!['credits','owner-provider'].includes(quote.fundingKind))throw Error('Invalid funding quote');
    if(quote.fundingKind==='owner-provider'){
     const payload=verificationPayload??{quoteId,idempotencyKey};
-    const temporary=quote.input?.data?.quality==='edit-standard'&&quote.input.data.transferPolicy==='fal-temporary-links-v1';
+    const temporary=['edit-standard',RECAST_QUALITY].includes(quote.input?.data?.quality)&&quote.input.data.transferPolicy==='fal-temporary-links-v1';
     if(!payload||payload.quoteId!==quoteId||payload.idempotencyKey!==idempotencyKey||(temporary?payload.transferConsent!=='fal-temporary-links-v1':Object.hasOwn(payload,'transferConsent')))throw Error('Verification operation does not match generation');
    }
    const policy=await loadProfitPolicy(db);

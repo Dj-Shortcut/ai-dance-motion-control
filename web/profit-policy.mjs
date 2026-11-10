@@ -1,5 +1,6 @@
 // Server-only budget estimates. These are conservative planning assumptions,
 // never a provider invoice, actual FX transaction, or a customer-visible price.
+import {RECAST_QUALITY,RECAST_MIN_DURATION,RECAST_MAX_DURATION} from './recast-contract.mjs';
 const whole=(value,min,max)=>Number.isSafeInteger(value)&&value>=min&&value<=max;
 const VERSION=/^[A-Za-z0-9_.-]{1,64}$/;
 const fields=Object.freeze({
@@ -30,7 +31,8 @@ export function profitPolicyRow(policy){
 }
 export function retailPriceCents(policy,{quality,billedSeconds,rateCents,providerEstimateUsdMicros,fundingKind='credits',maxPriceCents=1200}){
  profitPolicyRow(policy);
- if(!['standard','pro','edit-standard'].includes(quality)||!whole(billedSeconds,3,quality==='edit-standard'?15:30)||!whole(rateCents,1,250))throw Error('Invalid retail price');
+ const recast=quality===RECAST_QUALITY;
+ if(!['standard','pro','edit-standard',RECAST_QUALITY].includes(quality)||!whole(billedSeconds,recast?RECAST_MIN_DURATION:3,recast?RECAST_MAX_DURATION:quality==='edit-standard'?15:30)||!whole(rateCents,1,250)||recast&&fundingKind!=='owner-provider')throw Error('Invalid retail price');
  let price=Math.max(quality==='pro'?policy.minProPriceCents:policy.minPriceCents,rateCents*billedSeconds);
  if(!whole(maxPriceCents,1,1200)||price>maxPriceCents)throw Error('Retail price exceeds cap');
  if(providerEstimateUsdMicros===undefined)return price;

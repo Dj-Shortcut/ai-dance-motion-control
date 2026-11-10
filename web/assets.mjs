@@ -1,4 +1,5 @@
 import {isProductionGenerationContext} from './production-generation-context.mjs';
+import {RECAST_MODEL} from './recast-contract.mjs';
 // Compose with an authenticated private media service; never expose it directly.
 // Live operation requires the validated production capability, never a request flag.
 import { uploadVerifiedAsset,TEMPORARY_LINK_POLICY } from './upload.mjs';
@@ -80,7 +81,8 @@ export function createAssets(o){
    if(!USER.test(user??'')||!UUID.test(id??''))return null;
    // The public HTTP asset-preparation handler never accepts this context.
    // Only the generation handler can supply a quote-bound policy after consent.
-   if(upload&&context?.transferPolicy!==undefined&&(context.transferPolicy!==TEMPORARY_LINK_POLICY||context.model!=='fal-ai/kling-video/o3/standard/video-to-video/edit'||!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||!SHA.test(expectedSha??'')))throw Error('Invalid provider transfer context');
+   if(upload&&context?.model===RECAST_MODEL&&context.transferPolicy!==TEMPORARY_LINK_POLICY)throw Error('Recast media requires confirmed temporary transfer');
+   if(upload&&context?.transferPolicy!==undefined&&(context.transferPolicy!==TEMPORARY_LINK_POLICY||!['fal-ai/kling-video/o3/standard/video-to-video/edit',RECAST_MODEL].includes(context.model)||!UUID.test(context.jobId??'')||context.jobId!==context.jobId.toLowerCase()||!SHA.test(expectedSha??'')))throw Error('Invalid provider transfer context');
    if(!await o.limit(user,'asset-read'))throw Error('quota');
    // A service binding or similarly authenticated PRIVATE channel is mandatory.
    const res=await o.media.fetch(createMediaRequest(o,`/v1/assets/${id}`,user,{method:'GET',signal:AbortSignal.timeout(30000)}));

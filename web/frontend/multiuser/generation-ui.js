@@ -9,7 +9,23 @@
   const failureFinalized = data => ownerProvider(data)?data.finalizationConfirmed===true:data.refundConfirmed===true;
   const falTransferPolicy = 'fal-temporary-links-v1';
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je gekozen foto’s, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
+  const falRecastNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null,ownerVerifying=false;
+  let quotePortraitURL=null;
+  function clearQuotePortrait(){
+    const preview=el('quotePortraitPreview'),image=el('quotePortraitImage');if(preview)preview.hidden=true;if(image)image.removeAttribute('src');
+    if(quotePortraitURL){URL.revokeObjectURL(quotePortraitURL);quotePortraitURL=null;}
+  }
+  function showQuotePortrait(media){
+    clearQuotePortrait();
+    if(window.rigSessionActive?.()!==true||!el('quotePortraitPreview')||!el('quotePortraitImage')||media.quality!=='human-recast'||!(media.image?.blob instanceof Blob)||media.image.blob.type!=='image/jpeg')throw new Error('Het gebruikte hoofdbeeld kon niet worden getoond. Bereid je beelden opnieuw voor.');
+    // Keep the exact prepared bytes while fixing their interpretation to a
+    // non-active raster MIME. The original File is never used for this preview.
+    quotePortraitURL=URL.createObjectURL(new Blob([media.image.blob],{type:'image/jpeg'}));
+    el('quotePortraitImage').src=quotePortraitURL;el('quotePortraitPreview').hidden=false;
+  }
+  window.rigGenerationDispose=()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;clearQuotePortrait();if(el('confirmGeneration'))el('confirmGeneration').hidden=true;};
+  window.addEventListener('pagehide',clearQuotePortrait);
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
   function providerFailureMessage(data){
@@ -18,7 +34,7 @@
     if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
   }
-  function showReviewedType(quality){const edit=quality==='edit-standard';el('quoteTitle').textContent=edit?'In de video':'Op je foto';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
+  function showReviewedType(quality){const edit=quality==='edit-standard'||quality==='human-recast';el('quoteTitle').textContent=edit?'In de video':'Op je foto';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
   async function call(path, options={}) {
     const response=await window.rigRequest(path,{credentials:'same-origin',cache:'no-store',...options});
     let data; try { data=await response.json(); } catch { throw new Error('De dienst is momenteel niet beschikbaar.'); }
@@ -41,15 +57,17 @@
     return id;
   }
   async function getQuote() {
-    if(active)return;if(window.rigScopedStorage.getItem('rig-generation-pending') || window.rigScopedStorage.getItem('rig-generation-job')){el('uploadDialog').close();el('quoteDialog').showModal();note('Er is al een opdracht gestart. Controleer eerst de status.');el('checkGeneration').hidden=false;return;}const media=window.rigPreparedMedia();if(!media){note('Bereid eerst je beelden voor.');return;}
+    if(active)return;clearQuotePortrait();if(window.rigScopedStorage.getItem('rig-generation-pending') || window.rigScopedStorage.getItem('rig-generation-job')){el('uploadDialog').close();el('quoteDialog').showModal();note('Er is al een opdracht gestart. Controleer eerst de status.');el('checkGeneration').hidden=false;return;}const media=window.rigPreparedMedia();if(!media){note('Bereid eerst je beelden voor.');return;}
     active=true;quote=null;el('confirmUpload').disabled=true;el('uploadDialog').close();el('quoteDialog').showModal();el('confirmGeneration').hidden=true;
     showReviewedType(media.quality);
     try {
-      const edit=media.quality==='edit-standard',limit=edit?15:30;
-      if(edit&&(!Array.isArray(window.rigVideoQualities)||!window.rigVideoQualities.includes('edit-standard')))throw new Error('Video bewerken is momenteel niet beschikbaar.');
-      const seconds=Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<3||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen 3 en ${limit}.`);
+      const recast=media.quality==='human-recast',edit=recast||media.quality==='edit-standard',limit=edit?15:30,min=recast?6:3;
+      if(edit&&(!Array.isArray(window.rigVideoQualities)||!window.rigVideoQualities.includes(media.quality)))throw new Error('Video bewerken is momenteel niet beschikbaar.');
+      const seconds=Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<min||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen ${min} en ${limit}.`);
       if(!media.prompt?.trim()||media.prompt.trim().length>1900)throw new Error('Beschrijf eerst kort wat je wilt maken.');
       if(edit&&media.steady)throw new Error('Bij videobewerking volgt de camera je bronvideo.');
+      if(recast&&media.keepSound!==true)throw new Error('Deze bewerking behoudt het originele geluid. Bereid je video opnieuw voor.');
+      if(recast&&(media.face||media.angles.length))throw new Error('Deze bewerking gebruikt één portret, zonder extra close-up of hoeken.');
       if(media.angles.length && !media.face) throw new Error('Kies eerst een close-up voor de extra hoeken.');
       note('Je bestanden worden veilig voorbereid…');
       const imageId=await upload('image',media.image.blob),videoId=await upload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
@@ -63,7 +81,7 @@
       if(ownFal){
         if(window.rigVideoMode!=='live'||!ownerProvider(data)||data.providerCurrency!=='USD'||!Number.isSafeInteger(data.providerEstimateUsdMicros)||data.providerEstimateUsdMicros<1||data.durationSeconds<3||Object.hasOwn(data,'priceCents')||Object.hasOwn(data,'currency'))throw new Error('De Fal-raming kon niet worden bevestigd.');
       }else if(ownerProvider(data)||!Number.isSafeInteger(data.priceCents)||data.priceCents<1||data.currency!=='EUR')throw new Error('De prijs kon niet worden bevestigd.');
-      if(data.quality!==undefined&&data.quality!==media.quality||data.durationSeconds>limit)throw new Error('De prijs hoort niet bij je gekozen videobewerking.');
+      if((recast?data.quality!==media.quality:data.quality!==undefined&&data.quality!==media.quality)||data.durationSeconds>limit||recast&&data.durationSeconds<5)throw new Error('De prijs hoort niet bij je gekozen videobewerking.');
       if(edit&&data.transferPolicy!==falTransferPolicy||!edit&&data.transferPolicy!==undefined)throw new Error('De bestandsoverdracht kon niet worden bevestigd. Bereid je bestanden opnieuw voor.');
       const hasApproval=Object.hasOwn(data,'approvalToken')||Object.hasOwn(data,'idempotencyKey');
       if(hasApproval&&(!/^[A-Za-z0-9_-]{43}$/.test(data.approvalToken||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(data.idempotencyKey||'')))throw new Error('De prijsbevestiging is niet beschikbaar. Bereid je bestanden opnieuw voor.');
@@ -96,9 +114,10 @@
           quote={id:data.id,media,...approved};note(`Als je bevestigt, kost deze video ${currency(data.priceCents)}. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
         }
       }
-      if(edit)note(el('quoteMessage').textContent+'\n\n'+falTransferNotice);
+      if(recast)showQuotePortrait(media);
+      if(edit)note(el('quoteMessage').textContent+'\n\n'+(recast?falRecastNotice:falTransferNotice));
       el('confirmGeneration').hidden=false;
-    } catch(error) { quote=null; note(error.message || 'De prijs kon niet worden berekend.'); }
+    } catch(error) { quote=null;clearQuotePortrait();note(error.message || 'De prijs kon niet worden berekend.'); }
     finally { active=false;el('confirmUpload').disabled=false; }
   }
   async function recoverGeneration() {
@@ -132,7 +151,7 @@
         if(!quoteCurrent()){quote=null;note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
         if(!verification)throw new Error('De beveiligingscontrole is niet afgerond. De video is niet gestart.');
       }
-      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));quote=null;submitted=true;
+      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));quote=null;clearQuotePortrait();submitted=true;
       note('Je opdracht wordt gestart…');
       const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,...(current.approvalToken?{approvalToken:current.approvalToken}:{}),...(verification?{verification}:{})})});
       if(ownFal&&!sessionCurrent())return;
@@ -184,7 +203,7 @@
     if(!mayShowPricePreview()){target.hidden=true;target.textContent='';return;}
     const duration=Number(el('duration').value), start=Number(el('start').value);
     const quality=typeof window.rigGenerationQuality==='function'?window.rigGenerationQuality():document.querySelector('input[name="quality"]:checked')?.value;
-    if(!el('motionInput').files.length || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<3 || duration>(quality==='edit-standard'?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
+    if(!el('motionInput').files.length || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<(quality==='human-recast'?6:3) || duration>(['edit-standard','human-recast'].includes(quality)?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
     try {
       const params=new URLSearchParams({quality,duration:String(duration)});
       const key=`${window.rigVideoFunding}:${window.rigVideoMode}:${params}`;
@@ -239,7 +258,7 @@
   discoverRecent();
   el('resultVideo').addEventListener('error',()=>{el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('export').hidden=true;el('status').textContent='Het resultaat kon niet worden geladen. Probeer later opnieuw.';});
   if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){el('quoteDialog').showModal();note('Een eerdere opdracht is nog niet afgerond. Controleer de status voordat je een nieuwe start.');el('checkGeneration').hidden=false;}
-  document.addEventListener('rig-prepared-change',()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
+  document.addEventListener('rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
   document.addEventListener('rig-prepared-ready',async()=>{
     if(active)return;active=true;
     try {
@@ -253,5 +272,5 @@
     } catch(error) {el('quoteDialog').showModal();note(error.message||'Een eerdere opdracht kon niet worden gecontroleerd.');el('checkGeneration').hidden=true;}
     finally {active=false;}
   });el('closeUpload').addEventListener('click',()=>el('uploadDialog').close());el('confirmUpload').addEventListener('click',getQuote);
-  el('closeQuote').addEventListener('click',()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});el('confirmGeneration').addEventListener('click',confirm);el('checkGeneration').addEventListener('click',recoverGeneration);
+  el('quoteDialog').addEventListener('close',clearQuotePortrait);el('closeQuote').addEventListener('click',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});el('confirmGeneration').addEventListener('click',confirm);el('checkGeneration').addEventListener('click',recoverGeneration);
 })();

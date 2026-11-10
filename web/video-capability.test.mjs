@@ -24,3 +24,9 @@ test('direct owner capability requires live USD and keeps the provider account d
  const f=fixture(Response.json({enabled:true,funding:'owner-provider',mode:'live',providerCurrency:'USD',qualities:['pro']}));
  try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),true);assert.equal(f.dom.window.rigVideoFunding,'owner-provider');assert.equal(f.dom.window.rigVideoMode,'live');assert.match(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/eigen fal-account.*Fal-raming/);assert.doesNotMatch(f.dom.window.document.getElementById('videoAvailabilityNote').textContent,/Mollie|RIG-tegoed|testmodus/);}finally{f.dom.window.close();}
 });
+
+
+test('human recast capability is recognised only for a live direct-provider owner and revocation clears it',async()=>{
+ for(const funding of [undefined,'credits','sponsored']){const f=fixture(Response.json({enabled:true,funding,mode:'live',currency:'EUR',qualities:['standard','pro','human-recast']}));try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),false);assert.equal(f.loaded(),0);}finally{f.dom.window.close();}}
+ const f=fixture(Response.json({enabled:true,funding:'owner-provider',mode:'live',providerCurrency:'USD',qualities:['standard','pro','human-recast']}));try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),true);assert.deepEqual(f.dom.window.rigVideoQualities,['standard','pro','human-recast']);f.binding.request=async()=>Response.json({enabled:false});assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),false);assert.deepEqual(f.dom.window.rigVideoQualities,[]);assert.equal(f.events(),2);}finally{f.dom.window.close();}
+});

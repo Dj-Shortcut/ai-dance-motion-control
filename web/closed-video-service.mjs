@@ -8,7 +8,8 @@ import {createResultStore} from './results.mjs';
 import {privateResultFetch} from './upload.mjs';
 import {createGenerationHandler} from './generation.mjs';
 import {createRouter,d1Limit} from './router.mjs';
-import {getFalPricePreflight} from './price-preflight.mjs';
+import {getFalPricePreflight,recastPricePerSecond} from './price-preflight.mjs';
+import {RECAST_QUALITY,RECAST_MIN_DURATION,RECAST_MAX_DURATION} from './recast-contract.mjs';
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
 import {r2InputsConfig} from './rig-r2-inputs.mjs';
 import {loadProfitPolicy,retailPriceCents,validProfitSnapshot,profitable} from './profit-policy.mjs';
@@ -16,6 +17,7 @@ const id=/^[A-Za-z0-9_-]{1,100}$/;
 const version=/^[A-Za-z0-9_.-]{1,40}$/;
 const integer=(s,max)=>typeof s==='string'&&/^[1-9][0-9]*$/.test(s)&&Number.isSafeInteger(+s)&&+s<=max;
 const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&integer(env.RIG_PRICE_EDIT,250);
+const recastEnabled=(env,{trustedUserId,accessMode,productionContext}={})=>accessMode==='paid'&&isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN})&&productionFundingKind(productionContext,trustedUserId)==='owner-provider'&&trustedUserId===env.RIG_PRODUCTION_OWNER_USER_ID&&env.RIG_OWNER_RECAST_VALIDATION_ENABLED==='yes'&&productionContext.env.RIG_OWNER_RECAST_VALIDATION_ENABLED==='yes'&&integer(env.RIG_PRICE_RECAST,250);
 const unavailable=()=>Response.json({error:'Videogeneratie is nog niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store'}});
 function valid(env,{productionContext}={}){
  const modeOk=env?.RIG_MODE==='test'&&env.RIG_MOLLIE_MODE==='test'||env?.RIG_MODE==='live'&&env.RIG_MOLLIE_MODE==='live'&&isProductionGenerationContext(productionContext,{db:env.DB,origin:env.RIG_PUBLIC_ORIGIN});
@@ -24,13 +26,14 @@ function valid(env,{productionContext}={}){
 // Only provider hosts required by existing transfer/queue code. Redirects are
 // never followed: particularly important for Authorization and signed URLs.
 function providerTransport(fetcher){return async(input,init={})=>{const u=new URL(String(input));if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||!['fal.ai','fal.run','fal.media'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d))||init.redirect!=='manual')throw Error('Untrusted provider endpoint');const r=await fetcher(input,init);if(r.status>=300&&r.status<400)throw Error('Provider redirect refused');return r;};}
-function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){return {
+function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){const recastAvailable=recastEnabled(env,{trustedUserId,accessMode,productionContext});return {
  async quoteCurrent(quote){
   const policy=await loadProfitPolicy(env.DB),snapshot=quote?.input?.profitSnapshot;
   return validProfitSnapshot(snapshot,{policy,fundingKind:quote?.fundingKind,retailPriceCents:quote?.priceCents,providerEstimateUsdMicros:quote?.input?.providerEstimateUsdMicros})&&profitable(snapshot);
  },
  async retailPrice(quality,durationSeconds,providerEstimateUsdMicros){
-  const rate=quality==='edit-standard'?+env.RIG_PRICE_EDIT:quality==='pro'?+env.RIG_PRICE_PRO:+env.RIG_PRICE_STANDARD;
+  if(quality===RECAST_QUALITY&&!recastAvailable)throw Error('Recast unavailable');
+  const rate=quality===RECAST_QUALITY?+env.RIG_PRICE_RECAST:quality==='edit-standard'?+env.RIG_PRICE_EDIT:quality==='pro'?+env.RIG_PRICE_PRO:+env.RIG_PRICE_STANDARD;
   return retailPriceCents(await loadProfitPolicy(env.DB),{quality,billedSeconds:Math.ceil(durationSeconds),rateCents:rate,providerEstimateUsdMicros,
    fundingKind:productionFundingKind(productionContext,trustedUserId),maxPriceCents:+env.RIG_CLOSED_VIDEO_MAX_CENTS});
  },
@@ -56,7 +59,7 @@ function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){retu
   }
   try{const state=await createSponsoredInvitationStore(env.DB).eligibility(trustedUserId);return state.state==='eligible'&&state.remainingCents>=priceCents}catch{return false}
  },
- async estimate(quality,durationSeconds){if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env)))||!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>(quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY,quality),rate=p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
+ async estimate(quality,durationSeconds){const recast=quality===RECAST_QUALITY;if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env))||(recast&&recastAvailable))||!Number.isFinite(durationSeconds)||durationSeconds<(recast?RECAST_MIN_DURATION:3)||durationSeconds>(recast?RECAST_MAX_DURATION:quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY,quality),rate=recast?recastPricePerSecond(p):p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
  async claimOnce({userId,jobId,quote}={}){
   if(userId!==trustedUserId||!quote||!Number.isSafeInteger(quote.priceCents)||quote.priceCents<=0)return false;
   if(accessMode==='sponsored'){
@@ -111,7 +114,8 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
  const r2Inputs=env.RIG_R2_INPUTS_ENABLED==='yes'?r2InputsConfig(env):null;
  if(env.RIG_R2_INPUTS_ENABLED==='yes'&&!r2Inputs)return unavailable;
  const inlineO3Owner=env.RIG_O3_INLINE_INPUTS_ENABLED==='yes'&&accessMode==='owner'&&trustedUserId===env.RIG_VIDEO_OWNER_USER_ID?trustedUserId:undefined;
- const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key,quality)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env),quality}));
+ const recastAvailable=recastEnabled(env,{trustedUserId,accessMode,productionContext});
+ const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key,quality)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env),includeRecast:recastAvailable,quality}));
  const makeAssets=()=>createAssets({mode:env.RIG_MODE,...(paid?{productionContext}:{}),origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
  const router=createRouter({...(paid?{productionContext}:{}),identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
   const stores=createD1GenerationStores(env.DB,{mode:env.RIG_MODE,dispatchMode:accessMode,...(paid?{productionContext}:{})});
@@ -140,7 +144,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
     return result;
    };
   }
-  return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
+  return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),...(recastAvailable?{recast:+env.RIG_PRICE_RECAST}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
  },generationFactory:s=>createGenerationHandler(s,transport)});
  return async req=>{
   const p=new URL(req.url).pathname;

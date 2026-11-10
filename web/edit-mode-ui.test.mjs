@@ -99,7 +99,7 @@ test('editing has a visible description, five-second first fragment and clear so
   f.load();assert.equal(f.el('duration').value,'30');f.el('editModeButton').click();
   assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'5');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
   assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('moreOptions').hidden,false);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
-  assert.equal(f.el('personChooseText').textContent,'Kies een foto of video');assert.equal(f.el('personInput').accept,'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*video blijft/);assert.equal(f.el('sound').checked,true);
+  assert.equal(f.el('personChooseText').textContent,'Kies een foto of video');assert.equal(f.el('personInput').accept,'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*korte proef/);assert.equal(f.el('sound').checked,true);
   f.prompt('Vervang de zanger door mijn hond.');assert.equal(f.el('prepare').disabled,false);
   f.el('motionModeButton').click();assert.equal(f.el('duration').value,'30');assert.equal(f.el('duration').max,'30');assert.equal(f.el('motionQualitySettings').hidden,false);assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');
  }finally{f.dom.window.close();}
@@ -206,20 +206,20 @@ test('editing shows the EUR gift price before one explicit approved generation',
   assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
  }finally{f.dom.window.close();}
 });
-test('editing keeps close-up and angle choices available and sends all six prepared assets into the reviewed quote',async()=>{
+test('editing keeps close-up and two angle choices available and sends all five prepared assets into the reviewed quote',async()=>{
  const f=fixture({withGeneration:true});
  try{
   f.el('editModeButton').click();f.load();f.file('personInput','4k-reference.mp4','video/mp4');const reference=f.el('personVideo'),original=f.el('personInput').files[0];reference.duration=56.85;reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));
   assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('moreOptions').hidden,false);assert.equal(f.el('referenceCapture').hidden,false);assert.equal(f.el('captureMain').disabled,false);assert.equal(f.el('captureFace').disabled,false);assert.equal(f.el('captureAngle').disabled,true);
   f.el('captureMain').click();await waitFor(()=>!f.el('mainReference').hidden);const main=f.imagePreparations.at(-1).image.blob;
   f.el('frameTime').value='12.5';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureFace').click();await waitFor(()=>!f.el('faceReference').hidden);const face=f.imagePreparations.at(-1).image.blob;
-  for(let i=0;i<3;i++){f.el('frameTime').value=String(20+i*10);f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureAngle').click();await waitFor(()=>!f.el('angleReference'+i).hidden);}
+  for(let i=0;i<2;i++){f.el('frameTime').value=String(20+i*10);f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureAngle').click();await waitFor(()=>!f.el('angleReference'+i).hidden);}
   assert.equal(f.el('captureAngle').disabled,true);f.prompt('Vervang de zanger door mij en gebruik mijn extra beelden voor de gelijkenis.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
-  const media=f.w.rigPreparedMedia();assert.equal(media.image.blob,main);assert.equal(media.face,face);assert.equal(media.angles.length,3);assert.equal(media.steady,false);assert.equal(f.imagePreparations.length,5);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false);
+  const media=f.w.rigPreparedMedia();assert.equal(media.image.blob,main);assert.equal(media.face,face);assert.equal(media.angles.length,2);assert.equal(media.steady,false);assert.equal(f.imagePreparations.length,4);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false);
   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);const uploads=f.calls.filter(([path])=>path==='/api/assets');
-  assert.equal(uploads.length,6);assert.deepEqual(uploads.map(([,options])=>options.headers['X-Rig-Asset-Kind']),['image','video','face','angle','angle','angle']);
+  assert.equal(uploads.length,5);assert.deepEqual(uploads.map(([,options])=>options.headers['X-Rig-Asset-Kind']),['image','video','face','angle','angle']);
   assert.equal(uploads[0][1].body,main);assert.equal(uploads[2][1].body,face);assert.equal(uploads.some(([,options])=>options.body===original),false);
-  const quote=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(quote.imageId,'asset1');assert.equal(quote.videoId,'asset2');assert.equal(quote.faceId,'asset3');assert.deepEqual(quote.angleIds,['asset4','asset5','asset6']);assert.equal(quote.quality,'edit-standard');assert.equal(quote.transferPolicy,'fal-temporary-links-v1');assert.equal(Object.hasOwn(quote,'steadyCamera'),false);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  const quote=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(quote.imageId,'asset1');assert.equal(quote.videoId,'asset2');assert.equal(quote.faceId,'asset3');assert.deepEqual(quote.angleIds,['asset4','asset5']);assert.equal(quote.quality,'edit-standard');assert.equal(quote.transferPolicy,'fal-temporary-links-v1');assert.equal(Object.hasOwn(quote,'steadyCamera'),false);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
   f.el('closeQuote').click();f.el('removeAngle1').click();assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
  }finally{f.dom.window.close();}
 });
