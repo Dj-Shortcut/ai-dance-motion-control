@@ -15,7 +15,7 @@ function fixture(){
   video.pause=()=>{};
  }
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(value){this.url=value;this.onload();}};
- w.rigMedia={paint(){}};
+ w.rigMedia={paint(){},prepareImageFile:async()=>({blob:new w.Blob(['prepared'],{type:'image/jpeg'}),width:1280,height:720})};
  w.eval(app);
  const files=(id,...values)=>{Object.defineProperty(el(id),'files',{configurable:true,value:values});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));};
  const file=(name,type,bytes='media')=>new w.File([bytes],name,{type});
@@ -61,14 +61,14 @@ test('previews and downloads use new blobs with fixed non-active MIME types, nev
  }finally{f.dom.window.close();}
 });
 
-test('reference uploads use safe raster blobs and reject a mixed batch without replacing the draft',()=>{
+test('reference uploads use prepared JPEG blobs and reject a mixed batch without replacing the draft',async()=>{
  const f=fixture();
  try{
   f.files('personInput',f.file('person.jpg','image/jpeg'));
-  const face=f.file('face.png','image/png');f.files('faceInput',face);assert.equal(f.created.at(-1).blob.type,'image/png');assert.notEqual(f.created.at(-1).blob,face);const faceUrl=f.el('faceThumb').src;
+  const face=f.file('face.png','image/png');f.files('faceInput',face);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.created.at(-1).blob.type,'image/jpeg');assert.notEqual(f.created.at(-1).blob,face);const faceUrl=f.el('faceThumb').src;
   f.files('faceInput',f.file('attack.png','image/svg+xml'));assert.equal(f.el('faceThumb').src,faceUrl);
   const count=f.created.length;f.files('anglesInput',f.file('angle.webp','image/webp'),f.file('attack.jpg','text/html'));assert.equal(f.created.length,count);assert.equal(f.el('angleReference0').hidden,true);
-  const angle=f.file('angle.webp','image/webp');f.files('anglesInput',angle);assert.equal(f.created.at(-1).blob.type,'image/webp');assert.notEqual(f.created.at(-1).blob,angle);assert.equal(f.el('angleReference0').hidden,false);
+  const angle=f.file('angle.webp','image/webp');f.files('anglesInput',angle);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.created.at(-1).blob.type,'image/jpeg');assert.notEqual(f.created.at(-1).blob,angle);assert.equal(f.el('angleReference0').hidden,false);
  }finally{f.dom.window.close();}
 });
 

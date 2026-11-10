@@ -18,7 +18,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   video.pause=()=>{video.paused=true;};video.play=async()=>{video.paused=false;};
  }
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(_value){this.onload();}};
- w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,sourceTime:Number.isFinite(source.currentTime)?source.currentTime:null,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
+ w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImageFile:async file=>({blob:new Blob(['prepared '+file.name],{type:'image/jpeg'}),width:1280,height:720}),prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,sourceTime:Number.isFinite(source.currentTime)?source.currentTime:null,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
  w.rigScopedStorage=scopedStorage??{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>{removed.push(key);storage.delete(key);}};
  let uploads=0,quotes=0;
  w.rigRequest=async(path,options={})=>{
@@ -107,7 +107,7 @@ test('editing has a visible description, five-second first fragment and clear so
 test('edit preparation enforces fifteen seconds and strips motion identity/camera controls',async()=>{
  const f=fixture();
  try{
-  f.load();f.file('faceInput','closeup.jpg','image/jpeg');f.file('anglesInput','angle.jpg','image/jpeg');f.el('steady').checked=true;f.el('editModeButton').click();f.prompt('Vervang de zanger door de hond op mijn foto.');
+  f.load();f.file('faceInput','closeup.jpg','image/jpeg');f.file('anglesInput','angle.jpg','image/jpeg');await waitFor(()=>!f.el('faceReference').hidden&&!f.el('angleReference0').hidden);f.el('steady').checked=true;f.el('editModeButton').click();f.prompt('Vervang de zanger door de hond op mijn foto.');
   f.change('duration','16');f.prepare();await waitFor(()=>f.el('status').textContent.includes('3 tot 15'));assert.equal(f.prepared.length,0);
   f.change('duration','5');f.change('start','8.5');f.prepare();await waitFor(()=>f.w.rigPreparedMedia()!==null);
   const media=f.w.rigPreparedMedia(),args=f.prepared[0];assert.equal(media.quality,'edit-standard');assert.equal(media.face,null);assert.equal(media.angles.length,0);assert.equal(media.steady,false);assert.equal(media.keepSound,true);assert.equal(args[2],8.5);assert.equal(args[3],5);assert.equal(JSON.stringify(args[6]),JSON.stringify({minSide:720,maxDuration:15}));

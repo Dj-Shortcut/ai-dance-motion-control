@@ -27,6 +27,31 @@
     const c=document.createElement('canvas');paint(c,source,crop,1280,1280);
     return {blob:await blob(c,'image/jpeg',0.93),name:'rig-persoon.jpg',type:'image/jpeg',width:c.width,height:c.height};
   }
+  async function prepareImageFile(file) {
+    // Decode only raster media through a fixed MIME URL, never a data URL or
+    // active document. Source size is independent of the bounded working JPEG.
+    const type=typeof file?.type==='string'?file.type.split(';',1)[0].trim().toLowerCase():'';
+    let safe;
+    switch(type){
+      case 'image/jpeg':safe=new Blob([file],{type:'image/jpeg'});break;
+      case 'image/png':safe=new Blob([file],{type:'image/png'});break;
+      case 'image/webp':safe=new Blob([file],{type:'image/webp'});break;
+      default:throw Error('Kies een JPG-, PNG- of WebP-afbeelding.');
+    }
+    const image=new Image(),url=URL.createObjectURL(safe);
+    try {
+      await new Promise((resolve,reject)=>{
+        const cleanup=()=>{clearTimeout(timer);image.onload=null;image.onerror=null;};
+        const timer=setTimeout(()=>{cleanup();reject(Error('Deze foto kon niet worden geopend. Probeer een andere foto.'));},30000);
+        image.onload=()=>{cleanup();resolve();};
+        image.onerror=()=>{cleanup();reject(Error('Deze foto kan niet worden geopend in je browser.'));};
+        image.src=url;
+      });
+      return await prepareImage(image,{x:0,y:0,w:100,h:100});
+    } finally {
+      image.onload=null;image.onerror=null;image.src='';URL.revokeObjectURL(url);
+    }
+  }
   // MediaRecorder may generate fragmented MP4 where browsers initially expose
   // Infinity or zero duration. Seeking past the end asks the browser's demuxer
   // to discover the end. We still reject if it cannot determine a finite value.
@@ -136,5 +161,5 @@
       for(const track of tracks)try{track.stop()}catch{}
     }
   }
-  window.rigMedia={bounds,dimensions,paint,prepareImage,prepareVideo,recordingDuration,videoDimensions};
+  window.rigMedia={bounds,dimensions,paint,prepareImage,prepareImageFile,prepareVideo,recordingDuration,videoDimensions};
 })();
