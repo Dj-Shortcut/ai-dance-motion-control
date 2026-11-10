@@ -74,7 +74,7 @@ test('a retry of the original submission remains recoverable after quote expiry'
 test('camera setting preserves Mac prompt semantics before price is confirmed',async()=>{
  const f=fixture();assert.equal((await quote(f,{...body,steadyCamera:true})).status,201);
  const on=f.qs.get('quote1').input.prompt;assert.match(on,/tripod camera remains stationary/);assert.ok(on.endsWith('Move'));
- const g=fixture();assert.equal((await quote(g,{...body,steadyCamera:false})).status,201);assert.equal(g.qs.get('quote1').input.prompt,'Move');
+ const g=fixture();assert.equal((await quote(g,{...body,steadyCamera:false})).status,201);assert.ok(g.qs.get('quote1').input.prompt.endsWith('Move'));assert.doesNotMatch(g.qs.get('quote1').input.prompt,/tripod/);
  assert.equal((await quote(g,{...body,steadyCamera:'yes'})).status,400);
 });
 
@@ -258,6 +258,29 @@ function temporaryFixture(){
  f.services.assets.uploadOwned=async(...args)=>{contexts.push(args[3]);return upload(...args)};
  return {...f,contexts};
 }
+test('text cleanup is bound before the price and sent in the same single motion or edit generation within the provider prompt limit',async()=>{
+ const variants=[];
+ for(const quality of ['standard','pro'])for(const steadyCamera of [false,true])for(const identity of [false,true])variants.push({quality,steadyCamera,identity});
+ for(const identity of [false,true])variants.push({quality:'edit-standard',steadyCamera:false,identity});
+ for(const variant of variants)for(const userPrompt of ['Maak mijn video.','a'.repeat(1900),'😀'.repeat(950)]){
+  const edit=variant.quality==='edit-standard',f=edit?temporaryFixture():fixture();
+  const selection={...(edit?temporarySelection:body),quality:variant.quality,steadyCamera:variant.steadyCamera,prompt:userPrompt,...(variant.identity?{faceId:'face',angleIds:['angle']}:{})};
+  const response=await quote(f,selection),price=await response.json();assert.equal(response.status,201);
+  assert.equal(price.priceCents,edit?100:variant.quality==='pro'?270:180);
+  const stored=f.qs.get('quote1').input;
+  assert.equal(stored.data.prompt,userPrompt);assert.ok(stored.prompt.length<=2500);assert.equal(stored.prompt.isWellFormed(),true);
+  assert.match(stored.prompt,/Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays/);
+  assert.match(stored.prompt,/preserving the subject, movement, camera and audio/);
+  if(edit){assert.match(stored.prompt,/@Video1/);assert.match(stored.prompt,/@Image1/);assert.ok(stored.prompt.endsWith(userPrompt));}
+  else if(variant.steadyCamera)assert.match(stored.prompt,/tripod camera remains stationary/);
+  else assert.ok(stored.prompt.endsWith(userPrompt));
+  if(variant.identity)assert.match(stored.prompt,/@Element1/);
+  assert.equal(f.calls().reserveCount,0);assert.equal(f.calls().uploadCalls,0);assert.equal(f.calls().providerCalls,0);
+  assert.equal((await submit(f,edit?temporaryConfirmation:undefined)).status,202);
+  assert.equal(f.calls().submitted.body.prompt,stored.prompt);assert.ok(f.calls().submitted.body.prompt.length<=2500);assert.equal(f.calls().providerCalls,1);assert.equal(f.calls().reserveCount,1);
+  assert.equal((await submit(f,edit?temporaryConfirmation:undefined)).status,200);assert.equal(f.calls().providerCalls,1);
+ }
+});
 test('temporary Fal links are offered only for an explicitly requested O3 quote without uploading',async()=>{
  const f=temporaryFixture();const response=await quote(f,temporarySelection),q=await response.json();
  assert.equal(response.status,201);assert.equal(q.transferPolicy,temporaryPolicy);assert.equal(q.transferConsentRequired,true);

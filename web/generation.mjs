@@ -10,6 +10,9 @@ const REQ_ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const QUEUE = 'https://queue.fal.run';
 const SUBJECT_REJECTED='Deze foto is niet geschikt voor persoonsbeweging. Kies Video bewerken, of gebruik een foto met een duidelijk zichtbaar menselijk bovenlichaam.';
 const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at a fixed distance and focal length throughout. Keep the person centered and their complete body visible from the top of the head to both shoes, with generous space above the head, below the feet and on both sides for all dance movements. Maintain the initial wide framing throughout the entire clip, with a stable background and realistic proportions. ';
+// Ask for clean output in the existing generation, without a separate paid
+// cleanup job. This does not modify source files or guarantee text removal.
+const TEXT_CLEANUP_PROMPT = 'Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays. Restore the scene beneath, preserving the subject, movement, camera and audio. ';
 const MODEL = Object.freeze({ standard: 'fal-ai/kling-video/v3/standard/motion-control', pro: 'fal-ai/kling-video/v3/pro/motion-control', 'edit-standard':'fal-ai/kling-video/o3/standard/video-to-video/edit' });
 // This transfer changes who can read Fal's temporary copies. It is opt-in per
 // quoted O3 edit, never inferred from the user, model default or runtime owner.
@@ -32,7 +35,16 @@ function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
 const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
-function editPrompt(prompt,hasIdentity=false) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${hasIdentity?'Use @Element1 for the replacement subject identity and its appearance from different angles. ':''}${prompt}`; }
+function editPrompt(prompt,hasIdentity=false) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${hasIdentity?'Use @Element1 for the replacement subject identity and its appearance from different angles. ':''}${TEXT_CLEANUP_PROMPT}${prompt}`; }
+function generationPrompt(data){
+ if(data.quality==='edit-standard')return editPrompt(data.prompt,Boolean(data.faceId));
+ const prefix=(data.steadyCamera?CAMERA_PROMPT:'')+TEXT_CLEANUP_PROMPT+(data.faceId?'The replacement subject is @Element1. ':'');
+ // Preserve the existing steady-camera user limit and keep the complete
+ // provider prompt <=2500 UTF-16 units without splitting a surrogate pair.
+ const selected=data.steadyCamera?Array.from(data.prompt).slice(0,1300).join(''):data.prompt;
+ let userPrompt='';for(const character of selected){if(prefix.length+userPrompt.length+character.length>2500)break;userPrompt+=character;}
+ return prefix+userPrompt;
+}
 function configured(s) {
   if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
@@ -110,6 +122,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       const data=inputData(await readJSON(req)); if (!data) return fail('Controleer je invoer.',400);
       if (!qualityEnabled(services,data.quality)) return fail('Dit videomodel is nog niet beschikbaar.',503);
       if(services.mode==='live'&&data.quality==='edit-standard'&&data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',400);
+      const prompt=generationPrompt(data);if(prompt.length>2500)return fail('Houd je beschrijving korter.',400);
       // The verified media service limits concurrent work. Resolve assets one at
       // a time so one user's photo/video cannot exhaust that limit itself.
       let assets; try {assets=[];for(const id of [data.imageId,data.videoId,...(data.faceId?[data.faceId]:[]),...data.angleIds])assets.push(await services.assets.getOwned(user.id,id));} catch {return fail('Bestanden zijn tijdelijk niet beschikbaar.',503);}
@@ -136,7 +149,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(services.mode!=='live'&&services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
       // Store only owned asset identifiers and hashes; sending bytes to fal is
       // deferred until the customer confirms the quote and funds are reserved.
-      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt:data.quality==='edit-standard'?editPrompt(data.prompt,Boolean(data.faceId)):data.steadyCamera ? CAMERA_PROMPT + Array.from(data.prompt).slice(0,1300).join('') : data.prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
+      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
       return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null&&!(services.mode==='live'&&quote.fundingKind==='credits')?{providerEstimateUsdMicros}:{})},201);
