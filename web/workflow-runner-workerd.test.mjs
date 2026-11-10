@@ -120,7 +120,7 @@ test('GET polling may persist preclean output and prepare private client artifac
   f.env.RIG_OWNER_CLEANUP_VALIDATION_ENABLED='no';f.answers.set('provider-source-cleanup',{state:'completed',requestId:'provider-source-cleanup',result:{fixture:true}});
   const stage=await f.poll();assert.equal(stage.state,'awaiting_client_processing');assert.equal(stage.clientProcessing.artifacts.clean.sha256,clips.clean.meta.sha256);assert.equal(f.stored.length,1);
   await f.poll();await f.runner.get(f.identity);assert.equal(f.submitted.length,1);assert.equal((await f.workflow.get(f.identity)).steps[1].state,'prepared');
-  assert.ok(!JSON.stringify(stage).includes('rig-workflow-results/'));assert.ok(!JSON.stringify(stage).includes('https://v3b.fal.media'));
+  assert.ok(!JSON.stringify(stage).includes('rig-workflow-results/'));const exposedUrls=JSON.stringify(stage).match(/https?:\/\/[^"\\\s]+/g)??[];assert.ok(!exposedUrls.some(value=>new URL(value).origin==='https://v3b.fal.media'));assert.equal(exposedUrls.length,0,'The client manifest exposes no provider or private-storage URL');
  }finally{await f.mf.dispose();}
 });
 test('upload and GET remain unpaid; only explicit exact-stage POST uses the composed bytes for Recast',async()=>{
