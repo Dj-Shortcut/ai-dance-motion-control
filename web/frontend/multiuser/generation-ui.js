@@ -11,6 +11,8 @@
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je gekozen foto’s, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   const falRecastNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null,ownerVerifying=false;
+  const setActive=value=>{active=value;document.dispatchEvent(new Event('rig-generation-busy-change'));};
+  window.rigGenerationBusy=()=>active||ownerVerifying;
   let quotePortraitURL=null;
   function clearQuotePortrait(){
     const preview=el('quotePortraitPreview'),image=el('quotePortraitImage');if(preview)preview.hidden=true;if(image)image.removeAttribute('src');
@@ -24,7 +26,7 @@
     quotePortraitURL=URL.createObjectURL(new Blob([media.image.blob],{type:'image/jpeg'}));
     el('quotePortraitImage').src=quotePortraitURL;el('quotePortraitPreview').hidden=false;
   }
-  window.rigGenerationDispose=()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;clearQuotePortrait();if(el('confirmGeneration'))el('confirmGeneration').hidden=true;};
+  window.rigGenerationDispose=()=>{window.rigTrialDispose?.();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;clearQuotePortrait();if(el('confirmGeneration'))el('confirmGeneration').hidden=true;};
   window.addEventListener('pagehide',clearQuotePortrait);
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
@@ -58,12 +60,12 @@
   }
   async function getQuote() {
     if(active)return;clearQuotePortrait();if(window.rigScopedStorage.getItem('rig-generation-pending') || window.rigScopedStorage.getItem('rig-generation-job')){el('uploadDialog').close();el('quoteDialog').showModal();note('Er is al een opdracht gestart. Controleer eerst de status.');el('checkGeneration').hidden=false;return;}const media=window.rigPreparedMedia();if(!media){note('Bereid eerst je beelden voor.');return;}
-    active=true;quote=null;el('confirmUpload').disabled=true;el('uploadDialog').close();el('quoteDialog').showModal();el('confirmGeneration').hidden=true;
+    setActive(true);quote=null;el('confirmUpload').disabled=true;el('uploadDialog').close();el('quoteDialog').showModal();el('confirmGeneration').hidden=true;
     showReviewedType(media.quality);
     try {
       const recast=media.quality==='human-recast',edit=recast||media.quality==='edit-standard',limit=edit?15:30,min=recast?6:3;
       if(edit&&(!Array.isArray(window.rigVideoQualities)||!window.rigVideoQualities.includes(media.quality)))throw new Error('Video bewerken is momenteel niet beschikbaar.');
-      const seconds=Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<min||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen ${min} en ${limit}.`);
+      const seconds=media.selectedSeconds??Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<min||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen ${min} en ${limit}.`);
       if(!media.prompt?.trim()||media.prompt.trim().length>1900)throw new Error('Beschrijf eerst kort wat je wilt maken.');
       if(edit&&media.steady)throw new Error('Bij videobewerking volgt de camera je bronvideo.');
       if(recast&&media.keepSound!==true)throw new Error('Deze bewerking behoudt het originele geluid. Bereid je video opnieuw voor.');
@@ -119,24 +121,24 @@
       if(edit)note(el('quoteMessage').textContent+'\n\n'+(recast?falRecastNotice:falTransferNotice));
       el('confirmGeneration').hidden=false;
     } catch(error) { quote=null;clearQuotePortrait();note(error.message || 'De prijs kon niet worden berekend.'); }
-    finally { active=false;el('confirmUpload').disabled=false; }
+    finally { setActive(false);el('confirmUpload').disabled=false; }
   }
   async function recoverGeneration() {
-    if(active)return;active=true;el('checkGeneration').disabled=true;
+    if(active)return;setActive(true);el('checkGeneration').disabled=true;
     try {
       let id=window.rigScopedStorage.getItem('rig-generation-job');
       if(!id){const raw=window.rigScopedStorage.getItem('rig-generation-pending');if(!raw){note('Er is geen eerdere opdracht om te controleren.');return;}let entry;try{entry=JSON.parse(raw)}catch{throw new Error('De opgeslagen opdracht kan niet worden gelezen.')}
         if(!/^[A-Za-z0-9_-]{1,100}$/.test(entry.quoteId||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(entry.idempotencyKey||''))throw new Error('De opgeslagen opdracht kan niet worden gelezen.');
         const data=await call(`/api/generation-intents/${encodeURIComponent(entry.idempotencyKey)}/reconcile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:entry.quoteId})});
         if(data.state==='canceled'){window.rigScopedStorage.removeItem('rig-generation-pending');el('checkGeneration').hidden=true;note('De opdracht is niet gestart. Je kunt opnieuw een prijs berekenen.');return;}
-        if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');id=data.id;window.rigScopedStorage.setItem('rig-generation-job',id);window.rigScopedStorage.removeItem('rig-generation-pending');}
+        if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');id=data.id;window.rigScopedStorage.setItem('rig-generation-job',id);window.rigScopedStorage.removeItem('rig-generation-pending');document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id,trialToken:window.rigTrialTokenForQuote?.(entry.quoteId)??null}}));}
       await follow(id);
-    }catch(error){note(`${error.message || 'De opdrachtstatus is onbekend.'} Start geen nieuwe opdracht voordat dit is opgelost.`)}finally{refreshBalance();active=false;el('checkGeneration').disabled=false;}
+    }catch(error){note(`${error.message || 'De opdrachtstatus is onbekend.'} Start geen nieuwe opdracht voordat dit is opgelost.`)}finally{refreshBalance();setActive(false);el('checkGeneration').disabled=false;}
   }
   async function confirm() {
     if(active||!quote)return;
     if(window.rigPreparedMedia()!==quote.media||quote.funding!==window.rigVideoFunding||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
-    active=true;el('confirmGeneration').disabled=true;
+    setActive(true);el('confirmGeneration').disabled=true;
     const current=quote,requestId=current.idempotencyKey??crypto.randomUUID(),ownFal=current.funding==='owner-provider';
     const binding={request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage};
     const sessionCurrent=()=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&typeof binding.active==='function'&&binding.active()===true;
@@ -152,14 +154,14 @@
         if(!quoteCurrent()){quote=null;note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
         if(!verification)throw new Error('De beveiligingscontrole is niet afgerond. De video is niet gestart.');
       }
-      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));quote=null;clearQuotePortrait();submitted=true;
+      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));document.dispatchEvent(new CustomEvent('rig-generation-intent',{detail:{trialToken:current.media.trialToken??null,quoteId:current.id}}));quote=null;clearQuotePortrait();submitted=true;
       note('Je opdracht wordt gestart…');
       const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,...(current.approvalToken?{approvalToken:current.approvalToken}:{}),...(verification?{verification}:{})})});
       if(ownFal&&!sessionCurrent())return;
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
       if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
-      window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
+      document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       await follow(data.id);
     } catch(error) {
       if(ownFal&&!sessionCurrent())return;
@@ -173,16 +175,17 @@
         note('Deze video is niet gestart: het gekozen videotype past niet bij je referentie. Kies zelf een passend videotype, bereid je beelden opnieuw voor en controleer de nieuwe prijs.');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;
       }else{note(`${error.message || 'De opdrachtstatus is onbekend.'} Start niet opnieuw voordat de status is gecontroleerd.`);el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;}
     }
-    finally{ownerVerifying=false;active=false;if(!ownFal||sessionCurrent()){refreshBalance();el('confirmGeneration').disabled=false;}}
+    finally{ownerVerifying=false;setActive(false);if(!ownFal||sessionCurrent()){refreshBalance();el('confirmGeneration').disabled=false;}}
   }
   async function follow(id) {
     for(let i=0;i<180;i++) {
       const data=await call(`/api/generations/${encodeURIComponent(id)}`);
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');note('Je video is klaar.');return;
+        const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');note('Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id}}));return;
       }
       if(data.state==='failed'){
+        document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));
         const providerMessage=providerFailureMessage(data),finalized=failureFinalized(data);
         if(finalized)window.rigScopedStorage.removeItem('rig-generation-job');
         el('checkGeneration').hidden=finalized;
@@ -193,8 +196,8 @@
     }
     note('Je opdracht loopt nog. Je kunt de status later opnieuw bekijken.');
   }
-  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;}}catch{}}
-  el('recentVideo').addEventListener('click',async()=>{if(!recentId||active)return;el('quoteDialog').showModal();active=true;try{await follow(recentId)}catch{note('Je video is momenteel niet beschikbaar.')}finally{active=false}});
+  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id:data.job.id,popup:false}}));}}catch{}}
+  el('recentVideo').addEventListener('click',async()=>{if(!recentId||active)return;el('quoteDialog').showModal();setActive(true);try{await follow(recentId)}catch{note('Je video is momenteel niet beschikbaar.')}finally{setActive(false)}});
   // The Mac app shows a non-binding fal USD estimate before submission.
   // This preliminary preview uses only browser metadata and the fixed dated
   // reference rate from the test backend; it never authorizes a charge.
@@ -204,7 +207,7 @@
     if(!mayShowPricePreview()){target.hidden=true;target.textContent='';return;}
     const duration=Number(el('duration').value), start=Number(el('start').value);
     const quality=typeof window.rigGenerationQuality==='function'?window.rigGenerationQuality():document.querySelector('input[name="quality"]:checked')?.value;
-    if(!el('motionInput').files.length || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<(quality==='human-recast'?6:3) || duration>(['edit-standard','human-recast'].includes(quality)?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
+    if(!(typeof window.rigMotionSelected==='function'?window.rigMotionSelected():el('motionInput').files.length) || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<(quality==='human-recast'?6:3) || duration>(['edit-standard','human-recast'].includes(quality)?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
     try {
       const params=new URLSearchParams({quality,duration:String(duration)});
       const key=`${window.rigVideoFunding}:${window.rigVideoMode}:${params}`;
@@ -261,7 +264,7 @@
   if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){el('quoteDialog').showModal();note('Een eerdere opdracht is nog niet afgerond. Controleer de status voordat je een nieuwe start.');el('checkGeneration').hidden=false;}
   document.addEventListener('rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
   document.addEventListener('rig-prepared-ready',async()=>{
-    if(active)return;active=true;
+    if(active)return;setActive(true);
     try {
       if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){el('quoteDialog').showModal();note('Een eerdere opdracht wordt nog gecontroleerd.');el('checkGeneration').hidden=false;return;}
       const data=await call('/api/generations/recent');
@@ -271,7 +274,7 @@
       }
       el('uploadDialog').showModal();
     } catch(error) {el('quoteDialog').showModal();note(error.message||'Een eerdere opdracht kon niet worden gecontroleerd.');el('checkGeneration').hidden=true;}
-    finally {active=false;}
+    finally {setActive(false);}
   });el('closeUpload').addEventListener('click',()=>el('uploadDialog').close());el('confirmUpload').addEventListener('click',getQuote);
   el('quoteDialog').addEventListener('close',clearQuotePortrait);el('closeQuote').addEventListener('click',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});el('confirmGeneration').addEventListener('click',confirm);el('checkGeneration').addEventListener('click',recoverGeneration);
 })();

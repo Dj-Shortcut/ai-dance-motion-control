@@ -70,10 +70,10 @@ test('a five-second trial uses the existing explicit payment and generation flow
  d.getElementById('start').value='2.3';d.getElementById('start').dispatchEvent(new alice.win.Event('change'));
  d.getElementById('motionCropButton').click();d.getElementById('cropX').value='10';d.getElementById('cropW').value='80';d.getElementById('applyCrop').click();
  d.getElementById('prepare').click();assert.equal(d.getElementById('briefDialog').open,true);d.getElementById('tryShortVideo').click();await waitFor(()=>d.getElementById('uploadDialog').open);
- assert.deepEqual(alice.prepared,[{crop:{x:10,y:0,w:80,h:100},start:2.3,duration:5}]);assert.equal(alice.requested.includes('/api/generations'),false);
+ assert.equal(d.getElementById('duration').value,'8');assert.deepEqual(alice.prepared,[{crop:{x:10,y:0,w:80,h:100},start:2.3,duration:5}]);assert.equal(alice.requested.includes('/api/generations'),false);
  d.getElementById('confirmUpload').click();await waitFor(()=>!d.getElementById('confirmGeneration').hidden);
  assert.match(d.getElementById('quoteMessage').textContent,/1,00/);assert.equal(alice.requested.includes('/api/generations'),false);assert.equal((await (await alice.binding.request('/api/payments/balance')).json()).balance,500);
- d.getElementById('confirmGeneration').click();await waitFor(()=>d.getElementById('quoteMessage').textContent==='Je video is klaar.');
+ d.getElementById('confirmGeneration').click();await waitFor(()=>d.getElementById('quoteMessage').textContent.includes('Je proefje is klaar.'));
  assert.match(d.getElementById('resultVideo').src,/^blob:https:\/\/rig\.local\//);
  assert.equal((await (await alice.binding.request('/api/payments/balance')).json()).balance,400);
  assert.equal((await (await bob.binding.request('/api/payments/balance')).json()).balance,0);

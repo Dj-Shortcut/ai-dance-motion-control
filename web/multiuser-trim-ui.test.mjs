@@ -119,9 +119,9 @@ test('a five-second trial preserves the chosen start, crops, description, qualit
    assert.equal(f.prepared.length,1);assert.equal(f.prepared[0].duration,5);assert.equal(f.prepared[0].start,2.3);
    assert.deepEqual(f.prepared[0].crop,{x:10,y:0,w:80,h:100});assert.deepEqual(imageCrops,[{x:15,y:0,w:80,h:100}]);
    assert.equal(f.prepared[0].keepSound,false);assert.equal(f.win.rigPreparedMedia().prompt,prompt);assert.equal(f.win.rigPreparedMedia().quality,mode==='edit'?'edit-standard':'pro');
-   assert.equal(f.byId('duration').value,'5');assert.equal(f.byId('start').value,'2.3');
+   assert.equal(f.byId('duration').value,'10','the full selection remains intact');assert.equal(f.win.rigPreparedMedia().selectedSeconds,5);assert.equal(f.byId('start').value,'2.3');
    f.byId(mode==='edit'?'motionModeButton':'editModeButton').click();f.byId(mode==='edit'?'editModeButton':'motionModeButton').click();
-   assert.equal(f.byId('duration').value,'5','the deliberate trial length is remembered for that mode');
+   assert.equal(f.byId('duration').value,'10','the full duration is remembered for that mode');
   }finally{f.close()}
  }
 });

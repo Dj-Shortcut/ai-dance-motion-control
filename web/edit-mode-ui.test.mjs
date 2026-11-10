@@ -26,7 +26,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   if(path==='/api/generations/recent')value={job:null};
   else if(path==='/api/sponsor-invitations/status')value={state:'eligible',remainingCents:500};
   else if(path==='/api/assets')value={id:'asset'+(++uploads),status:'ready'};
-  else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(quotePolicy==='echo'?(input.transferPolicy?{transferPolicy:input.transferPolicy}:{}):quotePolicy===null?{}:{transferPolicy:quotePolicy}),...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
+  else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=w.rigPreparedMedia().selectedSeconds??Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(quotePolicy==='echo'?(input.transferPolicy?{transferPolicy:input.transferPolicy}:{}):quotePolicy===null?{}:{transferPolicy:quotePolicy}),...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
   else if(path==='/api/generations')value=polledFailure?{id:'job-edit',state:'queued',priceCents:price,currency:'EUR'}:{id:'job-edit',state:'failed',...(refundConfirmed===undefined?{}:{refundConfirmed}),...(failureCode?{failureCode}:{})};
   else if(path==='/api/generations/job-edit')value={id:'job-edit',state:'failed',priceCents:price,currency:'EUR',...(refundConfirmed===undefined?{}:{refundConfirmed}),...(failureCode?{failureCode}:{})};
   else if(path.startsWith('/api/estimate/fal?')){const params=new URL(path,w.location.origin).searchParams;value={quality:params.get('quality'),durationSeconds:Number(params.get('duration')),billedSeconds:Math.ceil(Number(params.get('duration'))),customerProposal:{currency:'EUR',priceCents:100,binding:false}};}
@@ -262,7 +262,7 @@ test('a five-second trial invalidates a longer reviewed quote and requires a new
    await waitFor(()=>f.el('uploadDialog').open&&f.w.rigPreparedMedia()!==previousMedia);
    assert.equal(f.calls.filter(([path])=>path==='/api/assets').length,uploads,'the trial does not automatically upload prepared media');
    assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);assert.equal(f.prepared.at(-1)[2],7.5);assert.equal(f.prepared.at(-1)[3],5);
-   await waitFor(()=>f.calls.some(([path])=>path.startsWith('/api/estimate/fal?')&&new URL(path,f.w.location.origin).searchParams.get('duration')==='5'));
+   assert.equal(f.el('duration').value,'12','a trial does not replace the chosen full duration');assert.equal(f.w.rigPreparedMedia().selectedSeconds,5);
    f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
    assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.match(f.el('quoteMessage').textContent,/5\.00 seconden/);
    assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);

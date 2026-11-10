@@ -5,6 +5,35 @@ all planned provider processing included in the price before generation. The
 checkbox must control actual processing; adding only a prompt or a disabled
 visual control does not implement this request.
 
+## Next capability validation
+
+Live schemas also admit a targeted chain:
+`fal-ai/sam-3/video` (`prompt: "text"`, `apply_mask: false`) supplies a text
+mask to `fal-ai/ltx-2.3-quality/inpaint`; `fal-ai/ffmpeg-api/merge-audio-video`
+can then reuse the original video's audio. This is schema compatibility, not
+proof of usable masks, text coverage, unchanged dimensions or preserved timing.
+
+Before integrating this chain, inspect a mask from the actual completed owner
+clip. Stop before inpainting if its polarity, coverage or frame alignment is
+wrong. Request the measured frame count and FPS; never guess padding or round
+the source to a different duration. Stop before remuxing if LTX changes the
+required dimensions or timing. Its current schema allows 9–481 frames and does
+not declare a source-size preservation rule. It must not silently reduce a
+1080p result to a lower resolution.
+
+Observed live billing on 2026-11-10: SAM USD0.005 per16 input frames, LTX
+USD0.0024075 per megapixel, audio merge USD0.0002 per second. These are different
+billing dimensions. A later quote must bind real media metadata, rounding and
+all steps; a per-second multiplication alone is invalid. The prepared owner
+validation uses an existing completed clip, without purchasing its base
+generation again, and requires the owner's displayed-cost approval first.
+No paid validation or website cleanup is established by this document.
+
+Sources:
+- https://fal.ai/models/fal-ai/sam-3/video/api
+- https://fal.ai/models/fal-ai/ltx-2.3-quality/inpaint/api
+- https://fal.ai/models/fal-ai/ffmpeg-api/merge-audio-video/api
+
 ## Researched provider candidate
 
 Fal's `bria/video/erase/prompt` is a dedicated detection/masking/inpainting step.

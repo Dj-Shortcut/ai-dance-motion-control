@@ -56,6 +56,28 @@ correct identity, motion or framing; real-output acceptance is still required.
 Optional priced text removal is tracked in `text-removal-plan.md`; it is not yet
 an available processing stage or a claim that every output is text-free.
 
+## Continue after a short trial
+
+A trial is its own explicitly priced generation, not a replacement for the
+user's selected full duration. Keep the full draft while preparing a separate
+five-second Motion/Edit working clip or six-second Recast working clip. Upload
+and price the actual working clip, never the full-duration input by mistake.
+
+After completion, offer `Maak volledige video` in the result and confirmation
+popup. It restores the chosen files, start, duration, crop, portrait/references,
+description, audio and model, then returns to the ordinary preparation, fresh
+quote and explicit confirmation. The trial is billed separately; continuing
+never automatically purchases or submits the full generation. A completed
+older job without a saved full draft must ask the user to choose a longer
+duration rather than inventing their previous selection.
+
+The same tab can retain references to the original local File objects. A real
+reload retains only bounded account-scoped continuation metadata; it does not
+silently persist large original videos or private media URLs. If the originals
+are no longer held, request explicit re-selection and preserve the settings
+that can be safely restored. Completion of an earlier job must not overwrite
+a different draft the user has since started.
+
 ## Claims that are not separate processing steps
 
 Keeping source audio does not establish correct lip synchronization. The current
