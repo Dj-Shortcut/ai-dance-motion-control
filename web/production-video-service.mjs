@@ -18,7 +18,13 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
  const context=productionContext??await createProductionGenerationContext(env);
  if(!USER.test(trustedUserId||'')||!isProductionGenerationContext(context,{db:env.PRODUCTION_DB})||context.env.PRODUCTION_DB!==env.PRODUCTION_DB)return unavailable;
  const funding=productionFundingKind(context,trustedUserId);
- const mapped={...context.env,RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN,RIG_R2_INPUTS_ENABLED:'no',RIG_O3_INLINE_INPUTS_ENABLED:'no'};
+ // A private validation switch may enable Edit only for the existing pinned
+ // production owner. The immutable production capability and direct-provider
+ // funding must agree with the current server pin; request data cannot opt in.
+ // This changes model availability only, never price/transfer/passkey consent.
+ const ownerEditValidation=funding==='owner-provider'&&trustedUserId===env.RIG_PRODUCTION_OWNER_USER_ID&&env.RIG_OWNER_EDIT_VALIDATION_ENABLED==='yes'&&context.env.RIG_OWNER_EDIT_VALIDATION_ENABLED==='yes';
+ const publicEditEnabled=env.RIG_EDIT_ENABLED==='yes'&&context.env.RIG_EDIT_ENABLED==='yes';
+ const mapped={...context.env,RIG_EDIT_ENABLED:publicEditEnabled||ownerEditValidation?'yes':'no',RIG_SITES_BRIDGE_ORIGIN:env.RIG_PRODUCTION_BRIDGE_ORIGIN,RIG_R2_INPUTS_ENABLED:'no',RIG_O3_INLINE_INPUTS_ENABLED:'no'};
  const verifyTenant=async()=>{
   const current=await validateProductionTenant(env);
   return env.RIG_PRODUCTION_VIDEO_ENABLED==='yes'&&current?.DB===mapped.DB&&current.RIG_PUBLIC_ORIGIN===mapped.RIG_PUBLIC_ORIGIN;

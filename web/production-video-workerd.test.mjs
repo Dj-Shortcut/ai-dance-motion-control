@@ -15,7 +15,7 @@ const BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 const ALICE='u-12345678-1234-4123-8123-123456789abc',BOB='u-22345678-1234-4123-8123-123456789abc';
 const quoteArgs={model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:100,pricingVersion:'paid-v1',durationSeconds:4,input:{data:{quality:'pro'},providerEstimateUsdMicros:400000}};
 async function migrate(db,file){const sql=(await readFile(new URL(file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const q of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(q).run()}
-async function fixture({owner=false}={}){
+async function fixture({owner=false,editVideo=false}={}){
  const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'test',PRODUCTION_DB:'production'},r2Buckets:['BUCKET']});
  const db=await mf.getD1Database('PRODUCTION_DB'),legacy=await mf.getD1Database('DB'),bucket=await mf.getR2Bucket('BUCKET');
  await migrate(db,'./production-schema.sql');await migrate(legacy,'./cloudflare-migrations/0001_test_baseline.sql');await migrate(legacy,'./closed-payment-migrations/0004_test_media_work_lock.sql');
@@ -24,24 +24,25 @@ async function fixture({owner=false}={}){
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_TESTPROFILE',BRIDGE+'/api/payments/webhook').run();
  await legacy.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1000)').bind('legacy-only',ALICE).run();
  const image=new Uint8Array(await readFile(new URL('./test/fixtures/input.jpg',import.meta.url))),video=new Uint8Array(await readFile(new URL('./test/fixtures/silent.mp4',import.meta.url)));
- const assets=new Map(),cdn=new Map();let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null;
+ const assets=new Map(),cdn=new Map(),temporaryCdn=new Set();let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null,temporaryResult=false;
  async function source(kind,owner=ALICE){const bytes=kind==='image'?image:video,id=crypto.randomUUID(),sha256=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');assets.set(id,{id,kind,bytes,owner,sha256});return id}
  const imageId=await source('image'),videoId=await source('video');
  const media={async fetch(req){mediaCalls++;const u=new URL(req.url);if(req.headers.get('authorization')!=='Bearer '+'x'.repeat(40))return new Response(null,{status:401});
   if(req.method==='POST'&&u.pathname==='/v1/normalize/image'){const user=req.headers.get('x-rig-user'),id=await source('image',user),a=assets.get(id);return Response.json({id,ownerId:user,kind:'image',mime:'image/jpeg',sha256:a.sha256,size:a.bytes.length,width:360,height:360},{status:201})}
-  const id=u.pathname.split('/').at(-1),a=assets.get(id);if(!a||req.headers.get('x-rig-user')!==a.owner)return new Response(null,{status:404});return new Response(a.bytes.slice(),{headers:{'content-type':a.kind==='image'?'image/jpeg':'video/mp4','content-length':String(a.bytes.length),'x-rig-asset-kind':a.kind,'x-rig-sha256':a.sha256,'x-rig-width':'360','x-rig-height':'360',...(a.kind==='video'?{'x-rig-duration-seconds':'4','x-rig-fps':'30'}:{})}})}};
+  const id=u.pathname.split('/').at(-1),a=assets.get(id);if(!a||req.headers.get('x-rig-user')!==a.owner)return new Response(null,{status:404});return new Response(a.bytes.slice(),{headers:{'content-type':a.kind==='image'?'image/jpeg':'video/mp4','content-length':String(a.bytes.length),'x-rig-asset-kind':a.kind,'x-rig-sha256':a.sha256,'x-rig-width':a.kind==='video'&&editVideo?'1280':'360','x-rig-height':a.kind==='video'&&editVideo?'720':'360',...(a.kind==='video'?{'x-rig-duration-seconds':editVideo?'5':'4','x-rig-fps':'30'}:{})}})}};
  const env={DB:legacy,PRODUCTION_DB:db,BUCKET:{get:(...args)=>bucket.get(...args),head:(...args)=>bucket.head(...args),put:(key,bytes,options)=>{assert.equal(options.onlyIf.get('If-None-Match'),'*');return bucket.put(key,bytes,{...options,onlyIf:{etagDoesNotMatch:'*'}})}},RIG_MEDIA:media,RIG_MEDIA_SECRET:'x'.repeat(40),FAL_KEY:'fake-provider-key',RIG_CLOSED_VIDEO_ENABLED:'yes',RIG_PRICE_STANDARD:'20',RIG_PRICE_PRO:'25',RIG_PRICE_EDIT:'20',RIG_EDIT_ENABLED:'yes',RIG_PRICE_VERSION:'paid-v1',RIG_CLOSED_VIDEO_MAX_CENTS:'800',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'6000000',RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_TESTPROFILE',RIG_PRODUCTION_ENVIRONMENT_ID:'prod-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[{"id":"five","amountCents":500,"credits":500}]'};
  if(owner){env.RIG_PRODUCTION_OWNER_USER_ID=ALICE;await installTestOwnerCredential(db,ALICE);}
  const provider=async(input,init={})=>{const u=new URL(String(input)),h=new Headers(init.headers);
-  if(u.origin==='https://rest.fal.ai'&&u.pathname==='/storage/upload/initiate'){const id=crypto.randomUUID(),url='https://v3b.fal.media/files/b/fixture/'+id;cdn.set(url,null);return Response.json({upload_url:'https://v3b.fal.media/upload/'+id,file_url:url})}
+  if(u.origin==='https://rest.fal.ai'&&u.pathname==='/storage/upload/initiate'){const id=crypto.randomUUID(),url='https://v3b.fal.media/files/b/fixture/'+id;cdn.set(url,null);if(h.get('x-fal-object-lifecycle-preference')==='{"expiration_duration_seconds":86400}')temporaryCdn.add(url);return Response.json({upload_url:'https://v3b.fal.media/upload/'+id,file_url:url})}
   if(u.origin==='https://v3b.fal.media'&&u.pathname.startsWith('/upload/')&&init.method==='PUT'){const value='https://v3b.fal.media/files/b/fixture/'+u.pathname.split('/').at(-1);cdn.set(value,{bytes:new Uint8Array(await init.body.arrayBuffer()),mime:h.get('content-type')});if(uploadPrice!==null)priceRate=uploadPrice;return new Response('OK')}
   if(u.origin==='https://rest.fal.ai'&&u.pathname==='/storage/files/acl')return Response.json({default:'forbid',rules:[]});
   if(u.origin==='https://rest.fal.ai'&&u.pathname==='/storage/auth/token')return Response.json({token:'fixture-token'});
   if(u.origin==='https://v3b.fal.media'&&u.pathname.endsWith('/sign'))return new Response(u.origin+u.pathname.slice(0,-5)+'?identity=fixture');
   if(u.origin==='https://v3b.fal.media'&&u.search==='?identity=fixture'){const c=cdn.get(u.origin+u.pathname);if(!c)throw Error('missing CDN input');return new Response(c.bytes.slice(),{headers:{'content-type':c.mime,'content-length':String(c.bytes.length)}})}
-  if(u.origin==='https://v3b.fal.media'&&u.pathname==='/files/b/fixture/result.mp4'&&h.get('authorization')==='Bearer fixture-token')return new Response(video.slice(),{headers:{'content-type':'video/mp4','content-length':String(video.length)}});
+  if(u.origin==='https://v3b.fal.media'&&temporaryCdn.has(u.origin+u.pathname)&&!u.search){const c=cdn.get(u.origin+u.pathname);if(!c)throw Error('missing temporary CDN input');return new Response(c.bytes.slice(),{headers:{'content-type':c.mime,'content-length':String(c.bytes.length)}})}
+  if(u.origin==='https://v3b.fal.media'&&u.pathname==='/files/b/fixture/result.mp4'&&(h.get('authorization')==='Bearer fixture-token'||temporaryResult))return new Response(video.slice(),{headers:{'content-type':'video/mp4','content-length':String(video.length)}});
   if(u.origin==='https://v3b.fal.media')return new Response(null,{status:403});
-  if(u.origin==='https://queue.fal.run'&&init.method==='POST'){dispatches++;if(providerOutcome==='unknown')throw Error('Lost response after submission');return Response.json({request_id:'provider-request-'+dispatches})}
+  if(u.origin==='https://queue.fal.run'&&init.method==='POST'){dispatches++;temporaryResult=temporaryCdn.has(JSON.parse(init.body).video_url);if(providerOutcome==='unknown')throw Error('Lost response after submission');return Response.json({request_id:'provider-request-'+dispatches})}
   if(u.origin==='https://queue.fal.run'&&u.pathname.endsWith('/status'))return Response.json({status:'COMPLETED',request_id:'provider-request-'+dispatches,...(providerOutcome==='failure'?{error:'Fixture terminal failure'}:{})});
   if(u.origin==='https://queue.fal.run')return Response.json({video:{url:'https://v3b.fal.media/files/b/fixture/result.mp4'}});
   throw Error('Unexpected provider destination');
@@ -124,6 +125,91 @@ test('production feature off, wrong tenant and explicit test DB cannot prepare o
  const f=await fixture();try{
   for(const extra of [{RIG_PRODUCTION_VIDEO_ENABLED:'no'},{PRODUCTION_DB:f.legacy},{RIG_PRODUCTION_SITE_ORIGIN:'https://attacker.example'}]){const h=await f.service(ALICE,extra);assert.equal((await f.call(h,'/api/video-config')).status,503);assert.equal((await f.call(h,'/api/generations',{quoteId:'q',idempotencyKey:'k'})).status,503)}
   assert.deepEqual(f.stats(),{mediaCalls:0,dispatches:0});assert.equal(await f.balance(),0);
+ }finally{await f.mf.dispose()}
+});
+
+const temporaryEdit={quality:'edit-standard',prompt:'Replace only the person with my identity. Keep the outdoor scene and source camera.',keepSound:true,steadyCamera:false,transferPolicy:'fal-temporary-links-v1'};
+test('private Edit validation requires the exact pinned production owner and an explicit server switch',async()=>{
+ const f=await fixture({owner:true,editVideo:true});try{
+  const selection={...temporaryEdit,imageId:f.imageId,videoId:f.videoId};
+  for(const flag of [undefined,'no','true',true]){
+   const h=await f.service(ALICE,{RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:flag});
+   assert.deepEqual((await(await f.call(h,'/api/video-config')).json()).qualities,['standard','pro']);
+   assert.equal((await f.call(h,'/api/estimate/fal?quality=edit-standard&duration=5')).status,400);
+   assert.equal((await f.call(h,'/api/generation-quotes',selection)).status,503);
+  }
+  const flags={RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:'yes'};
+  const owner=await f.service(ALICE,flags);assert.deepEqual((await(await f.call(owner,'/api/video-config')).json()).qualities,['standard','pro','edit-standard']);
+  for(const [user,extra] of [[BOB,{}],[ALICE,{RIG_PRODUCTION_OWNER_USER_ID:BOB}]]){
+   const customer=await f.service(user,{...flags,...extra});
+   const forged=new Request(SITE+'/api/video-config',{headers:{'x-rig-user':ALICE,'x-rig-owner':'true'}});
+   const config=await(await customer(forged)).json();assert.equal(config.funding,'credits');assert.deepEqual(config.qualities,['standard','pro']);
+   assert.equal((await f.call(customer,'/api/estimate/fal?quality=edit-standard&duration=5')).status,400);
+   assert.equal((await f.call(customer,'/api/generation-quotes',{...selection,ownerId:ALICE,funding:'owner-provider',RIG_OWNER_EDIT_VALIDATION_ENABLED:'yes'})).status,503);
+  }
+  const context=await createProductionGenerationContext({...f.env,...flags});
+  const forged=await createProductionVideoService({...f.env,...flags},{trustedUserId:ALICE,productionContext:{...context}});
+  assert.equal((await f.call(forged,'/api/video-config')).status,503);
+  // A private switch supplied outside the validated immutable context is not
+  // enough either, even when the caller supplies the correct owner UUID.
+  const noValidationContext=await createProductionGenerationContext({...f.env,RIG_EDIT_ENABLED:'no'});
+  const mismatch=await createProductionVideoService({...f.env,...flags},{trustedUserId:ALICE,productionContext:noValidationContext});
+  assert.deepEqual((await(await f.call(mismatch,'/api/video-config')).json()).qualities,['standard','pro']);
+  // A public reduction must win over a previously created capability, and a
+  // newer server flag cannot enable a capability which did not allow it.
+  for(const [contextFlag,currentFlag] of [['yes','no'],['no','yes']]){
+   const stale=await createProductionGenerationContext({...f.env,RIG_EDIT_ENABLED:contextFlag,RIG_OWNER_EDIT_VALIDATION_ENABLED:'yes'});
+   const customer=await createProductionVideoService({...f.env,...flags,RIG_EDIT_ENABLED:currentFlag},{trustedUserId:BOB,productionContext:stale});
+   assert.deepEqual((await(await f.call(customer,'/api/video-config')).json()).qualities,['standard','pro']);
+   assert.equal((await f.call(customer,'/api/generation-quotes',selection)).status,503);
+  }
+  const staleOwner=await createProductionGenerationContext(f.env);
+  const noOwnerFlagInContext=await createProductionVideoService({...f.env,...flags},{trustedUserId:ALICE,productionContext:staleOwner});
+  assert.deepEqual((await(await f.call(noOwnerFlagInContext,'/api/video-config')).json()).qualities,['standard','pro']);
+  assert.deepEqual(f.stats(),{mediaCalls:0,dispatches:0});assert.equal(await f.balance(),0);
+ }finally{await f.mf.dispose()}
+});
+
+test('pausing public Edit blocks new and cached customer requests before spending while Motion and purchased credits remain usable',async()=>{
+ const f=await fixture({editVideo:true});try{
+  await f.fund();const selection={...temporaryEdit,imageId:f.imageId,videoId:f.videoId},open=await f.service();
+  const quoted=await f.call(open,'/api/generation-quotes',selection);assert.equal(quoted.status,201,await quoted.clone().text());const quote=await quoted.json();
+  const paused=await f.service(ALICE,{RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:'yes'}),before=f.stats();
+  assert.deepEqual(await(await f.call(paused,'/api/video-config')).json(),{enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro']});
+  assert.equal((await f.call(paused,'/api/generation-quotes',selection)).status,503);
+  assert.equal((await f.call(paused,'/api/generations',{quoteId:quote.id,idempotencyKey:'cached-customer-edit',transferConsent:'fal-temporary-links-v1'})).status,409);
+  assert.deepEqual(f.stats(),before);assert.equal(await f.balance(),500);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);
+  const estimate=await f.call(paused,'/api/estimate/fal?quality=pro&duration=5');assert.equal(estimate.status,200);assert.equal((await estimate.json()).customerProposal.currency,'EUR');
+  const motion=await f.call(paused,'/api/generation-quotes',{imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false});assert.equal(motion.status,201,await motion.clone().text());
+  assert.equal(await f.balance(),500);assert.equal(f.stats().dispatches,0);
+ }finally{await f.mf.dispose()}
+});
+
+test('five-second owner Edit validation keeps the USD price, transfer consent and passkey gate and preserves accepted-job recovery',async()=>{
+ const f=await fixture({owner:true,editVideo:true});try{
+  const flags={RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:'yes'},env={...f.env,...flags},h=await f.service(ALICE,flags);
+  const selection={...temporaryEdit,imageId:f.imageId,videoId:f.videoId};
+  const estimate=await f.call(h,'/api/estimate/fal?quality=edit-standard&duration=5');assert.equal(estimate.status,200);assert.equal((await estimate.json()).providerEstimate.usdMicros,700000);
+  const quoted=await f.call(h,'/api/generation-quotes',selection);assert.equal(quoted.status,201,await quoted.clone().text());const q=await quoted.json();
+  assert.equal(q.funding,'owner-provider');assert.equal(q.providerCurrency,'USD');assert.equal(q.providerEstimateUsdMicros,700000);assert.equal(q.priceCents,undefined);assert.equal(q.currency,undefined);assert.equal(q.transferConsentRequired,true);
+  const context=await createProductionGenerationContext(env),approvals=createChatgptApprovals(f.db,{mode:'live',productionContext:context});
+  assert.equal(await approvals.issue(BOB,{quoteId:q.id}),null);const approval=await approvals.issue(ALICE,{quoteId:q.id});assert.ok(approval);
+  const submit={quoteId:q.id,idempotencyKey:approval.idempotencyKey,transferConsent:'fal-temporary-links-v1'};
+  const raw=data=>h(new Request(SITE+'/api/generations',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}));
+  const before=f.stats();let response=await raw({quoteId:q.id,idempotencyKey:submit.idempotencyKey});assert.equal(response.status,400);
+  response=await raw(submit);assert.equal(response.status,428);assert.equal((await response.json()).code,'step_up_required');
+  assert.deepEqual(f.stats(),before);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
+  assert.ok(await approvals.consume(ALICE,{quoteId:q.id,approvalToken:approval.approvalToken}));
+  const verification=await verificationFor(f.db,ALICE,'owner-generation',submit,Date.now(),{env});
+  response=await raw({...submit,verification});assert.equal(response.status,202,await response.clone().text());const job=await response.json();assert.equal(job.funding,'owner-provider');assert.equal(job.providerEstimateUsdMicros,700000);assert.equal(f.stats().dispatches,1);
+  const paused=await f.service(ALICE,{RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:'no'});
+  assert.deepEqual((await(await f.call(paused,'/api/video-config')).json()).qualities,['standard','pro']);
+  response=await f.call(paused,'/api/generations/'+job.id);assert.equal(response.status,200,await response.clone().text());const completed=await response.json();assert.equal(completed.state,'completed');
+  assert.equal((await f.call(paused,completed.videoPath)).status,200);assert.equal((await f.call(paused,'/api/generations',submit)).status,200);assert.equal(f.stats().dispatches,1);
+  const usage=await f.db.prepare('SELECT state,estimated_usd_micros FROM rig_owner_provider_usage WHERE job_id=?').bind(job.id).first();assert.deepEqual(usage,{state:'completed',estimated_usd_micros:700000});
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);assert.equal(await f.balance(),0);
  }finally{await f.mf.dispose()}
 });
 

@@ -14,6 +14,7 @@ const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera 
 // cleanup job. This does not modify source files or guarantee text removal.
 const TEXT_CLEANUP_PROMPT = 'Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays. Restore the scene beneath, preserving the subject, movement, camera and audio. ';
 const MODEL = Object.freeze({ standard: 'fal-ai/kling-video/v3/standard/motion-control', pro: 'fal-ai/kling-video/v3/pro/motion-control', 'edit-standard':'fal-ai/kling-video/o3/standard/video-to-video/edit' });
+const O3_IDENTITY_CONTRACT='o3-identity-only-v1';
 // This transfer changes who can read Fal's temporary copies. It is opt-in per
 // quoted O3 edit, never inferred from the user, model default or runtime owner.
 const TEMPORARY_FAL_LINKS='fal-temporary-links-v1';
@@ -36,8 +37,9 @@ function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
 const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
 function editPrompt(prompt,hasIdentity=false) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${hasIdentity?'Use @Element1 for the replacement subject identity and its appearance from different angles. ':''}${TEXT_CLEANUP_PROMPT}${prompt}`; }
+function identityEditPrompt(prompt) { return `Edit @Video1 in place. Replace only the main subject's appearance with @Element1. @Video1 alone defines the scene, background, shot size, camera, body and facial motion, and timing. Keep its original audio. The identity photos define appearance only; never copy their room, pose or framing. ${TEXT_CLEANUP_PROMPT}${prompt}`; }
 function generationPrompt(data){
- if(data.quality==='edit-standard')return editPrompt(data.prompt,Boolean(data.faceId));
+ if(data.quality==='edit-standard')return data.transferPolicy===TEMPORARY_FAL_LINKS?identityEditPrompt(data.prompt):editPrompt(data.prompt,Boolean(data.faceId));
  const prefix=(data.steadyCamera?CAMERA_PROMPT:'')+TEXT_CLEANUP_PROMPT+(data.faceId?'The replacement subject is @Element1. ':'');
  // Preserve the existing steady-camera user limit and keep the complete
  // provider prompt <=2500 UTF-16 units without splitting a surrogate pair.
@@ -119,7 +121,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       try {const job=await services.jobs.getRecent(user.id);if(!job)return respond({job:null});if(job.userId!==user.id)return fail('Opdracht niet gevonden.',404);return respond({job:{...publicJob(job),...(job.state==='completed'?{videoPath:`/api/generations/${job.id}/video`}:{})}});} catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
     }
     if (req.method==='POST' && path==='/api/generation-quotes') {
-      const data=inputData(await readJSON(req)); if (!data) return fail('Controleer je invoer.',400);
+      const raw=await readJSON(req);
+      if(raw?.quality==='edit-standard'&&Array.isArray(raw.angleIds)&&raw.angleIds.length>2)return fail('Gebruik voor videobewerking maximaal vier foto’s: een hoofdbeeld, een close-up en twee hoeken.',400);
+      const data=inputData(raw); if (!data) return fail('Controleer je invoer.',400);
       if (!qualityEnabled(services,data.quality)) return fail('Dit videomodel is nog niet beschikbaar.',503);
       if(services.mode==='live'&&data.quality==='edit-standard'&&data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',400);
       const prompt=generationPrompt(data);if(prompt.length>2500)return fail('Houd je beschrijving korter.',400);
@@ -149,7 +153,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(services.mode!=='live'&&services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
       // Store only owned asset identifiers and hashes; sending bytes to fal is
       // deferred until the customer confirms the quote and funds are reserved.
-      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
+      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt,...(data.quality==='edit-standard'&&data.transferPolicy===TEMPORARY_FAL_LINKS?{providerContract:O3_IDENTITY_CONTRACT}:{}),...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
       return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null&&!(services.mode==='live'&&quote.fundingKind==='credits')?{providerEstimateUsdMicros}:{})},201);
@@ -161,6 +165,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let prior; try {prior=await services.jobs.getByIdempotency(user.id,data.idempotencyKey);} catch {return fail('Aanvraagstatus is tijdelijk niet beschikbaar.',503);}
       if(prior){if(prior.userId!==user.id || prior.quoteId!==data.quoteId)return fail('Deze aanvraagcode is al gebruikt.',409);return respond(publicJob(prior));}
       let quote; try {quote=await services.quotes.getOwned(user.id,data.quoteId);} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
+      // Existing jobs remain recoverable above. An unstarted edit must obtain
+      // a fresh quote for the changed identity-only provider contract.
+      if(quote?.userId===user.id&&quote.model===MODEL['edit-standard']&&quote.input?.data?.transferPolicy===TEMPORARY_FAL_LINKS&&(quote.input.providerContract!==O3_IDENTITY_CONTRACT||Array.isArray(quote.input.data.angleIds)&&quote.input.data.angleIds.length>2))return fail('Vraag opnieuw de prijs op om deze videobewerking te bevestigen.',409);
       if (!quote || quote.userId!==user.id || !Object.values(MODEL).includes(quote.model) || !Number.isSafeInteger(quote.priceCents) || quote.priceCents<=0 || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now() || !quote.input || !inputData(quote.input.data) || !Array.isArray(quote.input.refs) || quote.input.refs.length<2 || quote.input.refs.length>6) return fail('Prijsopgave is niet geldig of verlopen.',409);
       if (quote.model!==MODEL[quote.input.data.quality] || !qualityEnabled(services,quote.input.data.quality)) return fail('Dit videomodel is niet beschikbaar. Vraag opnieuw de prijs op.',409);
       if(services.mode==='live'&&quote.input.data.quality==='edit-standard'&&quote.input.data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',409);
@@ -219,14 +226,19 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         }
         const [image,video,...rest]=uploaded;
         if(selected.quality==='edit-standard'){
-          if(!validEditVideo(video)||!quote.input.prompt.includes('@Image1')||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
-          providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,...(temporaryLinks?{shot_type:'customize'}:{})};
-          // O3 accepts identity elements with 1–3 angle images. Keep the main
-          // image and one element instead of exceeding its four-reference cap
-          // by flattening a main image, close-up and three angles into image_urls.
-          if(selected.faceId){
-            if(!quote.input.prompt.includes('@Element1'))throw Error('Invalid edit identity');
-            providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];
+          if(!validEditVideo(video)||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
+          if(temporaryLinks){
+            if(quote.input.providerContract!==O3_IDENTITY_CONTRACT||!quote.input.prompt.includes('@Element1'))throw Error('Invalid edit identity');
+            // All selected photos condition one identity element. No image_urls
+            // field may condition the scene: the video is the sole base footage.
+            // With a close-up, main + at most two angles fit its three references.
+            const identity={frontal_image_url:selected.faceId?rest[0].url:image.url,reference_image_urls:[image.url,...(selected.faceId?rest.slice(1).map(x=>x.url):[])]};
+            providerInput={video_url:video.url,elements:[identity],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,shot_type:'customize'};
+          }else{
+            // Historical private gateway/inline probes retain their original
+            // two-input contract and never receive the new scene-role mapping.
+            if(!quote.input.prompt.includes('@Image1'))throw Error('Invalid edit input');
+            providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true};
           }
         }else{
           providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
