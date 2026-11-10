@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createRigSitesApp} from './rig-sites-app.mjs';
 import {sitesCanonical,sitesHmac,sitesPaymentPath} from './sites-bridge-protocol.mjs';
 
@@ -133,4 +134,47 @@ test('standalone studio cannot be framed and permits passkeys only at its own or
  assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
  assert.equal(response.headers.get('x-frame-options'),'DENY');
  assert.equal(response.headers.get('permissions-policy'),'publickey-credentials-create=(self), publickey-credentials-get=(self)');
+});
+
+test('only the four branding assets allow anonymous binary GET and HEAD without backend dispatch',async()=>{
+ const bytes=Uint8Array.from([0,0,1,0,255,137,80,78,71,0,128]),paths=[['/favicon.ico','image/x-icon'],['/favicon.svg','image/svg+xml'],['/apple-touch-icon.png','image/png'],['/social/rig-share-v1.png','image/png']];
+ const uiFiles=Object.fromEntries(paths.map(([path])=>[path,{kind:'public-brand-asset',base64:Buffer.from(bytes).toString('base64'),contentType:'text/html'}]));
+ let calls=0;const app=createRigSitesApp({uiFiles,fetchImpl:async()=>{calls++;throw Error('Branding cannot reach the backend')}});
+ for(const [path,type]of paths){
+  const get=await app.fetch(request(path),env);assert.equal(get.status,200);assert.equal(get.headers.get('content-type'),type);assert.equal(get.headers.get('content-length'),String(bytes.length));assert.equal(get.headers.get('x-content-type-options'),'nosniff');assert.equal(get.headers.get('set-cookie'),null);
+  assert.equal(get.headers.get('cache-control'),path.startsWith('/social/')?'public, max-age=31536000, immutable':'public, max-age=3600');
+  assert.deepEqual(new Uint8Array(await get.arrayBuffer()),bytes);
+  const head=await app.fetch(request(path,{method:'HEAD'}),env);assert.equal(head.status,200);assert.deepEqual([...head.headers],[...get.headers]);assert.equal((await head.arrayBuffer()).byteLength,0);
+ }
+ assert.equal(calls,0);
+});
+
+test('public branding keeps origin, method and query restrictions and cannot publish arbitrary typed entries',async()=>{
+ const entry={kind:'public-brand-asset',base64:Buffer.from([0,255,1]).toString('base64')};
+ const app=createRigSitesApp({uiFiles:{'/favicon.ico':entry,'/social/rig-share-v1.png':entry,'/social/private.png':entry,'/multiuser/private.png':entry},fetchImpl:async()=>{throw Error('Unexpected backend dispatch')}});
+ for(const path of ['/favicon.ico?fbclid=shared','/social/rig-share-v1.png?utm_source=facebook','/social/private.png','/multiuser/private.png','/social/rig-share-v2.png'])assert.equal((await app.fetch(request(path),env)).status,404,path);
+ for(const method of ['POST','PUT','DELETE','OPTIONS'])assert.equal((await app.fetch(request('/favicon.ico',{method}),env)).status,404,method);
+ assert.equal((await app.fetch(new Request('https://untrusted.invalid/favicon.ico'),env)).status,403);
+ assert.equal((await app.fetch(request('/',{method:'HEAD'}),env)).status,404,'branding does not add HEAD to studio routing');
+ assert.equal((await app.fetch(request('/api/session'),env)).status,401);assert.equal((await app.fetch(request('/api/session?fbclid=shared'),env)).status,404);assert.equal((await app.fetch(request('/mcp?fbclid=shared'),env)).status,404);
+});
+
+test('missing or malformed branding payloads fail closed instead of falling back to JavaScript or active HTML',async()=>{
+ for(const entry of [undefined,'<script>unsafe()</script>',{kind:'other',base64:'AQ=='},{kind:'public-brand-asset',base64:'not%base64'},{kind:'public-brand-asset',base64:''}]){
+  const app=createRigSitesApp({uiFiles:{'/favicon.svg':entry},fetchImpl:async()=>{throw Error('Unexpected backend dispatch')}});
+  assert.equal((await app.fetch(request('/favicon.svg'),env)).status,404);
+ }
+});
+
+test('studio HTML renders fixed share metadata before login and never reflects tracking or proxy headers',async()=>{
+ const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8'),calls=[];
+ const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':html},fetchImpl:async req=>{calls.push(req);throw Error('Public HTML cannot require a session')}});
+ const preview='https://preview.rig.invalid',configured={...env,RIG_SITES_PRODUCER_ORIGIN:preview},canonical=origin+'/',image=origin+'/social/rig-share-v1.png';
+ for(const path of ['/','/multiuser/','/?fbclid=%22%3E%3Cscript%3Euntrusted-marker%3C%2Fscript%3E&utm_source=facebook','/multiuser/?utm_campaign=untrusted-marker','/?payment=return&fbclid=untrusted-marker']){
+  const response=await app.fetch(new Request(preview+path,{headers:{host:'attacker.invalid','x-forwarded-host':'attacker.invalid'}}),configured);assert.equal(response.status,200,path);const output=await response.text();
+  assert.equal(output,html);assert.equal((output.match(/<link rel="canonical" /g)||[]).length,1);assert.ok(output.includes('<link rel="canonical" href="'+canonical+'">'));assert.ok(output.includes('<meta property="og:url" content="'+canonical+'">'));
+  assert.ok(output.includes('<meta property="og:image" content="'+image+'">'));assert.ok(output.includes('<meta name="twitter:image" content="'+image+'">'));assert.match(output,/<meta name="twitter:card" content="summary_large_image">/);
+  assert.doesNotMatch(output,/untrusted-marker|attacker\.invalid|preview\.rig\.invalid/);assert.equal(response.headers.get('cache-control'),'no-store');assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+ }
+ assert.equal(calls.length,0);
 });

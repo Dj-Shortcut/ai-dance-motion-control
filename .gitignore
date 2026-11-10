@@ -22,3 +22,7 @@ __pycache__/
 # Local illustrative invoice renders are never issued documents.
 web/output/
 web/tmp/
+
+# Original public RIG brand images (never customer uploads).
+!web/branding/apple-touch-icon.png
+!web/branding/rig-share-v1.png
