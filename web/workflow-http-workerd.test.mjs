@@ -15,6 +15,7 @@ import {workflowClientMedia} from './workflow-client-contract.mjs';
 import {overlayCleanupPayload,OVERLAY_CLEANUP_BILLING} from './overlay-cleanup-contract.mjs';
 import {RECAST_BILLING} from './price-preflight.mjs';
 import {RECAST_SETTINGS} from './recast-contract.mjs';
+import {createProductionWorkflowStores,workflowInitialSourceHash,workflowHash} from './production-workflow-stores.mjs';
 const OWNER='u-12345678-1234-4123-8123-123456789abc',OTHER='u-22345678-1234-4123-8123-123456789abc',SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',POLICY='fal-temporary-links-v1';
 const run=promisify(execFile);let directory,clips;
 before(async()=>{
@@ -80,7 +81,7 @@ test('actual owner HTTP flow: trusted uploads, combined quote, device confirmati
   r=await f.call(h,'/api/generations/recent');assert.equal((await r.json()).job.id,job.id);
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,1);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_workflow_settlements').first()).n,1);
   assert.equal((await f.call(h,'/api/generation-intents/'+approved.idempotencyKey+'/reconcile',{quoteId:quote.id})).status,200);
-  assert.equal((await f.call(h,'/api/workflow-inputs/'+selection.videoId)).status,200);
+  const sourceResponse=await f.call(h,'/api/workflow-inputs/'+selection.videoId);assert.equal(sourceResponse.status,200);await sourceResponse.body.cancel();
  }finally{await f.mf.dispose()}
 });
 
@@ -124,4 +125,47 @@ test('a definitive first-step failure settles only the workflow and cannot reach
 
 test('the existing production service remains usable without the optional workflow migration or any new binding',async()=>{
  const f=await fixture();try{for(const table of ['rig_generation_workflow_client_processing','rig_generation_workflow_settlements','rig_generation_workflow_steps','rig_generation_workflows'])await f.db.prepare('DROP TABLE '+table).run();const h=await f.service(),config=await f.call(h,'/api/video-config');assert.equal(config.status,200,await config.clone().text());const capabilities=await config.json();assert.equal(capabilities.cleanup,undefined);assert.ok(capabilities.qualities.includes('pro'));const recent=await f.call(h,'/api/generations/recent');assert.equal(recent.status,200,await recent.clone().text());assert.deepEqual(await recent.json(),{job:null});assert.equal(f.submissions.length,0);}finally{await f.mf.dispose()}
+});
+test('an unread private MP4 keeps the real durable lease until body cancel or EOF',async()=>{
+ const f=await fixture();try{const h=await f.service(),selection=await f.selected(h);let response=await f.call(h,'/api/workflow-inputs/'+selection.videoId);assert.equal(response.status,200);assert.equal((await f.call(h,'/api/workflow-inputs/'+selection.videoId)).status,429);assert.equal((await f.upload(h,'/api/workflow-inputs/source',clips.source.bytes)).status,429);await response.body.cancel();response=await f.call(h,'/api/workflow-inputs/'+selection.videoId);assert.equal(response.status,200);assert.equal((await response.arrayBuffer()).byteLength,clips.source.bytes.length);const after=await f.call(h,'/api/workflow-inputs/'+selection.videoId);assert.equal(after.status,200);await after.body.cancel();assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_media_work_lock').first()).n,0);}finally{await f.mf.dispose()}
+});
+
+test('REPRO: a daily-limit change after accepted owner funding must finalize wholly undispatched workflow steps',async()=>{
+ const f=await fixture();try{
+  const media=f.env.RIG_MEDIA;let changed=false;
+  f.env.RIG_MEDIA={async fetch(req){const parent=await f.db.prepare("SELECT id FROM rig_generation_jobs WHERE user_id=? AND state='submitting'").bind(OWNER).first();if(parent&&!changed){changed=true;await f.db.prepare('UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=100000 WHERE id=1').run();}return media.fetch(req)}};
+  const h=await f.service(),{quote}=await f.priced(h),approved=await f.approved(quote),response=await f.call(h,'/api/generations',approved);
+  assert.equal(changed,true);assert.equal(f.submissions.length,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,0);
+  const rows=(await f.db.prepare('SELECT state,dispatch_token,fal_request_id FROM rig_generation_workflow_steps ORDER BY step_index').all()).results;
+  assert.ok(rows.every(row=>row.dispatch_token===null&&row.fal_request_id===null),JSON.stringify(rows));
+  const parent=await f.db.prepare('SELECT id,state FROM rig_generation_jobs').first();
+  assert.ok(await f.bucket.head(`rig-workflow-accepted/${parent.id}/image.jpg`),'The portrait snapshot must finish; this reproduces the later dispatch-budget failure.');
+  assert.equal(parent.state,'failed',JSON.stringify({httpStatus:response.status,parent,steps:rows,providerCalls:f.submissions.length}));
+  assert.equal(response.status,200);assert.equal((await response.json()).finalizationConfirmed,true);
+  assert.ok(rows.every(row=>row.state==='skipped'));assert.equal((await f.db.prepare('SELECT state FROM rig_owner_provider_usage WHERE job_id=?').bind(parent.id).first()).state,'failed');assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
+ }finally{await f.mf.dispose()}
+});
+
+async function fundedPreparedFixture(f){
+ const h=await f.service(),{quote}=await f.priced(h),payload=await f.approved(quote),context=await createProductionGenerationContext(f.env),parents=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:context}),q=await parents.quotes.getOwned(OWNER,quote.id),verificationPayload={quoteId:q.id,idempotencyKey:payload.idempotencyKey,transferConsent:POLICY};
+ const begun=await parents.jobs.begin({userId:OWNER,quoteId:q.id,idempotencyKey:payload.idempotencyKey,quote:q,verification:payload.verification,verificationPayload});assert.equal(begun.kind,'created');const identity={userId:OWNER,jobId:begun.job.id},workflows=createProductionWorkflowStores(f.db,{productionContext:context,readCurrentProductionContext:()=>createProductionGenerationContext(f.env)});await workflows.initialize({...identity,quote:q});assert.equal(await parents.jobs.authorizeDispatch(OWNER,begun.job.id),true);
+ const cp=q.input.workflow.clientProcessing,authorization={...identity,stepId:'source-cleanup',sourceHash:await workflowInitialSourceHash(q),inputHash:await workflowHash({kind:'source-and-mask',source:cp.source,mask:cp.mask}),requestHash:'a'.repeat(64)};
+ return {parents,workflows,identity,authorization};
+}
+test('atomic undispatched cancellation races a genuine step authorization without releasing a winning dispatch',async()=>{
+ for(const cancelFirst of [true,false]){const f=await fixture();try{
+  const b=await fundedPreparedFixture(f),cancel=()=>b.workflows.finalizeWhollyUndispatched(b.identity),authorize=()=>b.workflows.authorizeStep(b.authorization),results=await Promise.all(cancelFirst?[cancel(),authorize()]:[authorize(),cancel()]),canceled=results[cancelFirst?0:1],authorization=results[cancelFirst?1:0];
+  const actual=await b.workflows.get(b.identity);assert.equal(authorization.authorized,canceled===false);
+  if(canceled){assert.equal(actual.row.state,'failed');assert.ok(actual.steps.every(s=>s.state==='skipped'&&s.dispatch_token===null&&s.fal_request_id===null));assert.equal(actual.settlement.provider_authorized_steps,0);assert.equal(actual.settlement.provider_dispatched_steps,0);}
+  else{assert.equal(actual.settlement,null);assert.equal(actual.steps[0].state,'authorized');assert.ok(actual.steps[0].dispatch_token);assert.equal((await f.db.prepare('SELECT state FROM rig_owner_provider_usage WHERE job_id=?').bind(b.identity.jobId).first()).state,'authorized');}
+  assert.equal(f.submissions.length,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
+ }finally{await f.mf.dispose()}}
+});
+test('authorized, unknown and queued steps are never canceled or released by the wholly-undispatched recovery',async()=>{
+ for(const state of ['authorized','unknown','queued']){const f=await fixture();try{
+  const b=await fundedPreparedFixture(f),claim=await b.workflows.authorizeStep(b.authorization);assert.equal(claim.authorized,true);
+  if(state==='unknown')await b.workflows.markUnknown({...b.identity,stepId:'source-cleanup',dispatchToken:claim.dispatchToken});
+  if(state==='queued')await b.workflows.markSubmitted({...b.identity,stepId:'source-cleanup',dispatchToken:claim.dispatchToken,requestId:'known-provider-id'});
+  assert.equal(await b.workflows.finalizeWhollyUndispatched(b.identity),false);const actual=await b.workflows.get(b.identity);assert.equal(actual.steps[0].state,state);assert.equal(actual.steps[1].state,'prepared');assert.equal(actual.settlement,null);assert.equal((await f.db.prepare('SELECT state FROM rig_owner_provider_usage WHERE job_id=?').bind(b.identity.jobId).first()).state,'authorized');assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);assert.equal(f.submissions.length,0);
+ }finally{await f.mf.dispose()}}
 });

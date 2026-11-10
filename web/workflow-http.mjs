@@ -13,11 +13,28 @@ function mediaHeaders(req,max){if(req.headers.get('content-type')!=='video/mp4'|
 async function binary(req,max){const length=mediaHeaders(req,max),bytes=await workflowHeldBytes(req.body,max);if(bytes.length<32||length!==null&&bytes.length!==Number(length))error('workflow_invalid_media',400);return bytes;}
 function publicError(e){const status=[400,403,404,405,408,409,413,429].includes(e?.status)?e.status:503,code=typeof e?.code==='string'?e.code:'workflow_unavailable';const messages={provider_limit_exceeded:'Dit fragment met tekstverwijdering valt buiten de ingestelde Fal-limiet. Kies een korter fragment.',workflow_owner_validation_unavailable:'Tekst verwijderen is voor dit account nog niet beschikbaar.',workflow_invalid_selection:'Controleer je foto, videofragment en tekstmasker.',workflow_invalid_duration:'Kies een echt fragment van minstens 5 en maximaal 15 seconden.',workflow_quote_expired:'Vraag de prijs opnieuw op en bevestig die opnieuw.',workflow_transfer_consent_required:'Bevestig de prijs en de tijdelijke Fal-bestandslinks opnieuw.',workflow_rate_limited:'Te veel aanvragen. Probeer later opnieuw.',workflow_media_busy:'Een mediabewerking is nog bezig. Probeer straks opnieuw.',workflow_not_found:'Opdracht of bestand niet gevonden.'};return json({error:messages[code]||(status===400||status===413?'Controleer je aanvraag of bestand.':status===404?'Opdracht of bestand niet gevonden.':'Deze verwerking kon niet veilig worden afgerond. Controleer de status voordat je opnieuw start.'),code},status);}
 
+// Retain the shared memory/CPU admission while a private MP4 is still held by
+// the outgoing body. Copy small chunks so a final subarray cannot retain the
+// entire backing file after EOF. A client cannot keep the admission forever.
+export function workflowLeaseResponse(response,release,{idleMs=10000,totalMs=60000}={}){
+ if(!(response instanceof Response)||!response.body||typeof release!=='function'||!Number.isSafeInteger(idleMs)||idleMs<1||idleMs>10000||!Number.isSafeInteger(totalMs)||totalMs<idleMs||totalMs>60000)throw Error('Bounded binary response required');
+ const reader=response.body.getReader();let buffered=null,offset=0,finished=false,idle,total,controller,finishing;
+ async function finish(){if(finishing)return finishing;finished=true;buffered=null;offset=0;clearTimeout(idle);clearTimeout(total);finishing=(async()=>{try{await reader.cancel()}finally{try{reader.releaseLock()}catch{}await release();}})();return finishing;}
+ const expire=()=>{if(finished)return;controller.error(Error('Private download timed out'));void finish().catch(()=>{});};
+ const touch=()=>{clearTimeout(idle);idle=setTimeout(expire,idleMs)};
+ const body=new ReadableStream({
+  start(c){controller=c;touch();total=setTimeout(expire,totalMs);},
+  async pull(c){if(finished)return;try{touch();if(!buffered){const item=await reader.read();if(finished)return;if(item.done){await finish();c.close();return;}if(!(item.value instanceof Uint8Array)||!item.value.length)throw Error('Invalid private response body');buffered=item.value;offset=0;}const end=Math.min(offset+65536,buffered.length),part=buffered.slice(offset,end);offset=end;if(offset===buffered.length){buffered=null;offset=0;}c.enqueue(part);}catch(e){try{c.error(e)}catch{}try{await finish()}catch{}}},
+  cancel(){return finish();}
+ },{highWaterMark:0});
+ return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
+}
+
 export function createWorkflowHttp({runtime,lease}={}){
  if(!runtime?.parents||typeof runtime.runner!=='function'||typeof lease?.acquire!=='function'||typeof lease.complete!=='function')throw Error('Workflow HTTP dependencies required');
  const userId=runtime.trustedUserId;
  async function limited(method){if(!await runtime.limit('generation',method))error('workflow_rate_limited',429);}
- async function locked(fn){const claim=await lease.acquire(userId);if(claim?.state!=='acquired'||!UUID.test(claim.token||''))error('workflow_media_busy',429);let outcome='settled';try{return await fn()}catch(e){if(e?.code==='workflow_private_storage_uncertain')outcome='uncertain';throw e}finally{await lease.complete(claim.token,outcome)}}
+ async function locked(fn){const claim=await lease.acquire(userId);if(claim?.state!=='acquired'||!UUID.test(claim.token||''))error('workflow_media_busy',429);let outcome='settled',bodyOwnsLease=false;try{const response=await fn();if(response instanceof Response&&response.headers.get('content-type')==='video/mp4'&&response.body){const held=workflowLeaseResponse(response,()=>lease.complete(claim.token,'settled'));bodyOwnsLease=true;return held;}return response;}catch(e){if(e?.code==='workflow_private_storage_uncertain')outcome='uncertain';throw e}finally{if(!bodyOwnsLease)await lease.complete(claim.token,outcome)}}
  async function prepared(req,max,fn){await runtime.gate();mediaHeaders(req,max);const reservation=await runtime.admitPreparation(req);return locked(()=>runtime.withPreparation(reservation,()=>fn()));}
  async function describe(jobId,{poll=false}={}){const runner=runtime.runner(jobId),summary=await runner[poll?'poll':'get']({method:'GET',userId,jobId}),job=await runtime.ownedJob(jobId);return {id:jobId,quoteId:summary.quoteId,state:summary.state,workflowVersion:WORKFLOW_VERSION,funding:'owner-provider',providerEstimateUsdMicros:job.providerEstimateUsdMicros,...(summary.clientProcessing?{clientProcessing:summary.clientProcessing}:{}),...(summary.settlement?{settlement:summary.settlement,...(summary.state==='failed'&&summary.settlement.outcome==='failed'?{finalizationConfirmed:true}:{})}:{}),...(summary.state==='completed'?{videoPath:`/api/generations/${jobId}/video`}:{})};}
  async function binding(jobId){const job=await runtime.ownedJob(jobId),q=await runtime.jobQuote(job);return {job,quote:q,workflow:hasWorkflow(q)};}
@@ -59,9 +76,11 @@ export function createWorkflowHttp({runtime,lease}={}){
      // No runner/provider call has happened. Settle only the workflow's own
      // undispatched steps, never route it through a legacy release handler.
      await runtime.workflows.initialize({userId,jobId,quote:q});
-     await runtime.workflows.skipStep({userId,jobId,stepId:'source-cleanup'});await runtime.workflows.skipStep({userId,jobId,stepId:'base'});await runtime.workflows.finalize({userId,jobId});throw e;
+     if(await runtime.workflows.finalizeWhollyUndispatched({userId,jobId}))return json(await describe(jobId));throw e;
     }
-    await runtime.runner(jobId).startAccepted({method:'POST',userId,jobId,quote:q,transferConsent:raw.transferConsent});return json(await describe(jobId),202);
+    try{await runtime.runner(jobId).startAccepted({method:'POST',userId,jobId,quote:q,transferConsent:raw.transferConsent});}
+    catch(e){if(await runtime.workflows.finalizeWhollyUndispatched({userId,jobId}))return json(await describe(jobId));throw e;}
+    return json(await describe(jobId),202);
    });
   }
   const intent=p.match(/^\/api\/generation-intents\/([A-Za-z0-9_-]{1,100})\/reconcile$/);

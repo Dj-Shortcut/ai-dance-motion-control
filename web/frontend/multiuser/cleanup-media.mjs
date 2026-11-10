@@ -1,6 +1,13 @@
 import {exactWorkingSourcePlan,completeAacPackets} from './cleanup-source-plan.mjs';
 import {aacPacketsAreCopyable,prepareCanonicalAac} from './cleanup-aac-timeline.mjs';
 import {CleanupError,checkClock,expectedClock,MAX_MASK_BYTES,MAX_BYTES,sha256} from './cleanup-contract.mjs';
+// MediaRecorder includes its negotiated codecs in Blob.type. Accept only the
+// MP4 container label and that optional codec parameter; demux/H264 validation
+// below remains authoritative. Give all later consumers a fixed non-active media MIME.
+export function workingMp4Blob(blob){
+ if(!(blob instanceof Blob)||!/^video\/mp4(?:\s*;\s*codecs\s*=\s*(?:"[a-z0-9., _-]+"|[a-z0-9., _-]+))?$/i.test(blob.type)||blob.size<32||blob.size>MAX_BYTES)throw new CleanupError('source','Gebruik de lokaal voorbereide MP4-werkclip.');
+ return blob.type==='video/mp4'?blob:new Blob([blob],{type:'video/mp4'});
+}
 export function createBrowserCleanupMedia({codec}){
 const {Input,BlobSource,MP4,VideoSampleSink,EncodedPacketSink,CanvasSource,Output,Mp4OutputFormat,BufferTarget,EncodedAudioPacketSource}=codec;
 if([Input,BlobSource,VideoSampleSink,EncodedPacketSink,CanvasSource,Output,Mp4OutputFormat,BufferTarget].some(value=>typeof value!=='function')||!MP4)throw Error('Pinned browser codec adapter required');
@@ -11,7 +18,7 @@ const canvas=(width,height)=>{if(typeof OffscreenCanvas==='function')return new 
 const png=surface=>typeof surface.convertToBlob==='function'?surface.convertToBlob({type:'image/png'}):new Promise((resolve,reject)=>surface.toBlob(blob=>blob?resolve(blob):reject(new CleanupError('image','Controlebeeld maken is mislukt.')),'image/png'));
 return {
  async prepareExactSource(blob,{selectedSeconds,frameRate,keepSound=true,signal,onProgress=()=>{}}={}){
-  live(signal);if(!(blob instanceof Blob)||blob.type!=='video/mp4'||blob.size<32||blob.size>MAX_BYTES||typeof keepSound!=='boolean'||typeof EncodedAudioPacketSource!=='function')throw new CleanupError('source','Gebruik de lokaal voorbereide MP4-werkclip.');
+  live(signal);blob=workingMp4Blob(blob);if(typeof keepSound!=='boolean'||typeof EncodedAudioPacketSource!=='function')throw new CleanupError('source','Gebruik de lokaal voorbereide MP4-werkclip.');
   const media=input(blob),stop=()=>{media.dispose();verificationInput?.dispose();if(output)void output.cancel().catch(()=>{});};let output=null,surface=null,verificationInput=null;signal?.addEventListener('abort',stop,{once:true});
   try{
    const track=await media.getPrimaryVideoTrack();live(signal);if(!track||track.codec!=='avc'||!await track.canDecode())throw new CleanupError('source','De werkclip kan niet als H264 worden geopend.');const packets=[];for await(const p of new EncodedPacketSink(track).packets()){live(signal);if(packets.length>=1000)throw new CleanupError('source','De werkclip bevat te veel beelden.');packets.push({timestamp:p.timestamp,duration:p.duration});}

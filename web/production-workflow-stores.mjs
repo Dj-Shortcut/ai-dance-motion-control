@@ -132,6 +132,25 @@ export function createProductionWorkflowStores(db,{productionContext,readCurrent
    const spec=b.plan.steps[s.step_index];if(reason==='dependency_failed'&&!b.steps.some(d=>d.step_id===spec.dependsOn&&['failed','skipped'].includes(d.state)))throw Error('Dependency has not failed');
    const r=await db.prepare("UPDATE rig_generation_workflow_steps SET state='skipped',failure_code=?,finalized_at=? WHERE job_id=? AND step_id=? AND state='prepared' AND dispatch_token IS NULL AND fal_request_id IS NULL").bind(reason,clock(),jobId,stepId).run();if(r.meta?.changes!==1&&s.state!=='skipped')throw Error('A dispatched step cannot be skipped');
   },
+  async finalizeWhollyUndispatched({userId,jobId}){
+   const b=await state(userId,jobId);
+   if(b.settlement||b.steps.some(s=>s.state!=='prepared'||s.dispatch_token!==null||s.fal_request_id!==null))return false;
+   // One SQLite write claims ALL never-authorized steps against the same
+   // immutable funded parent. Concurrent authorizeStep either wins first (this
+   // writes nothing), or sees skipped instead of prepared (no queue POST).
+   // The subquery permits rows skipped by THIS statement, so updating row one
+   // cannot make the remaining rows ineligible mid-statement.
+   const changed=await db.prepare(`UPDATE rig_generation_workflow_steps SET state='skipped',failure_code='not_dispatched',finalized_at=?,poll_token=NULL,poll_lease_until=NULL
+    WHERE job_id=? AND state='prepared' AND dispatch_token IS NULL AND fal_request_id IS NULL
+     AND NOT EXISTS(SELECT 1 FROM rig_generation_workflow_steps s WHERE s.job_id=? AND (s.state NOT IN ('prepared','skipped') OR s.dispatch_token IS NOT NULL OR s.fal_request_id IS NOT NULL OR s.state='skipped' AND (s.failure_code IS NULL OR s.failure_code<>'not_dispatched')))
+     AND EXISTS(SELECT 1 ${joined} JOIN rig_generation_workflows w ON w.job_id=j.id WHERE j.id=? AND j.user_id=? AND j.state IN ('submitting','queued') AND j.fal_request_id IS NULL AND j.finalized_at IS NULL AND q.input_json=? AND w.plan_hash=? AND ${mode} AND ${active('j')} AND NOT EXISTS(SELECT 1 FROM rig_generation_workflow_settlements f WHERE f.job_id=j.id))`)
+    .bind(clock(),jobId,jobId,jobId,userId,b.row.input_json,b.plan.planHash,userId).run();
+   if(changed.meta?.changes===0)return false;
+   if(changed.meta?.changes!==b.steps.length)throw Error('Undispatched cancellation requires reconciliation');
+   const after=await state(userId,jobId);
+   if(after.steps.some(s=>s.state!=='skipped'||s.failure_code!=='not_dispatched'||s.dispatch_token!==null||s.fal_request_id!==null))throw Error('Undispatched cancellation binding changed');
+   await api.finalize({userId,jobId});return true;
+  },
   async finalize({userId,jobId}){
    const b=await state(userId,jobId);if(b.steps.some(s=>!terminal.has(s.state)))throw Error('Workflow outcome is unresolved');
    const base=b.steps[b.baseIndex],all=b.steps.every(s=>s.state==='completed'),outcome=base.state==='completed'?(all?'completed':'partial'):'failed';

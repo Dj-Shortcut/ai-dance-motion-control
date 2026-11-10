@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {workflowHeldBytes,hasWorkflow} from './workflow-runtime.mjs';
 import {WORKFLOW_RESULT_LIMIT} from './workflow-fal-adapter.mjs';
+import {workflowLeaseResponse} from './workflow-http.mjs';
 const stream=chunks=>new ReadableStream({start(c){for(const b of chunks)c.enqueue(b);c.close()}});
 test('known private object sizes are bounded before a read and preserve exact single-buffer bytes',async()=>{
  let reads=0;const neverRead={getReader(){reads++;throw Error('Must not read')}};
@@ -19,4 +20,10 @@ test('untrusted chunks cannot exceed count/byte limits or share mutable cross-th
 test('any persisted workflow marker is claimed, including null/malformed versions, while unrelated legacy quotes remain unrelated',()=>{
  for(const workflow of [null,{},false,{version:'old'}])assert.equal(hasWorkflow({input:{workflow}}),true);
  for(const q of [null,{}, {input:{}},{input:{data:{quality:'human-recast'}}}])assert.ok(!hasWorkflow(q));
+});
+test('a binary response retains its lease through consumption, cancel or a bounded idle deadline and releases once',async()=>{
+ let releases=0;const bytes=new Uint8Array(150000).fill(7),response=workflowLeaseResponse(new Response(bytes),async()=>{releases++;});assert.equal(releases,0);assert.deepEqual(new Uint8Array(await response.arrayBuffer()),bytes);assert.equal(releases,1);
+ const canceled=workflowLeaseResponse(new Response(bytes),async()=>{releases++;});assert.equal(releases,1);await canceled.body.cancel();assert.equal(releases,2);
+ const stalled=workflowLeaseResponse(new Response(bytes),async()=>{releases++;},{idleMs:10,totalMs:30});await new Promise(resolve=>setTimeout(resolve,40));assert.equal(releases,3);await assert.rejects(stalled.arrayBuffer(),/timed out/);assert.equal(releases,3);
+ const partial=workflowLeaseResponse(new Response(bytes),async()=>{releases++;}),reader=partial.body.getReader();const first=await reader.read();assert.equal(first.value.length,65536);assert.equal(releases,3);await reader.cancel();assert.equal(releases,4);
 });
