@@ -18,7 +18,7 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   video.pause=()=>{video.paused=true;};video.play=async()=>{video.paused=false;};
  }
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(_value){this.onload();}};
- w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,sourceTime:Number.isFinite(source.currentTime)?source.currentTime:null,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
+ w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImageFile:async file=>({blob:new Blob(['prepared '+file.name],{type:'image/jpeg'}),width:1280,height:720}),prepareImage:async(source,crop)=>{const image={blob:new Blob(['image'+(imagePreparations.length+1)],{type:'image/jpeg'}),width:1280,height:720};imagePreparations.push({source,sourceTime:Number.isFinite(source.currentTime)?source.currentTime:null,crop:{...crop},image});return image;},prepareVideo:async(...args)=>{prepared.push(args);return {blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
  w.rigScopedStorage=scopedStorage??{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>{removed.push(key);storage.delete(key);}};
  let uploads=0,quotes=0;
  w.rigRequest=async(path,options={})=>{
@@ -98,30 +98,70 @@ test('editing has a visible description, five-second first fragment and clear so
  try{
   f.load();assert.equal(f.el('duration').value,'30');f.el('editModeButton').click();
   assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'5');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
-  assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,true);assert.equal(f.el('moreOptions').hidden,true);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
+  assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('moreOptions').hidden,false);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
   assert.equal(f.el('personChooseText').textContent,'Kies een foto of video');assert.equal(f.el('personInput').accept,'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*video blijft/);assert.equal(f.el('sound').checked,true);
   f.prompt('Vervang de zanger door mijn hond.');assert.equal(f.el('prepare').disabled,false);
   f.el('motionModeButton').click();assert.equal(f.el('duration').value,'30');assert.equal(f.el('duration').max,'30');assert.equal(f.el('motionQualitySettings').hidden,false);assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('promptLabel').textContent,'Wat wil je maken?');
  }finally{f.dom.window.close();}
 });
-test('edit preparation enforces fifteen seconds and strips motion identity/camera controls',async()=>{
+test('edit preparation enforces fifteen seconds, retains identity references and strips the motion camera control',async()=>{
  const f=fixture();
  try{
-  f.load();f.file('faceInput','closeup.jpg','image/jpeg');f.file('anglesInput','angle.jpg','image/jpeg');f.el('steady').checked=true;f.el('editModeButton').click();f.prompt('Vervang de zanger door de hond op mijn foto.');
+  f.load();f.file('faceInput','closeup.jpg','image/jpeg');f.file('anglesInput','angle.jpg','image/jpeg');await waitFor(()=>!f.el('faceReference').hidden&&!f.el('angleReference0').hidden);f.el('steady').checked=true;f.el('editModeButton').click();f.prompt('Vervang de zanger door de hond op mijn foto.');
   f.change('duration','16');f.prepare();await waitFor(()=>f.el('status').textContent.includes('3 tot 15'));assert.equal(f.prepared.length,0);
   f.change('duration','5');f.change('start','8.5');f.prepare();await waitFor(()=>f.w.rigPreparedMedia()!==null);
-  const media=f.w.rigPreparedMedia(),args=f.prepared[0];assert.equal(media.quality,'edit-standard');assert.equal(media.face,null);assert.equal(media.angles.length,0);assert.equal(media.steady,false);assert.equal(media.keepSound,true);assert.equal(args[2],8.5);assert.equal(args[3],5);assert.equal(JSON.stringify(args[6]),JSON.stringify({minSide:720,maxDuration:15}));
+  const media=f.w.rigPreparedMedia(),args=f.prepared[0];assert.equal(media.quality,'edit-standard');assert.equal(media.face.type,'image/jpeg');assert.equal(media.angles.length,1);assert.equal(media.steady,false);assert.equal(media.keepSound,true);assert.equal(args[2],8.5);assert.equal(args[3],5);assert.equal(JSON.stringify(args[6]),JSON.stringify({minSide:720,maxDuration:15}));
   f.el('motionModeButton').click();assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.el('faceReference').hidden,false);assert.equal(f.el('angleReference0').hidden,false);
  }finally{f.dom.window.close();}
 });
-test('an edit uses the current reference crop while preserving an older motion snapshot',async()=>{
+test('an invalid edit duration stays visible in the prompt popup and an explicit correction precedes preparation',async()=>{
+ const f=fixture({withGeneration:true});
+ try{
+  f.el('editModeButton').click();f.load();f.el('motionVideo').duration=17.7;f.change('duration','17');
+  const prompt=f.el('editPrompt').value;f.prepare();
+  assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('briefError').hidden,false);assert.equal(f.el('briefError').getAttribute('role'),'status');assert.match(f.el('briefError').textContent,/3 tot 15 seconden/);
+  assert.equal(f.el('correctBriefDuration').hidden,false);assert.equal(f.el('correctBriefDuration').textContent,'Gebruik 15 seconden');assert.equal(f.imagePreparations.length,0);assert.equal(f.prepared.length,0);assert.equal(f.calls.some(([path])=>path==='/api/assets'),false);
+  f.el('correctBriefDuration').click();assert.equal(f.el('duration').value,'15');assert.equal(f.el('editPrompt').value,prompt);assert.equal(f.el('correctBriefDuration').hidden,true);assert.equal(f.imagePreparations.length,0);assert.equal(f.el('briefDialog').open,true);
+  let finish;f.w.rigMedia.prepareVideo=(...args)=>{f.prepared.push(args);args[5](0.42);return new Promise(resolve=>{finish=()=>resolve({blob:new Blob(['video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720});});};
+  f.el('confirmBrief').click();await waitFor(()=>!!finish);
+  assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('briefDialog').getAttribute('aria-busy'),'true');assert.match(f.el('briefError').textContent,/42%.*Houd RIG in beeld/);assert.equal(f.el('closeBrief').disabled,true);assert.equal(f.el('confirmBrief').disabled,true);assert.equal(f.el('tryShortVideo').disabled,true);assert.equal(f.el('uploadDialog').open,false);
+  f.el('closeBrief').click();assert.equal(f.el('briefDialog').open,true);const escape=new f.w.Event('cancel',{cancelable:true});f.el('briefDialog').dispatchEvent(escape);assert.equal(escape.defaultPrevented,true);
+  finish();await waitFor(()=>f.el('uploadDialog').open);
+  assert.equal(f.el('briefDialog').open,false);assert.equal(f.el('briefDialog').getAttribute('aria-busy'),'false');assert.equal(f.el('briefError').hidden,true);assert.equal(f.prepared.length,1);assert.equal(f.prepared[0][3],15);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+test('duration correction uses the remaining source without changing its chosen start or automatically preparing',()=>{
  const f=fixture();
  try{
-  f.load();f.el('captureMain').click();await waitFor(()=>!f.el('mainReference').hidden);const original=f.imagePreparations[0].image.blob;
-  f.el('editModeButton').click();f.el('personCropButton').click();f.el('cropX').value='10';f.el('cropW').value='90';f.el('applyCrop').click();f.prompt('Vervang de zanger door het personage op mijn foto.');
-  f.prepare();await waitFor(()=>f.w.rigPreparedMedia()!==null);
-  assert.equal(f.imagePreparations.length,2);assert.equal(f.imagePreparations[1].crop.x,10);assert.equal(f.imagePreparations[1].crop.w,90);assert.notEqual(f.w.rigPreparedMedia().image.blob,original);
-  f.el('motionModeButton').click();assert.equal(f.el('mainReference').hidden,false);
+  f.el('editModeButton').click();f.load();f.el('motionVideo').duration=17.7;f.el('start').value='10';f.el('duration').value='17';f.prepare();
+  assert.equal(f.el('briefDialog').open,true);assert.match(f.el('briefError').textContent,/3 tot 7/);assert.equal(f.el('correctBriefDuration').textContent,'Gebruik 7 seconden');f.el('correctBriefDuration').click();
+  assert.equal(f.el('duration').value,'7');assert.equal(f.el('start').value,'10');assert.equal(f.imagePreparations.length,0);assert.equal(f.prepared.length,0);
+  f.el('start').value='16';f.prepare();assert.equal(f.el('briefDialog').open,true);assert.match(f.el('briefError').textContent,/startpunt.*minstens 3/);assert.equal(f.el('correctBriefDuration').hidden,true);assert.equal(f.imagePreparations.length,0);
+ }finally{f.dom.window.close();}
+});
+test('a local preparation failure remains actionable inside the popup and retries only after another explicit confirmation',async()=>{
+ const f=fixture({withGeneration:true});
+ try{
+  f.load();const original=f.w.rigMedia.prepareVideo;let attempts=0;f.w.rigMedia.prepareVideo=async(...args)=>{attempts++;if(attempts===1)throw Error('De voorbereiding werd onderbroken. Houd RIG in beeld en probeer opnieuw.');return original(...args);};
+  f.prepare();await waitFor(()=>f.el('briefError').textContent.includes('onderbroken'));
+  assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('briefError').hidden,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('closeBrief').disabled,false);assert.equal(f.el('uploadDialog').open,false);assert.equal(f.w.rigPreparedMedia(),null);assert.equal(attempts,1);assert.equal(f.calls.some(([path])=>path==='/api/assets'),false);
+  f.el('confirmBrief').click();await waitFor(()=>f.el('uploadDialog').open);assert.equal(attempts,2);assert.equal(f.el('briefDialog').open,false);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+test('editing warns when a crop differs from the fixed main snapshot, invalidates the quote and replaces it only after recapture',async()=>{
+ const f=fixture({withGeneration:true});
+ try{
+  f.load();f.el('captureMain').click();await waitFor(()=>!f.el('mainReference').hidden);const original=f.imagePreparations[0].image.blob,originalThumb=f.el('mainThumb').src;
+  f.el('editModeButton').click();f.prompt('Vervang de zanger door het personage op mijn foto.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
+  assert.equal(f.w.rigPreparedMedia().image.blob,original);f.el('closeQuote').click();
+  f.el('personCropButton').click();f.el('cropX').value='10';f.el('cropW').value='90';f.el('applyCrop').click();
+  assert.match(f.el('status').textContent,/hoofdbeeld opnieuw vast/);assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  f.prepare();await waitFor(()=>f.el('uploadDialog').open);assert.equal(f.imagePreparations.length,1);assert.equal(f.w.rigPreparedMedia().image.blob,original,'a crop preview cannot silently change the explicitly fixed main snapshot');f.el('closeUpload').click();
+  f.el('captureMain').click();await waitFor(()=>f.el('mainThumb').src!==originalThumb);const replacement=f.imagePreparations[1].image.blob;
+  assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.imagePreparations[1].crop.x,10);assert.equal(f.imagePreparations[1].crop.w,90);assert.notEqual(replacement,original);
+  f.prepare();await waitFor(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().image.blob,replacement);assert.equal(f.imagePreparations.length,2);
+  f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  f.el('closeQuote').click();f.el('motionModeButton').click();assert.equal(f.el('mainReference').hidden,false);assert.equal(f.el('mainThumb').src!==originalThumb,true);
  }finally{f.dom.window.close();}
 });
 test('editing extracts a chosen cropped JPEG from a long reference video without uploading that source or changing the motion clip',async()=>{
@@ -157,13 +197,37 @@ test('editing shows the EUR gift price before one explicit approved generation',
  try{
   f.el('editModeButton').click();f.load();f.prompt('Vervang de zanger door mijn hond.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
   f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
-  const body=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(body.quality,'edit-standard');assert.equal(body.keepSound,true);assert.equal(body.transferPolicy,'fal-temporary-links-v1');for(const key of ['faceId','angleIds','steadyCamera'])assert.equal(Object.hasOwn(body,key),false);
+  const body=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(body.quality,'edit-standard');assert.equal(body.keepSound,true);assert.equal(body.transferPolicy,'fal-temporary-links-v1');assert.equal(body.faceId,null);assert.deepEqual(body.angleIds,[]);assert.equal(Object.hasOwn(body,'steadyCamera'),false);
   assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.doesNotMatch(f.el('quoteMessage').textContent,/Fal.*credits/i);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
   assert.equal(f.el('quoteTitle').textContent,'In de video');assert.equal(f.el('confirmGeneration').textContent,'Bevestig videobewerking');
-  assert.match(f.el('quoteMessage').textContent,/tijdelijke links.*foto, bronvideo en resultaat.*24 uur/);assert.match(f.el('quoteMessage').textContent,/Iedereen met zo’n link/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking.*akkoord/);
+  assert.match(f.el('quoteMessage').textContent,/tijdelijke links.*gekozen foto’s, bronvideo en resultaat.*24 uur/);assert.match(f.el('quoteMessage').textContent,/Iedereen met zo’n link/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking.*akkoord/);
   f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
   const confirm=JSON.parse(f.calls.find(([path])=>path==='/api/generations')[1].body);assert.deepEqual(confirm,{quoteId:'quote-edit',idempotencyKey:'rigchatgpt_quote-edit',approvalToken:'t'.repeat(43),transferConsent:'fal-temporary-links-v1'});
   assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
+ }finally{f.dom.window.close();}
+});
+test('editing keeps close-up and angle choices available and sends all six prepared assets into the reviewed quote',async()=>{
+ const f=fixture({withGeneration:true});
+ try{
+  f.el('editModeButton').click();f.load();f.file('personInput','4k-reference.mp4','video/mp4');const reference=f.el('personVideo'),original=f.el('personInput').files[0];reference.duration=56.85;reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));
+  assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('moreOptions').hidden,false);assert.equal(f.el('referenceCapture').hidden,false);assert.equal(f.el('captureMain').disabled,false);assert.equal(f.el('captureFace').disabled,false);assert.equal(f.el('captureAngle').disabled,true);
+  f.el('captureMain').click();await waitFor(()=>!f.el('mainReference').hidden);const main=f.imagePreparations.at(-1).image.blob;
+  f.el('frameTime').value='12.5';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureFace').click();await waitFor(()=>!f.el('faceReference').hidden);const face=f.imagePreparations.at(-1).image.blob;
+  for(let i=0;i<3;i++){f.el('frameTime').value=String(20+i*10);f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureAngle').click();await waitFor(()=>!f.el('angleReference'+i).hidden);}
+  assert.equal(f.el('captureAngle').disabled,true);f.prompt('Vervang de zanger door mij en gebruik mijn extra beelden voor de gelijkenis.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);
+  const media=f.w.rigPreparedMedia();assert.equal(media.image.blob,main);assert.equal(media.face,face);assert.equal(media.angles.length,3);assert.equal(media.steady,false);assert.equal(f.imagePreparations.length,5);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false);
+  f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);const uploads=f.calls.filter(([path])=>path==='/api/assets');
+  assert.equal(uploads.length,6);assert.deepEqual(uploads.map(([,options])=>options.headers['X-Rig-Asset-Kind']),['image','video','face','angle','angle','angle']);
+  assert.equal(uploads[0][1].body,main);assert.equal(uploads[2][1].body,face);assert.equal(uploads.some(([,options])=>options.body===original),false);
+  const quote=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(quote.imageId,'asset1');assert.equal(quote.videoId,'asset2');assert.equal(quote.faceId,'asset3');assert.deepEqual(quote.angleIds,['asset4','asset5','asset6']);assert.equal(quote.quality,'edit-standard');assert.equal(quote.transferPolicy,'fal-temporary-links-v1');assert.equal(Object.hasOwn(quote,'steadyCamera'),false);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+  f.el('closeQuote').click();f.el('removeAngle1').click();assert.equal(f.w.rigPreparedMedia(),null);assert.equal(f.el('confirmGeneration').hidden,true);f.el('confirmGeneration').click();assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+test('editing asks for a fixed main frame before preparing a video reference with extra identity images',async()=>{
+ const f=fixture();
+ try{
+  f.el('editModeButton').click();f.load();f.file('personInput','reference.mp4','video/mp4');const reference=f.el('personVideo');reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));f.el('captureFace').click();await waitFor(()=>!f.el('faceReference').hidden);
+  f.prepare();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('briefError').hidden,false);assert.match(f.el('briefError').textContent,/hoofdbeeld vast/);assert.equal(f.imagePreparations.length,1);assert.equal(f.prepared.length,0);
  }finally{f.dom.window.close();}
 });
 test('editing cannot confirm an absent or substituted transfer policy',async()=>{

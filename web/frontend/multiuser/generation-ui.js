@@ -8,7 +8,7 @@
   const mayShowPricePreview = () => ['credits','sponsored','owner-provider'].includes(window.rigVideoFunding)||privateTestOwner();
   const failureFinalized = data => ownerProvider(data)?data.finalizationConfirmed===true:data.refundConfirmed===true;
   const falTransferPolicy = 'fal-temporary-links-v1';
-  const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je foto, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
+  const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je gekozen foto’s, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null,ownerVerifying=false;
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
@@ -49,14 +49,14 @@
       if(edit&&(!Array.isArray(window.rigVideoQualities)||!window.rigVideoQualities.includes('edit-standard')))throw new Error('Video bewerken is momenteel niet beschikbaar.');
       const seconds=Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<3||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen 3 en ${limit}.`);
       if(!media.prompt?.trim()||media.prompt.trim().length>1900)throw new Error('Beschrijf eerst kort wat je wilt maken.');
-      if(edit&&(media.face||media.angles.length||media.steady))throw new Error('Beschrijf je videobewerking zonder extra hoeken of camera-instelling.');
+      if(edit&&media.steady)throw new Error('Bij videobewerking volgt de camera je bronvideo.');
       if(media.angles.length && !media.face) throw new Error('Kies eerst een close-up voor de extra hoeken.');
       note('Je bestanden worden veilig voorbereid…');
       const imageId=await upload('image',media.image.blob),videoId=await upload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
       const faceId=media.face ? await upload('face',media.face) : null;
       const angleIds=[];for(const angle of media.angles)angleIds.push(await upload('angle',angle));
       if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
-      const request={imageId,videoId,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{faceId,angleIds,steadyCamera:media.steady})};
+      const request={imageId,videoId,faceId,angleIds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady})};
       const data=await call('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||'')||!Number.isFinite(data.durationSeconds)||!Number.isInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(data.durationSeconds))throw new Error('De prijs kon niet worden bevestigd.');
       const ownFal=window.rigVideoFunding==='owner-provider';
