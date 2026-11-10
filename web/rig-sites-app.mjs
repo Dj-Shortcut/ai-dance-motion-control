@@ -8,6 +8,12 @@ const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const reject=(status=403)=>json({error:status===401?'Meld je aan bij RIG.':'Deze aanvraag is niet toegestaan.'},status);
 const subject=req=>{const id=req.headers.get('oai-authenticated-user-id');return id&&id.length<=512&&!/[\u0000-\u001f\u007f]/.test(id)?id:null};
+const PUBLIC_BRAND_ASSETS=Object.freeze({
+ '/favicon.ico':{type:'image/x-icon',cache:'public, max-age=3600'},
+ '/favicon.svg':{type:'image/svg+xml',cache:'public, max-age=3600'},
+ '/apple-touch-icon.png':{type:'image/png',cache:'public, max-age=3600'},
+ '/social/rig-share-v1.png':{type:'image/png',cache:'public, max-age=31536000, immutable'}
+});
 const STUDIO_TRACKING_PARAMS=new Set(['fbclid','utm_source','utm_medium','utm_campaign','utm_term','utm_content']);
 function studioQueryAllowed(url){
  if(!url.search)return true;
@@ -71,6 +77,16 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
  return {async fetch(req,env){
   let url;try{url=new URL(req.url)}catch{return reject()}
   if(url.origin!==env.RIG_SITES_PRODUCER_ORIGIN)return reject();
+  // Only these fixed, account-independent assets may be publicly cached.
+  // Typed build entries preserve binary bytes; their content type is not input.
+  if(Object.hasOwn(PUBLIC_BRAND_ASSETS,url.pathname)){
+   if(!['GET','HEAD'].includes(req.method)||url.search)return reject(404);
+   const asset=uiFiles[url.pathname],config=PUBLIC_BRAND_ASSETS[url.pathname];
+   if(asset?.kind!=='public-brand-asset'||typeof asset.base64!=='string')return reject(404);
+   let bytes;try{bytes=Uint8Array.from(atob(asset.base64),char=>char.charCodeAt(0))}catch{return reject(404)}
+   if(!bytes.byteLength)return reject(404);
+   return new Response(req.method==='HEAD'?null:bytes,{headers:{'content-type':config.type,'content-length':String(bytes.byteLength),'cache-control':config.cache,'x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; sandbox"}});
+  }
   if(req.method==='GET'&&!url.search){const document=commerceDocument(url.pathname);if(document)return document;}
   if(url.pathname==='/mcp'){
    if(url.search)return reject(404);
