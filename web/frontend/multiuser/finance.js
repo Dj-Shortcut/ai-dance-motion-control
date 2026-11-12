@@ -14,6 +14,8 @@
   const integer=value=>Number.isSafeInteger(value);
   const stateNames={submitting:'Wordt verstuurd',unknown:'Wordt gecontroleerd',queued:'In verwerking',completed:'Klaar',failed:'Mislukt'};
   const categories={'fal-charge':'Fal-verbruik van één video','fal-topup':'Fal-tegoed bijgekocht','mollie':'Mollie-betaalkosten','hosting':'Hosting en opslag','other':'Andere bedrijfskosten','refund':'Terugbetaling (alleen registratie)'};
+  const paymentMethods={bancontact:'Bancontact',creditcard:'Kaart',ideal:'iDEAL',wero:'Wero',paypal:'PayPal',applepay:'Apple Pay',googlepay:'Google Pay',banktransfer:'Overschrijving',belfius:'Belfius',kbc:'KBC/CBC'};
+  const paymentReasons={profile_mismatch:'Het Mollie-profiel komt niet overeen met de betaalinstellingen van RIG.',profile_blocked:'Mollie heeft het betaalprofiel geblokkeerd.',no_enabled_methods:'Mollie biedt momenteel geen betaalmethode aan voor € 5,00.',rate_limited:'De betaalstatus is te vaak gecontroleerd. Probeer later opnieuw.'};
   const policyFields=[
     ['eurPerUsdMicros','Euro per US$1',1000000,0.5,2,0.000001],
     ['providerVatBps','Reserve voor btw op Fal (%)',100,0,30,0.01],
@@ -25,10 +27,10 @@
     ['minPriceCents','Minimumprijs Standaard / bewerken (€)',100,0.01,12,0.01],
     ['minProPriceCents','Minimumprijs Pro (€)',100,0.01,12,0.01]
   ];
-  let disposed=false,dialog=null,ui=null,data=null,loadSequence=0,loading=false,expensePending=null,policyPending=null,correction=null;
+  let disposed=false,dialog=null,ui=null,data=null,loadSequence=0,loading=false,salesSequence=0,salesLoading=false,expensePending=null,policyPending=null,correction=null;
 
   function dispose(){
-    if(disposed)return;disposed=true;loadSequence++;data=null;expensePending=null;policyPending=null;correction=null;
+    if(disposed)return;disposed=true;loadSequence++;salesSequence++;data=null;expensePending=null;policyPending=null;correction=null;
     window.rigOwnerVerification?.cancel?.();window.rigOwnerAdministration?.dispose?.();
     button.hidden=true;button.closest('header')?.classList.remove('has-finance');button.removeEventListener('click',open);window.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
     if(dialog?.open)dialog.close();dialog?.remove();dialog=null;ui=null;
@@ -66,6 +68,11 @@
     const close=element('button','×','close');close.type='button';close.setAttribute('aria-label','Financiën sluiten');close.addEventListener('click',()=>dialog.close());head.append(heading,close);dialog.append(head);
     const toolbar=element('div',undefined,'finance-toolbar'),month=field(toolbar,'Periode','financeMonth','month'),refresh=element('button','Vernieuwen'),all=element('button','Alles');refresh.type=all.type='button';toolbar.append(refresh,all);dialog.append(toolbar);
     const message=element('p','', 'finance-status');message.id='financeStatus';message.setAttribute('role','status');message.setAttribute('aria-live','polite');dialog.append(message);
+    const sales=details(dialog,'Tegoed verkopen');sales.id='financeSales';
+    const salesStatus=element('p','Open dit onderdeel om de actuele betaalstatus te controleren.','finance-note');salesStatus.id='financeSalesStatus';salesStatus.setAttribute('role','status');salesStatus.setAttribute('aria-live','polite');
+    const salesMethods=element('p','','finance-note');salesMethods.id='financeSalesMethods';
+    const salesChecked=element('small','Nog niet gecontroleerd.');salesChecked.id='financeSalesChecked';
+    sales.append(salesStatus,salesMethods,salesChecked,element('p','Dit controleert welke methoden Mollie voor € 5,00 aanbiedt. De klant kiest en bevestigt zelf bij Mollie. Tegoed verschijnt pas na een gecontroleerde betaling. Gebruik Vernieuwen om opnieuw te controleren.','finance-policy-note'));
     const security=element('section');security.id='financeSecurity';dialog.append(security);
     if(typeof window.rigOwnerVerification?.mount==='function')window.rigOwnerVerification.mount(security);
     else security.append(element('p','De extra beveiliging is tijdelijk niet beschikbaar. Vernieuw RIG om gevoelige handelingen te bevestigen.','finance-note'));
@@ -93,8 +100,9 @@
     const administration=element('section');administration.id='financeAdministration';dialog.append(administration);
     if(typeof window.rigOwnerAdministration?.mount==='function')window.rigOwnerAdministration.mount(administration,{onChanged:()=>void reload()});
     document.body.append(dialog);
-    ui={month,refresh,all,status:message,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
-    refresh.addEventListener('click',()=>void reload());all.addEventListener('click',()=>{month.value='';void reload();});month.addEventListener('change',()=>void reload());
+    ui={month,refresh,all,status:message,sales,salesStatus,salesMethods,salesChecked,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
+    sales.addEventListener('toggle',()=>{if(sales.open&&dialog.open)void reloadSales();});
+    refresh.addEventListener('click',()=>{void reload();if(sales.open)void reloadSales();});all.addEventListener('click',()=>{month.value='';void reload();});month.addEventListener('change',()=>void reload());
     category.addEventListener('change',()=>{job.parentElement.hidden=category.value!=='fal-charge';job.required=category.value==='fal-charge';if(category.value!=='fal-charge')job.value='';});category.dispatchEvent(new Event('change'));
     cancelCorrection.addEventListener('click',()=>{if(!ui.expenseSubmit.disabled)resetExpense();});
     expenseForm.addEventListener('submit',saveExpense);policyForm.addEventListener('submit',savePolicy);
@@ -140,7 +148,23 @@
     }catch(error){if(!initial)status(error.message,true);}
     finally{if(sequence===loadSequence){loading=false;if(current()&&ui)ui.refresh.disabled=false;}}
   }
-  function open(){if(!current()){dispose();return;}if(dialog&&!dialog.open)dialog.showModal();if(!loading)void reload();}
+  async function reloadSales(){
+    if(!current()||!ui||salesLoading)return;
+    const sequence=++salesSequence;salesLoading=true;ui.salesStatus.textContent='Mollie controleren…';ui.salesStatus.dataset.error='false';ui.salesMethods.textContent='';ui.salesChecked.textContent='Bezig met controleren…';
+    try{
+      const value=await request('/api/payments/readiness');if(!current()||sequence!==salesSequence)return;
+      if(typeof value?.ready!=='boolean'||!Array.isArray(value.methods)||value.methods.length>64||value.methods.some(id=>typeof id!=='string'||!/^[a-z][a-z0-9_]{1,39}$/.test(id))||new Set(value.methods).size!==value.methods.length||value.ready!==(value.methods.length>0)||value.ready&&value.reason!==undefined||value.reason!==undefined&&(typeof value.reason!=='string'||value.reason.length>80))throw Error('Invalid payment status');
+      ui.salesStatus.textContent=value.ready?'Mollie biedt betaalmethoden aan voor € 5,00.':Object.hasOwn(paymentReasons,value.reason)?paymentReasons[value.reason]:'Betalen is momenteel niet beschikbaar. Controleer je Mollie-instellingen.';
+      ui.salesStatus.dataset.error=String(!value.ready);
+      ui.salesMethods.textContent=value.ready?'Betaalmethoden: '+value.methods.map(id=>Object.hasOwn(paymentMethods,id)?paymentMethods[id]:'Andere betaalmethode').join(', ')+'.':'';
+    }catch{
+      if(!current()||sequence!==salesSequence)return;
+      ui.salesStatus.textContent='De betaalstatus is tijdelijk niet beschikbaar. Kies Vernieuwen om opnieuw te controleren.';ui.salesStatus.dataset.error='true';ui.salesMethods.textContent='';
+    }finally{
+      if(current()&&sequence===salesSequence){salesLoading=false;ui.salesChecked.textContent='Gecontroleerd om '+new Intl.DateTimeFormat('nl-BE',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Europe/Brussels'}).format(new Date())+'.';}
+    }
+  }
+  function open(){if(!current()){dispose();return;}if(dialog&&!dialog.open)dialog.showModal();if(!loading)void reload();if(ui?.sales.open)void reloadSales();}
   function parseAmount(raw){if(typeof raw!=='string'||!/^\d{1,7}(?:[.,]\d{1,2})?$/.test(raw.trim()))return null;const [whole,fraction='']=raw.trim().replace(',','.').split('.');const cents=Number(whole)*100+Number(fraction.padEnd(2,'0'));return integer(cents)&&cents<=100000000?cents:null;}
   function correctionJob(id){
     if(typeof id!=='string')return;

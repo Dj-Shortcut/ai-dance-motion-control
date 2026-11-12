@@ -53,8 +53,14 @@ expensive configuration must fail visibly when it exceeds a limit, never lower
 quality or raise the limit automatically. Better resolution is not proof of
 correct identity, motion or framing; real-output acceptance is still required.
 
-Optional priced text removal is tracked in `text-removal-plan.md`; it is not yet
-an available processing stage or a claim that every output is text-free.
+Optional priced text/overlay cleanup is implemented as an owner-only workflow:
+local OCR and a reviewed mask, one combined quote, source inpainting, browser
+composition with original audio, then 1080P Recast. It requires the exact server
+capability, migration and supported browser APIs; customers cannot enable it.
+See [text-removal-plan.md](text-removal-plan.md) for evidence and limitations.
+The full local chain passes with provider fixtures. A separately accepted
+cleanup composite does not prove a new full Recast result or autonomous removal
+of every overlay; those real-output acceptance gates remain open.
 
 ## Continue after a short trial
 
@@ -82,8 +88,9 @@ a different draft the user has since started.
 
 Keeping source audio does not establish correct lip synchronization. The current
 steady-camera instruction is a prompt, not an independent camera tracker.
-The current text-removal instruction is a prompt, not OCR, a removal mask or a
-verified cleanup pass. Recast alone must not be advertised as a text remover.
+An ordinary generation prompt is not a cleanup pass. The separate owner-only
+cleanup workflow uses an inspected mask; local OCR alone does not detect every
+icon. Recast alone must not be advertised as a text remover.
 Human Recast must not be advertised as an animal replacement workflow.
 
 ## Required real-output acceptance

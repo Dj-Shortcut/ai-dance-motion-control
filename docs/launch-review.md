@@ -5,8 +5,11 @@ checkout added on 9 November, see [credits-release.md](credits-release.md).
 The findings below describe the earlier deployment, not a fresh launch approval.
 
 Reviewed 7 November 2026. Scope: the imported website, private Cloudflare
-services, and the original Mac GUI. The website is still a consumer test with
-Mollie in test mode. This review does not certify it for commercial billing.
+services, and the original Mac GUI. At that review the website used Mollie test
+mode. The later production composition supports native credit checkout and a
+background collector; the dated blockers below are not its current status.
+Neither implementation nor CI proves a real Wero payment, Accountable delivery
+or visual video acceptance. This review does not certify commercial readiness.
 
 ## Findings fixed in this branch
 
@@ -40,7 +43,7 @@ Mollie in test mode. This review does not certify it for commercial billing.
   ambiguous output remains held for reconciliation, without an automatic
   refund. Large/concurrent production memory behavior remains unverified.
 
-## Remaining launch blockers
+## Historical launch blockers from the earlier deployment
 
 ### P1: native website cannot sell credit packages yet
 
