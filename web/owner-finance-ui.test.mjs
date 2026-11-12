@@ -289,3 +289,47 @@ test('logout or account replacement while Mollie responds cannot restore the own
   }finally{f.close();}
  }
 });
+
+const coverage=()=>({enabled:true,status:'ready',availableUsdMicros:21390000,requiredUsdMicros:6000000,headroomUsdMicros:15390000,newCreditCapacityCents:3413,fetchedAt:Date.now()-100,expiresAt:Date.now()+59900});
+const fundingReads=f=>f.calls.filter(([path])=>path==='/api/owner/finance/funding');
+test('owner opens stock coverage alongside Mollie methods without enabling auto top-up or changing policy',async()=>{
+ const f=await ready(fixture({handler:path=>Response.json(path==='/api/owner/finance/funding'?coverage():path==='/api/payments/readiness'?{ready:true,methods:['wero']}:summary())}));
+ try{
+  assert.equal(fundingReads(f).length,0);await openSales(f);await waitFor(()=>f.d.getElementById('financeFundingFigures').textContent.includes('21,39'));
+  assert.match(f.d.getElementById('financeFundingStatus').textContent,/34,13/);assert.match(f.d.getElementById('financeFundingFigures').textContent,/6,00/);assert.match(f.d.getElementById('financeFundingChecked').textContent,/geen tijdstip van het onderliggende saldo/);
+  assert.match(f.d.getElementById('financeSalesMethods').textContent,/Bij Mollie beschikbaar: Wero/);assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.equal(f.verifications.length,0);assert.equal(fundingReads(f)[0][1].cache,'no-store');
+ }finally{f.close();}
+});
+
+test('insufficient coverage explains that new sales pause while existing payments continue',async()=>{
+ const value={...coverage(),status:'insufficient',availableUsdMicros:1390000,headroomUsdMicros:-4610000,newCreditCapacityCents:0};
+ const f=await ready(fixture({handler:path=>Response.json(path==='/api/owner/finance/funding'?value:path==='/api/payments/readiness'?{ready:false,methods:['wero'],reason:'funding_unavailable'}:summary())}));
+ try{
+  await openSales(f);await waitFor(()=>f.d.getElementById('financeFundingFigures').textContent.includes('Tekort'));
+  assert.match(f.d.getElementById('financeFundingStatus').textContent,/gepauzeerd/);assert.match(f.d.getElementById('financeSalesStatus').textContent,/Bestaande betalingen worden verder verwerkt/);assert.match(f.d.getElementById('financeSalesMethods').textContent,/Wero/);assert.match(f.d.getElementById('financeFundingFigures').textContent,/4,61/);
+ }finally{f.close();}
+});
+
+test('setup and failed or stale stock reads never retain old figures or claim active protection',async()=>{
+ for(const value of [{enabled:false,status:'setup'},coverage(),{...coverage(),expiresAt:Date.now()-1},summary()]){
+  let reads=0;
+  const f=await ready(fixture({handler:path=>path==='/api/owner/finance/funding'?(++reads===1?Response.json(value):new Response('offline',{status:503})):Response.json(path==='/api/payments/readiness'?{ready:false,methods:[],reason:'funding_unavailable'}:summary())}));
+  try{
+   await openSales(f);await waitFor(()=>!f.d.getElementById('financeFundingStatus').textContent.includes('controleren…'));
+   if(value.enabled===false)assert.match(f.d.getElementById('financeFundingStatus').textContent,/moet nog worden ingesteld/);
+   if(value.enabled!==true||value.expiresAt<=Date.now())assert.equal(f.d.getElementById('financeFundingFigures').textContent,'');
+   await waitFor(()=>!f.d.querySelector('.finance-toolbar button').disabled);refreshFinance(f);await waitFor(()=>reads===2&&f.d.getElementById('financeFundingStatus').textContent.includes('niet als gereed bevestigd'));
+   assert.equal(f.d.getElementById('financeFundingFigures').textContent,'');assert.equal(f.d.getElementById('financeFundingChecked').textContent,'');
+  }finally{f.close();}
+ }
+});
+
+test('a late stock response cannot disclose provider finances after logout or a new account binding',async()=>{
+ for(const logout of [true,false]){
+  const pending=deferred(),f=await ready(fixture({handler:path=>path==='/api/owner/finance/funding'?pending.promise:Response.json(path==='/api/payments/readiness'?{ready:true,methods:['wero']}:summary())}));
+  try{
+   await openSales(f);await waitFor(()=>fundingReads(f).length===1);if(logout){f.d.getElementById('authLogout').click();f.stop();}else f.win.rigRequest=async()=>Response.json(summary());
+   pending.resolve(Response.json(coverage()));await waitFor(()=>f.d.getElementById('financeDialog')===null);assert.doesNotMatch(f.d.body.textContent,/21,39|34,13/);
+  }finally{f.close();}
+ }
+});

@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -71,7 +72,7 @@ test('billing is mandatory, country-bound and strict before package or provider 
 
 test('unsupported invoice characters are rejected before acceptance, order or provider dispatch while genuine accented names pass',async()=>{
  const f=await fixture();try{
-  let calls=0;const payment=createProductionPayment({transport:async()=>{calls++;throw Error('Unexpected provider access');}});
+  let calls=0;const payment=createProductionPayment({...testCheckoutFunding,transport:async()=>{calls++;throw Error('Unexpected provider access');}});
   for(const field of ['name','street','city']){
    const data=f.body({billing:f.billing({[field]:'李明 12'})}),response=await payment.user(f.request(data),f.env,ALICE);
    assert.equal(response.status,400);const error=await response.json();assert.equal(error.code,'billing_characters_unsupported');assert.match(error.error,/Wijzig je echte naam niet/);assert.equal(calls,0);
@@ -134,7 +135,7 @@ test('own profile GET rejects forged identities, query IDOR, wrong tenant/method
 test('failed and uncertain Mollie calls retain recovery evidence, grant no credits and cannot expose billing to another buyer',async()=>{
  for(const phase of ['profile','submission']){
   const f=await fixture();try{
-   let calls=0;const payment=createProductionPayment({transport:async(input)=>{calls++;if(phase==='submission'&&new URL(input).pathname==='/v2/profiles/me')return Response.json({id:PROFILE});throw Error('Provider unavailable');}}),data=f.body();
+   let calls=0;const payment=createProductionPayment({...testCheckoutFunding,transport:async(input)=>{calls++;if(phase==='submission'&&new URL(input).pathname==='/v2/profiles/me')return Response.json({id:PROFILE});throw Error('Provider unavailable');}}),data=f.body();
    const response=await payment.user(f.request(data),f.env,ALICE);assert.equal(response.status,503);assert.equal(calls,phase==='profile'?1:2);assert.equal((await f.rows('rig_purchase_billing')).length,1);const orders=await f.rows('rig_orders');assert.equal(orders.length,1);assert.equal(orders[0].state,phase==='profile'?'failed':'unknown');assert.equal((await f.rows('rig_ledger')).length,0);
    assert.deepEqual((await(await f.get({userId:BOB})).json()).billing,null);
   }finally{await f.mf.dispose();}

@@ -43,7 +43,7 @@ export function createWorkflowRuntime(env,{productionContext,trustedUserId,provi
  if(!isProductionGenerationContext(productionContext,{db:env.PRODUCTION_DB}))throw Error('Workflow production capability required');
  const context=productionContext,mapped=context.env,db=mapped.DB,bucket=mapped.BUCKET;
  if(['get','put','head'].some(k=>typeof bucket?.[k]!=='function'))throw Error('Private workflow bucket required');
- const current=()=>createProductionGenerationContext(env),transport=closedVideoTesting.providerTransport(providerFetch),parents=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext:context});
+ const current=()=>createProductionGenerationContext(env),transport=closedVideoTesting.providerTransport(providerFetch),parents=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext:context,fundingNetwork:transport});
  const workflows=createProductionWorkflowStores(db,{productionContext:context,readCurrentProductionContext:current,clock});
  let initialReservation=preparationReservation,activeReservation=null;
  async function admitPreparation(req){

@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -61,7 +62,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
  const balance=async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) AS cents FROM rig_ledger WHERE user_id=?').bind(ALICE).first()).cents;
  async function fund(user=ALICE){let payment;
   const transport=async(input,init={})=>{const u=new URL(input);if(u.pathname==='/v2/profiles/me')return Response.json({id:'pfl_TESTPROFILE'});if(u.pathname==='/v2/payments'&&init.method==='POST'){const data=JSON.parse(init.body);payment={id:'tr_Fixture001',mode:'live',profileId:'pfl_TESTPROFILE',amount:data.amount,metadata:data.metadata,status:'open',_links:{checkout:{href:'https://www.mollie.com/checkout/fixture'}}};return Response.json(payment)}if(u.pathname.endsWith('/refunds'))return Response.json({_embedded:{refunds:[]}});if(u.pathname.endsWith('/chargebacks'))return Response.json({_embedded:{chargebacks:[]}});return Response.json(payment)};
-  const payments=createProductionPayment({transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
+  const payments=createProductionPayment({...testCheckoutFunding,transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
   for(let i=0;i<2;i++)assert.equal((await payments.webhook(new Request(env.RIG_PRODUCTION_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'id='+payment.id}),env)).status,200);
  }
  return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches})};

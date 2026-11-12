@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -115,7 +116,7 @@ test('acceptance SQL rejects unsupported country, business type, false currency 
 
 function fakePayments(f){
  const calls=[];let created=0;
- const payment=createProductionPayment({transport:async(input,init={})=>{
+ const payment=createProductionPayment({...testCheckoutFunding,transport:async(input,init={})=>{
   const url=new URL(input);assert.equal(url.origin,'https://api.mollie.com');assert.equal(new Headers(init.headers).get('authorization'),'Bearer live_fixture');calls.push({path:url.pathname,method:init.method??'GET'});
   if(url.pathname==='/v2/profiles/me'&&(init.method??'GET')==='GET')return Response.json({id:PROFILE});
   assert.equal(url.pathname,'/v2/payments');assert.equal(init.method,'POST');created++;const body=JSON.parse(init.body);
@@ -153,7 +154,10 @@ test('stale consent recovers through the existing durable cancellation barrier, 
 });
 
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-function beforeOrderDatabase(db,entered,release){return {prepare(sql){const statement=db.prepare(sql);if(!sql.startsWith('INSERT OR IGNORE INTO rig_orders('))return statement;return {bind(...args){const bound=statement.bind(...args);return {async run(){entered.resolve();await release.promise;return bound.run();}};}};}};}
+function beforeOrderDatabase(db,entered,release){const watched=new WeakSet();return {
+ prepare(sql){const statement=db.prepare(sql);if(!sql.startsWith('INSERT OR IGNORE INTO rig_orders('))return statement;return {bind(...args){const bound=statement.bind(...args);watched.add(bound);return bound;}};},
+ async batch(statements){if(statements.some(statement=>watched.has(statement))){entered.resolve();await release.promise;}return db.batch(statements);}
+};}
 test('recovery cancellation wins a race after commercial acceptance but before order insertion and blocks the late provider dispatch',async()=>{
  const f=await fixture(),entered=deferred(),release=deferred();let attempt;try{
   const fake=fakePayments(f),data=f.body();f.env.PRODUCTION_DB=beforeOrderDatabase(f.db,entered,release);attempt=fake.call(data);await entered.promise;
@@ -164,7 +168,7 @@ test('recovery cancellation wins a race after commercial acceptance but before o
 
 test('a dispatched concurrent request stays pending and cannot be canceled or duplicated after another request reports stale consent',async()=>{
  const f=await fixture(),entered=deferred(),release=deferred();let attempt,created=0;try{
-  const data=f.body(),payment=createProductionPayment({transport:async(input,init={})=>{
+  const data=f.body(),payment=createProductionPayment({...testCheckoutFunding,transport:async(input,init={})=>{
    const url=new URL(input);if(url.pathname==='/v2/profiles/me')return Response.json({id:PROFILE});assert.equal(url.pathname,'/v2/payments');assert.equal(init.method,'POST');created++;entered.resolve();await release.promise;const body=JSON.parse(init.body);return Response.json({id:'tr_Race0001',profileId:PROFILE,mode:'live',status:'open',amount:body.amount,metadata:body.metadata,_links:{checkout:{href:'https://www.mollie.com/checkout/race'}}},{status:201});
   }}),call=(body,path=BASE)=>payment.user(f.request(body,{path}),f.env,ALICE);
   attempt=call(data);await entered.promise;assert.equal(created,1);assert.equal((await f.money()).orders[0].state,'creating');

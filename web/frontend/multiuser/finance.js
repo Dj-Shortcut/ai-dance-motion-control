@@ -8,6 +8,7 @@
   const context={request:window.rigRequest,active:window.rigSessionActive};
   const current=()=>!disposed&&window.rigRequest===context.request&&window.rigSessionActive===context.active&&context.active()===true;
   const euro=value=>Number.isSafeInteger(value)?new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(value/100):'Onbekend';
+  const dollars=value=>Number.isSafeInteger(value)?new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD'}).format(value/1000000):'Onbekend';
   const percent=value=>Number.isSafeInteger(value)?new Intl.NumberFormat('nl-BE',{maximumFractionDigits:1}).format(value/100)+'%':'Onbekend';
   const date=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('nl-BE',{day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Europe/Brussels'}).format(d);};
   const element=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
@@ -15,7 +16,7 @@
   const stateNames={submitting:'Wordt verstuurd',unknown:'Wordt gecontroleerd',queued:'In verwerking',completed:'Klaar',failed:'Mislukt'};
   const categories={'fal-charge':'Fal-verbruik van één video','fal-topup':'Fal-tegoed bijgekocht','mollie':'Mollie-betaalkosten','hosting':'Hosting en opslag','other':'Andere bedrijfskosten','refund':'Terugbetaling (alleen registratie)'};
   const paymentMethods={bancontact:'Bancontact',creditcard:'Kaart',ideal:'iDEAL',wero:'Wero',paypal:'PayPal',applepay:'Apple Pay',googlepay:'Google Pay',banktransfer:'Overschrijving',belfius:'Belfius',kbc:'KBC/CBC'};
-  const paymentReasons={profile_mismatch:'Het Mollie-profiel komt niet overeen met de betaalinstellingen van RIG.',profile_blocked:'Mollie heeft het betaalprofiel geblokkeerd.',no_enabled_methods:'Mollie biedt momenteel geen betaalmethode aan voor € 5,00.',rate_limited:'De betaalstatus is te vaak gecontroleerd. Probeer later opnieuw.'};
+  const paymentReasons={profile_mismatch:'Het Mollie-profiel komt niet overeen met de betaalinstellingen van RIG.',profile_blocked:'Mollie heeft het betaalprofiel geblokkeerd.',no_enabled_methods:'Mollie biedt momenteel geen betaalmethode aan voor € 5,00.',rate_limited:'De betaalstatus is te vaak gecontroleerd. Probeer later opnieuw.',funding_unavailable:'Nieuwe tegoedaankopen zijn gepauzeerd totdat er voldoende gecontroleerde Fal-dekking is. Bestaande betalingen worden verder verwerkt.'};
   const policyFields=[
     ['eurPerUsdMicros','Euro per US$1',1000000,0.5,2,0.000001],
     ['providerVatBps','Reserve voor btw op Fal (%)',100,0,30,0.01],
@@ -73,6 +74,10 @@
     const salesMethods=element('p','','finance-note');salesMethods.id='financeSalesMethods';
     const salesChecked=element('small','Nog niet gecontroleerd.');salesChecked.id='financeSalesChecked';
     sales.append(salesStatus,salesMethods,salesChecked,element('p','Dit controleert welke methoden Mollie voor € 5,00 aanbiedt. De klant kiest en bevestigt zelf bij Mollie. Tegoed verschijnt pas na een gecontroleerde betaling. Gebruik Vernieuwen om opnieuw te controleren.','finance-policy-note'));
+    const fundingStatus=element('p','De dekking voor klanttegoed is nog niet gecontroleerd.','finance-note');fundingStatus.id='financeFundingStatus';fundingStatus.setAttribute('role','status');
+    const fundingFigures=element('p','','finance-note');fundingFigures.id='financeFundingFigures';
+    const fundingChecked=element('small','');fundingChecked.id='financeFundingChecked';
+    sales.append(fundingStatus,fundingFigures,fundingChecked,element('p','De controle telt beschikbaar klanttegoed, lopende video’s en open betalingen mee vóór een nieuwe aankoop. Automatische aanvulling regel je eenmalig bij Fal; RIG doet zelf geen kaartafschrijving. Het saldo kan achterlopen en uitgaven buiten RIG blijven apart.','finance-policy-note'));
     const security=element('section');security.id='financeSecurity';dialog.append(security);
     if(typeof window.rigOwnerVerification?.mount==='function')window.rigOwnerVerification.mount(security);
     else security.append(element('p','De extra beveiliging is tijdelijk niet beschikbaar. Vernieuw RIG om gevoelige handelingen te bevestigen.','finance-note'));
@@ -100,7 +105,7 @@
     const administration=element('section');administration.id='financeAdministration';dialog.append(administration);
     if(typeof window.rigOwnerAdministration?.mount==='function')window.rigOwnerAdministration.mount(administration,{onChanged:()=>void reload()});
     document.body.append(dialog);
-    ui={month,refresh,all,status:message,sales,salesStatus,salesMethods,salesChecked,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
+    ui={month,refresh,all,status:message,sales,salesStatus,salesMethods,salesChecked,fundingStatus,fundingFigures,fundingChecked,cash,earned,liability,margin,warning,rows,jobsWrap,expensesWrap,expenseDetails,expenseForm,category,expenseDate,amount,job,note,expenseSubmit,correctionNotice,cancelCorrection,policyForm,inputs,policySubmit};
     sales.addEventListener('toggle',()=>{if(sales.open&&dialog.open)void reloadSales();});
     refresh.addEventListener('click',()=>{void reload();if(sales.open)void reloadSales();});all.addEventListener('click',()=>{month.value='';void reload();});month.addEventListener('change',()=>void reload());
     category.addEventListener('change',()=>{job.parentElement.hidden=category.value!=='fal-charge';job.required=category.value==='fal-charge';if(category.value!=='fal-charge')job.value='';});category.dispatchEvent(new Event('change'));
@@ -148,15 +153,27 @@
     }catch(error){if(!initial)status(error.message,true);}
     finally{if(sequence===loadSequence){loading=false;if(current()&&ui)ui.refresh.disabled=false;}}
   }
+  async function reloadFunding(sequence){
+    ui.fundingStatus.textContent='Dekking voor klanttegoed controleren…';ui.fundingFigures.textContent='';ui.fundingChecked.textContent='';
+    try{
+      const value=await request('/api/owner/finance/funding');if(!current()||sequence!==salesSequence)return;
+      if(value?.enabled===false&&value.status==='setup'){ui.fundingStatus.textContent='De voorraadbeveiliging moet nog worden ingesteld. Nieuwe tegoedaankopen blijven gepauzeerd.';return;}
+      if(value?.enabled!==true||!['ready','insufficient'].includes(value.status)||!['availableUsdMicros','requiredUsdMicros','headroomUsdMicros','newCreditCapacityCents','fetchedAt','expiresAt'].every(key=>integer(value[key]))||value.availableUsdMicros<0||value.requiredUsdMicros<0||value.newCreditCapacityCents<0||value.fetchedAt>Date.now()||value.expiresAt<=Date.now()||value.expiresAt<=value.fetchedAt)throw Error('Invalid funding status');
+      ui.fundingStatus.textContent=value.status==='ready'?'Gecontroleerde ruimte voor maximaal '+euro(value.newCreditCapacityCents)+' nieuw RIG-tegoed.':'Nieuwe verkopen zijn gepauzeerd: de huidige Fal-voorraad dekt de reserveringen niet.';
+      ui.fundingFigures.textContent='Fal-saldo: '+dollars(value.availableUsdMicros)+' · Nodige dekking met buffer: '+dollars(value.requiredUsdMicros)+' · '+(value.headroomUsdMicros>=0?'Vrije ruimte: '+dollars(value.headroomUsdMicros):'Tekort: '+dollars(-value.headroomUsdMicros))+'.';
+      ui.fundingChecked.textContent='Saldo opgevraagd om '+new Intl.DateTimeFormat('nl-BE',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Europe/Brussels'}).format(new Date(value.fetchedAt))+'. Fal geeft geen tijdstip van het onderliggende saldo mee.';
+    }catch{if(current()&&sequence===salesSequence){ui.fundingStatus.textContent='De voorraaddekking kan nu niet worden gecontroleerd. Nieuwe verkoop is niet als gereed bevestigd.';ui.fundingFigures.textContent='';ui.fundingChecked.textContent='';}}
+  }
   async function reloadSales(){
     if(!current()||!ui||salesLoading)return;
     const sequence=++salesSequence;salesLoading=true;ui.salesStatus.textContent='Mollie controleren…';ui.salesStatus.dataset.error='false';ui.salesMethods.textContent='';ui.salesChecked.textContent='Bezig met controleren…';
+    void reloadFunding(sequence);
     try{
       const value=await request('/api/payments/readiness');if(!current()||sequence!==salesSequence)return;
-      if(typeof value?.ready!=='boolean'||!Array.isArray(value.methods)||value.methods.length>64||value.methods.some(id=>typeof id!=='string'||!/^[a-z][a-z0-9_]{1,39}$/.test(id))||new Set(value.methods).size!==value.methods.length||value.ready!==(value.methods.length>0)||value.ready&&value.reason!==undefined||value.reason!==undefined&&(typeof value.reason!=='string'||value.reason.length>80))throw Error('Invalid payment status');
+      if(typeof value?.ready!=='boolean'||!Array.isArray(value.methods)||value.methods.length>64||value.methods.some(id=>typeof id!=='string'||!/^[a-z][a-z0-9_]{1,39}$/.test(id))||new Set(value.methods).size!==value.methods.length||value.ready&&value.methods.length===0||!value.ready&&value.methods.length>0&&value.reason!=='funding_unavailable'||value.ready&&value.reason!==undefined||value.reason!==undefined&&(typeof value.reason!=='string'||value.reason.length>80))throw Error('Invalid payment status');
       ui.salesStatus.textContent=value.ready?'Mollie biedt betaalmethoden aan voor € 5,00.':Object.hasOwn(paymentReasons,value.reason)?paymentReasons[value.reason]:'Betalen is momenteel niet beschikbaar. Controleer je Mollie-instellingen.';
       ui.salesStatus.dataset.error=String(!value.ready);
-      ui.salesMethods.textContent=value.ready?'Betaalmethoden: '+value.methods.map(id=>Object.hasOwn(paymentMethods,id)?paymentMethods[id]:'Andere betaalmethode').join(', ')+'.':'';
+      ui.salesMethods.textContent=value.methods.length?'Bij Mollie beschikbaar: '+value.methods.map(id=>Object.hasOwn(paymentMethods,id)?paymentMethods[id]:'Andere betaalmethode').join(', ')+'.':'';
     }catch{
       if(!current()||sequence!==salesSequence)return;
       ui.salesStatus.textContent='De betaalstatus is tijdelijk niet beschikbaar. Kies Vernieuwen om opnieuw te controleren.';ui.salesStatus.dataset.error='true';ui.salesMethods.textContent='';

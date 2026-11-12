@@ -118,7 +118,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
  const transport=providerTransport(providerFetch), currentPrice=priceFetch||((key,quality)=>getFalPricePreflight(key,transport,{includeEdit:editEnabled(env),includeRecast:recastAvailable,quality}));
  const makeAssets=()=>createAssets({mode:env.RIG_MODE,...(paid?{productionContext}:{}),origin:env.RIG_PUBLIC_ORIGIN,media:env.RIG_MEDIA,mediaSecret:env.RIG_MEDIA_SECRET,falKey:env.FAL_KEY,providerFetch:transport,gatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,gatewayFetch,r2Inputs,inlineO3Owner,authenticate:async()=>({id:trustedUserId}),limit:async(user,scope)=>d1Limit({env,category:'asset',userId:user,method:scope==='asset-read'?'GET':'POST'})});
  const router=createRouter({...(paid?{productionContext}:{}),identity:async()=>trustedUserId,limit:d1Limit,makeAssets:async()=>makeAssets(),makeGenerationServices:async()=>{
-  const stores=createD1GenerationStores(env.DB,{mode:env.RIG_MODE,dispatchMode:accessMode,...(paid?{productionContext}:{})});
+  const stores=createD1GenerationStores(env.DB,{mode:env.RIG_MODE,dispatchMode:accessMode,...(paid?{productionContext,fundingNetwork:transport}:{})});
   if(accessMode==='sponsored'){
    const baseProvider=stores.jobs.markProviderFailed;
    const baseConfirm=stores.jobs.confirmInputFailureRefund;

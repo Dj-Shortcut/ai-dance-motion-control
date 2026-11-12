@@ -4,9 +4,9 @@ import {createProductionD1GenerationStores} from './production-generation-stores
 // D1 batch is a transaction: both statements execute serially and roll back on SQL errors.
 const quoteFrom = (row) => row && ({id:row.id,userId:row.user_id,model:row.model,input:JSON.parse(row.input_json),priceCents:row.price_cents,pricingVersion:row.pricing_version,durationSeconds:row.duration_seconds,expiresAt:row.expires_at});
 const jobFrom = (row) => row && ({id:row.id,userId:row.user_id,quoteId:row.quote_id,state:row.state,priceCents:row.price_cents,falRequestId:row.fal_request_id,resultKey:row.result_key,failureCode:row.failure_code});
-export function createD1GenerationStores(db,{mode,dispatchMode='owner',productionContext}={}) {
+export function createD1GenerationStores(db,{mode,dispatchMode='owner',productionContext,fundingNetwork}={}) {
   const paid=mode==='live'&&dispatchMode==='paid'&&isProductionGenerationContext(productionContext,{db});
-  if(paid)return createProductionD1GenerationStores(db,{productionContext});
+  if(paid)return createProductionD1GenerationStores(db,{productionContext,fundingNetwork});
   if (!paid&&(mode!=='test'||!['owner','sponsored'].includes(dispatchMode))) throw Error('Generation is only available in an isolated test environment');
   // A sponsored dispatch is permitted only when the exact job, recipient and
   // price have a durable reservation. The condition is part of the UPDATE,

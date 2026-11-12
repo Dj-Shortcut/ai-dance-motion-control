@@ -6,6 +6,7 @@ import {validateProductionTenant} from './production-tenant.mjs';
 import {d1Limit} from './router.mjs';
 import {ensurePendingInvoices} from './invoice-store.mjs';
 import {prepareCommercialCheckout,commercialPackageData} from './commercial-checkout.mjs';
+import {prepareFundingAdmission,readFundingCoverage} from './funding-coverage.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail=()=>Response.json({error:'Betalen is tijdelijk niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 class PreDispatchFailure extends Error {}
@@ -60,8 +61,14 @@ function provider(env,transport){
   return new Response(body.bytes,{status:result.status,statusText:result.statusText,headers:result.headers});
  };
 }
-export function createProductionPayment({transport}={}){
+export function createProductionPayment({transport,orderAdmission,coverageReader}={}){
  if(typeof transport!=='function')throw Error('Explicit transport required');
+ if(orderAdmission!==undefined&&typeof orderAdmission!=='function'||coverageReader!==undefined&&typeof coverageReader!=='function')throw Error('Invalid funding dependency');
+ const admit=orderAdmission??(({env,...args})=>prepareFundingAdmission(env,{...args,network:transport}));
+ const coverage=async mapped=>{try{return await (coverageReader??readFundingCoverage)(mapped,{network:transport});}catch{return {enabled:false,status:'unavailable'};}};
+ const capacity=value=>value?.enabled===true&&value.status==='ready'&&Number.isSafeInteger(value.newCreditCapacityCents)&&value.newCreditCapacityCents>=0?value.newCreditCapacityCents:0;
+ const configuredPackages=mapped=>{try{const list=JSON.parse(mapped.RIG_PACKAGES);return Array.isArray(list)?list.filter(p=>Number.isSafeInteger(p?.credits)&&p.credits>0):[];}catch{return [];}};
+ const maySell=(value,packages)=>packages.some(pkg=>pkg.credits<=capacity(value));
  return {
   // trustedUserId must be from the authenticated Sites bridge, not from an HTTP header.
   async user(req,env,trustedUserId){
@@ -73,20 +80,24 @@ export function createProductionPayment({transport}={}){
     if(await d1Limit({env:mapped,category:url.pathname==='/api/session'?'session':'payment',userId:trustedUserId,method:req.method})!==true)return Response.json({error:'Te veel aanvragen.'},{status:429});
     if(url.pathname==='/api/payments/readiness'){
      if(await d1Limit({env:mapped,category:'readiness',userId:null,method:'GET'})!==true)return readinessReply({ready:false,reason:'rate_limited',methods:[]},429);
-     return readiness(mapped,transport);
+     const result=await readiness(mapped,transport),value=await result.json();
+     if(!value.ready)return readinessReply(value,result.status);
+     if(!maySell(await coverage(mapped),configuredPackages(mapped)))return readinessReply({...value,ready:false,reason:'funding_unavailable'});
+     return readinessReply(value,result.status);
     }
     if(url.pathname==='/api/session'){
      const balance=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance, EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();
      if(!Number.isSafeInteger(balance?.balance))return fail();
-     return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:true,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
+     return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:maySell(await coverage(mapped),configuredPackages(mapped)),funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
     if(req.method==='POST'&&url.pathname==='/api/payments/create'){
      const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;
     }
-    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,trustedUserId)||new Response(null,{status:404});
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit})(req,mapped,trustedUserId)||new Response(null,{status:404});
     if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
      const value=await response.json();
-     return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:commercialPackageData(env)),currency:'EUR',mode:'live',purchasesEnabled:true},{status:response.status,headers:response.headers});
+     const stock=await coverage(mapped),packages=url.pathname==='/api/payments/packages'?value.packages:configuredPackages(mapped);
+     return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:{...commercialPackageData(env),packages:packages.map(pkg=>({...pkg,available:pkg.credits<=capacity(stock)}))}),currency:'EUR',mode:'live',purchasesEnabled:maySell(stock,packages),...(maySell(stock,packages)?{}:{purchasePauseReason:'funding_unavailable'})},{status:response.status,headers:response.headers});
     }
     // A document outage must never hide a verified payment or cause a retry
     // of the customer's bank transaction. The collector repairs missed issues.

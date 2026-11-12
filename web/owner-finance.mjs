@@ -4,6 +4,7 @@ import {parseProfitPolicy,profitPolicyRow,validProfitSnapshot} from './profit-po
 import {d1Limit} from './router.mjs';
 import {prepareOwnerMutation} from './owner-security.mjs';
 import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
+import {readFundingCoverage} from './funding-coverage.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -164,13 +165,14 @@ async function savePolicy(req,mapped,user,now){
  return json({saved:true,policy:{...parseProfitPolicy(row),updatedAt:now}});
 }
 // userId must come from authenticateProductionSites, never from request data.
-export async function handleOwnerFinance(req,env,{userId,now=Date.now()}={}){
+export async function handleOwnerFinance(req,env,{userId,now=Date.now(),network=fetch}={}){
  if(!USER.test(env?.RIG_PRODUCTION_OWNER_USER_ID||'')||userId!==env.RIG_PRODUCTION_OWNER_USER_ID)return error('Geen toegang.',403);
  const mapped=await validateProductionTenant(env);if(!mapped)return error('Het financiële overzicht is tijdelijk niet beschikbaar.',503);
  const url=new URL(req.url);
  if(url.origin!==mapped.RIG_PUBLIC_ORIGIN||!['GET','POST'].includes(req.method)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return error('Aanvraag geweigerd.',403);
  if(await d1Limit({env:mapped,category:'finance',userId,method:req.method})!==true)return error('Te veel aanvragen. Probeer later opnieuw.',429);
  try{
+  if(req.method==='GET'&&url.pathname==='/api/owner/finance/funding'&&!url.search)return json(await readFundingCoverage(mapped,{network,now}));
   if(req.method==='GET'&&url.pathname==='/api/owner/finance'){
    const period=reportPeriod(url);if(!period)return error('Kies een geldige maand.',400);
    return json(await summary(mapped,period,now));

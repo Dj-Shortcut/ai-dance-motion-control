@@ -3,7 +3,7 @@
 .preview-prepared { color: #9de7c9; border: 1px solid #40685a; background: transparent; border-radius: 8px; padding: 9px 12px; cursor: pointer; }
 .preview-prepared:hover { background: #1b3029; }
 
-.account{background:none;border:0;color:#a4b1b1;cursor:pointer;font:inherit}.package-list{display:grid;gap:8px;margin:14px 0}.package-button{padding:12px;border:1px solid #46534f;border-radius:8px;background:#202b29;color:#f4f6f5;cursor:pointer}#creditsDialog p,#quoteDialog p,#uploadDialog p{color:#c6ceca;line-height:1.5}#refreshPayment{border:0;background:transparent;color:#91e2bb;cursor:pointer}
+.account{background:none;border:0;color:#a4b1b1;cursor:pointer;font:inherit}.package-list{display:grid;gap:8px;margin:14px 0}.package-button{padding:12px;border:1px solid #46534f;border-radius:8px;background:#202b29;color:#f4f6f5;cursor:pointer}.package-button:disabled{opacity:.45;cursor:not-allowed}#creditsDialog p,#quoteDialog p,#uploadDialog p{color:#c6ceca;line-height:1.5}#refreshPayment{border:0;background:transparent;color:#91e2bb;cursor:pointer}
 
 .motion-preview-controls{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}.motion-preview-controls button{border:0;border-radius:5px;padding:4px 8px;color:#d9e5df;background:#293331}.motion-preview-controls input{flex:1;min-width:30px;accent-color:var(--mint)}
 
