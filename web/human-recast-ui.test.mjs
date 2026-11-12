@@ -33,6 +33,8 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
   return {ok:true,json:async()=>value};
  };
  w.eval(app);w.eval(generation);w.rigVideoMode='live';
+ // These core tests omit flow.js; guided-flow-ui.test.mjs covers its real screen visibility and focus navigation.
+ for(const screen of d.querySelectorAll('[data-flow-screen]'))screen.hidden=false;
  const change=(id,value)=>{el(id).value=String(value);el(id).dispatchEvent(new w.Event('change',{bubbles:true}));};
  const prompt=text=>{el('editPrompt').value=text;el('editPrompt').dispatchEvent(new w.Event('input',{bubbles:true}));};
  const file=(id,name,type)=>{const source=new w.File(['source'],name,{type});Object.defineProperty(el(id),'files',{configurable:true,value:[source]});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));return source;};

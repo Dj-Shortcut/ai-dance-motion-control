@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>RIG start</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#8fe3b8}a:hover{color:#b6f0d2}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #101416; color: #eef2f0; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 20px 20px 28px; gap: 22px; overflow: hidden">
+  <div style="display: flex; align-items: center; justify-content: space-between; height: 44px">
+    <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: 0.5px">RIG<span style="color: {{accent}}">.</span></div>
+    <a href="Klaar.dc.html" style="font-size: 15px; font-weight: 500; text-decoration: none; padding: 12px 0">Mijn video's</a>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 36px; line-height: 1.05; font-weight: 700">Zet je foto<br>in beweging.</h1>
+    <p style="margin: 0; font-size: 16px; line-height: 1.45; color: #a9b3b0">Eén foto + één video = jouw nieuwe video. Proberen kan zonder account.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="height: 132px; border-radius: 14px; background: #2b3a46; display: flex; align-items: center; justify-content: center">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#c9d6df" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-9 9"></path></svg>
+      </div>
+      <span style="font-size: 13px; color: #a9b3b0; text-align: center">Foto</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="height: 132px; border-radius: 14px; background: #3a2f46; display: flex; align-items: center; justify-content: center">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d9cfe3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"></rect><path d="M16 10l5-3v10l-5-3z"></path></svg>
+      </div>
+      <span style="font-size: 13px; color: #a9b3b0; text-align: center">Video</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="height: 132px; border-radius: 14px; background: #2c4238; border: 2px solid {{accent}}; box-sizing: border-box; display: flex; align-items: center; justify-content: center">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#8fe3b8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg>
+      </div>
+      <span style="font-size: 13px; color: #eef2f0; text-align: center; font-weight: 600">Resultaat</span>
+    </div>
+  </div>
+  <p style="margin: -12px 0 0; font-size: 12px; color: #a9b3b0; text-align: center">[Lussend voorbeeld, hetzelfde als in je Facebook-post]</p>
+
+  <a href="Kies.dc.html" style="display: flex; align-items: center; justify-content: center; height: 56px; border-radius: 16px; background: {{accent}}; color: #0d1f17; font-size: 17px; font-weight: 600; text-decoration: none">Probeer met je eigen foto</a>
+
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #eef2f0">Of begin met een idee</h2>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+      <sc-for list="{{ideas}}" as="idea" hint-placeholder-count="4">
+        <a href="Kies.dc.html" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px; background: #1a2023; border: 1px solid #2e383c; text-decoration: none; color: #eef2f0">
+          <div style="height: 64px; border-radius: 10px; background: {{idea.tint}}"></div>
+          <span style="font-size: 14px; line-height: 1.3; font-weight: 500">{{idea.label}}</span>
+        </a>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#8fe3b8","options":["#8fe3b8","#f2b46d","#9cc4ff"]},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#8fe3b8',
+      ideas: [
+        { label: 'Je hond speelt mee in een band', tint: '#3d3a2b' },
+        { label: 'Doe deze dans na', tint: '#3a2f46' },
+        { label: 'Oma op de dansvloer', tint: '#2b3a46' },
+        { label: 'Jij in een filmscène', tint: '#2c4238' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

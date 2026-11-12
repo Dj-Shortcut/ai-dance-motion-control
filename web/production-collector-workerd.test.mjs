@@ -57,6 +57,21 @@ test('disabled collector performs no database, clock, provider or factory operat
  assert.deepEqual(await collectProduction(env,{network:forbidden,videoFactory:forbidden,clock:forbidden}),{videosChecked:0,paymentsChecked:0,needsReview:0,unavailable:0});assert.equal(touched,0);
 });
 
+test('paid purchases reconcile exactly once while video generation is paused, without touching video tables or providers',async()=>{
+ const f=await fixture();try{
+  const orderId=await f.order(USERS[0],1);f.env.RIG_PRODUCTION_VIDEO_ENABLED='no';
+  const db=f.db;f.env.PRODUCTION_DB={prepare(sql){assert.doesNotMatch(sql,/rig_generation|rig_workflow/,'payment recovery must not depend on video storage');return db.prepare(sql)},batch:statements=>db.batch(statements)};
+  const forbidden=async()=>{throw Error('Video service must remain paused')};
+  const run=now=>collectProduction(f.env,{limit:1,clock:()=>now,network:f.network,videoFactory:forbidden});
+  assert.deepEqual(await run(1000000),{videosChecked:0,paymentsChecked:1,needsReview:0,unavailable:0});
+  assert.equal((await db.prepare('SELECT state FROM rig_orders WHERE id=?').bind(orderId).first()).state,'paid');
+  assert.equal((await db.prepare('SELECT SUM(delta) amount FROM rig_ledger WHERE user_id=?').bind(USERS[0]).first()).amount,500);
+  assert.deepEqual(await run(1400000),{videosChecked:0,paymentsChecked:1,needsReview:0,unavailable:0});
+  assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_ledger WHERE order_id=?').bind(orderId).first()).n,1);
+  assert.ok(f.external.length>0);assert.ok(f.external.every(call=>call.method==='GET'));
+ }finally{await f.mf.dispose()}
+});
+
 test('malformed owners never reach a video handler; failed old jobs cannot starve unvisited owners',async()=>{
  const f=await fixture();try{
   await f.job('not-a-production-user',1);const first=await f.job(USERS[0],2),next=await f.job(USERS[2],3);

@@ -1,5 +1,5 @@
 import {isProductionGenerationContext} from './production-generation-context.mjs';
-import {providerJSON,providerInputValidation} from './provider-response.mjs';
+import {providerJSON,providerInputValidation,providerBillingRejection} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
 import {isR2InputUrl} from './rig-r2-inputs.mjs';
 import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
@@ -64,7 +64,7 @@ function failedPreparation(job,message){
   return {...publicJob(job),...(job.fundingKind==='owner-provider'?{finalizationConfirmed:true,message:`${message} Er is geen videogeneratie naar fal verstuurd.`}:{refundConfirmed:true,message:`${message} Je tegoed is teruggezet.`})};
 }
 function publicJob(job) {
-  const failureCode=job.state==='failed'&&['provider_input_unavailable','provider_subject_not_detected'].includes(job.failureCode)?job.failureCode:null;
+  const failureCode=job.state==='failed'&&['provider_input_unavailable','provider_subject_not_detected','provider_billing_locked'].includes(job.failureCode)?job.failureCode:null;
   return { id:job.id, state:job.state, ...publicFunding(job),...(failureCode?{failureCode}:{}) };
 }
 async function readJSON(req) {
@@ -291,7 +291,16 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         const signal=AbortSignal.timeout(30000);
         const lifecycle=temporaryLinks?{expiration_duration_seconds:86400}:{expiration_duration_seconds:86400,initial_acl:{default:'forbid',rules:[]}};
         const r=await fetchImpl(`${QUEUE}/${quote.model}`,{method:'POST',redirect:'manual',signal,headers:{Authorization:`Key ${services.falKey}`,'Content-Type':'application/json','X-Fal-No-Retry':'1','X-Fal-Request-Start-Timeout':'300','x-app-fal-disable-fallback':'true','X-Fal-Store-IO':'0','X-Fal-Object-Lifecycle-Preference':JSON.stringify(lifecycle)},body:providerBody});
-        if (!r.ok) throw Error('ambiguous');
+        if(!r.ok){
+          if(typeof services.jobs.markSubmissionRejected==='function'){
+            const proof=await providerBillingRejection(r,{signal,userId:user.id,jobId});
+            if(proof){
+              const failed=await services.jobs.markSubmissionRejected(user.id,jobId,proof);
+              return respond({...publicJob(failed),...(quote.fundingKind==='owner-provider'?{finalizationConfirmed:true}:{refundConfirmed:true}),message:'De videodienst accepteert momenteel geen nieuwe opdrachten.'});
+            }
+          }
+          throw Error('ambiguous');
+        }
         const result=await providerJSON(r,{signal}); if (!REQ_ID.test(result.request_id??'')) throw Error('ambiguous');
         await services.jobs.markSubmitted(user.id,jobId,result.request_id);
         return respond({...publicJob(acceptedJob),state:'queued'},202);

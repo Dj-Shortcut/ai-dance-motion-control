@@ -28,7 +28,7 @@ async function main(){
    logout.hidden=false;gate.hidden=true;studio.hidden=false;
    status.textContent='Aangemeld. Mollie staat in testmodus.';
    const loadScript=name=>new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=`/multiuser/${name}`;script.onload=resolve;script.onerror=reject;document.body.appendChild(script)});
-   for(const name of ['media.js','app.js','payments.js'])await loadScript(name);
+   for(const name of ['media.js','app.js','flow.js','payments.js'])await loadScript(name);
    invitationUi=mountSponsorInvitation({invitation,binding,document,onRedeemed:()=>enableVideoIfAvailable({binding,window,document,loadScript})});
    await enableVideoIfAvailable({binding,window,document,loadScript});
   }

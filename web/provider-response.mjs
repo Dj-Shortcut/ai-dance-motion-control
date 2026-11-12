@@ -1,8 +1,9 @@
 // Bound untrusted provider metadata independently of Content-Length and cancel
 // stalled readers on the same deadline as the request. Error bodies remain
-// forbidden except a caller-explicit 422 for narrow input-rejection checking.
+// forbidden except caller-explicit 422 validation or 403 billing rejection
+// checks. Neither status alone proves a safe refund.
 export async function providerText(response,{signal,limit=65536,acceptedStatus}={}){
- if((!response.ok && !(acceptedStatus===422 && response.status===422)) || !response.body)throw Error('Provider unavailable');
+ if((!response.ok && !([403,422].includes(acceptedStatus) && response.status===acceptedStatus)) || !response.body)throw Error('Provider unavailable');
  const declared=response.headers.get('content-length');
  if(declared!==null && (!/^\d+$/.test(declared)||Number(declared)>limit)){
   void response.body.cancel().catch(()=>{});throw Error('Provider response too large');
@@ -33,6 +34,22 @@ export async function providerText(response,{signal,limit=65536,acceptedStatus}=
  }catch(error){abort();throw error}finally{if(onAbort)signal.removeEventListener('abort',onAbort);try{reader.releaseLock()}catch{}}
 }
 export async function providerJSON(response,options){return JSON.parse(await providerText(response,options))}
+
+const billingRejections=new WeakSet(),ID=/^[A-Za-z0-9_-]{1,100}$/;
+// Fal rejects locked accounts before accepting a queue request (FAQ), and the
+// precise 403 JSON below is recorded in fal-ai/fal#1147, resolved by Fal staff.
+// https://fal.ai/docs/documentation/model-apis/faq
+// https://github.com/fal-ai/fal/issues/1147
+// A generic 402, 403, timeout, prose match or accepted request ID is NOT proof.
+// Caller must use the direct response to its fixed authenticated queue POST.
+export async function providerBillingRejection(response,{signal,userId,jobId}={}){
+ if(!ID.test(userId||'')||!ID.test(jobId||'')||response.status!==403||response.redirected||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))return null;
+ let text,data;try{text=await providerText(response,{signal,acceptedStatus:403,limit:2048});data=JSON.parse(text);}catch{return null;}
+ const length=response.headers.get('content-length');if(length!==null&&Number(length)!==new TextEncoder().encode(text).length)return null;
+ if(!data||Array.isArray(data)||typeof data!=='object'||Object.keys(data).length!==1||data.detail!=='User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing')return null;
+ const proof=Object.freeze({code:'provider_billing_locked',userId,jobId});billingRejections.add(proof);return proof;
+}
+export function isProviderBillingRejection(proof,{userId,jobId}={}){return Boolean(proof&&billingRejections.has(proof)&&proof.userId===userId&&proof.jobId===jobId);}
 
 // Only the two exact observed fal validation rejections are classified terminal.
 // The caller must first verify COMPLETED and matching request_id from the fixed

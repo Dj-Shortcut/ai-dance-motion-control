@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>RIG video maken</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#8fe3b8}a:hover{color:#b6f0d2}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #101416; color: #eef2f0; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 20px 20px 28px; gap: 16px; overflow: hidden">
+  <div style="display: flex; align-items: center; justify-content: space-between; height: 44px">
+    <a href="Waar.dc.html" aria-label="Terug" style="display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-left: -12px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#eef2f0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+    </a>
+    <span style="font-size: 13px; color: #a9b3b0">Stap 3 van 3</span>
+    <span style="width: 32px"></span>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: -10px">
+    <div style="height: 4px; border-radius: 2px; background: #8fe3b8"></div>
+    <div style="height: 4px; border-radius: 2px; background: #8fe3b8"></div>
+    <div style="height: 4px; border-radius: 2px; background: #8fe3b8"></div>
+  </div>
+
+  <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 28px; line-height: 1.1">Klaar om te maken</h1>
+
+  <div style="display: flex; align-items: center; gap: 8px">
+    <div style="width: 56px; height: 70px; border-radius: 10px; background: #2b3a46"></div>
+    <span style="font-size: 18px; color: #a9b3b0">+</span>
+    <div style="width: 90px; height: 70px; border-radius: 10px; background: #3a2f46"></div>
+    <div style="display: flex; flex-direction: column; gap: 2px; margin-left: 6px">
+      <span style="font-size: 14px; font-weight: 600">In de video</span>
+      <span style="font-size: 13px; color: #a9b3b0">5 sec gekozen</span>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px">
+    <label for="wat" style="font-size: 14px; font-weight: 600">Wat moet er gebeuren? <span style="font-weight: 400; color: #a9b3b0">(mag leeg)</span></label>
+    <textarea id="wat" rows="2" placeholder="bv. Vervang de zanger door mijn hond" style="box-sizing: border-box; width: 100%; border-radius: 12px; border: 1px solid #2e383c; background: #1a2023; color: #eef2f0; font: inherit; font-size: 15px; padding: 12px; resize: none"></textarea>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <sc-for list="{{plans}}" as="p" hint-placeholder-count="2">
+      <button type="button" onClick="{{ p.pick }}" aria-pressed="{{ p.pressed }}" style="{{ p.boxStyle }}">
+        <div style="{{ p.radioStyle }}"></div>
+        <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1; text-align: left">
+          <span style="font-size: 16px; font-weight: 600; color: #eef2f0">{{ p.title }}</span>
+          <span style="font-size: 13px; color: #a9b3b0">{{ p.sub }}</span>
+        </div>
+        <span style="font-size: 15px; font-weight: 600; color: #eef2f0">{{ p.price }}</span>
+      </button>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 2px">
+    <div style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: #a9b3b0">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a9b3b0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+      <span>Je foto blijft privé tot je bevestigt.</span>
+    </div>
+    <label style="display: flex; align-items: center; gap: 10px; font-size: 14px; min-height: 44px">
+      <input type="checkbox" checked="{{ consent }}" onChange="{{ toggleConsent }}" style="width: 22px; height: 22px; accent-color: #8fe3b8; margin: 0">
+      <span>Ik mag deze foto gebruiken.</span>
+    </label>
+  </div>
+
+  <div style="flex-grow: 1"></div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <a href="Klaar.dc.html" style="{{ ctaStyle }}">Maak video · {{ chosenPrice }}</a>
+    <span style="font-size: 12px; color: #a9b3b0; text-align: center">Hierna log je in en betaal je. Lukt het niet, dan krijg je je geld terug.</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { picked: 'proef', consent: true }; }
+  renderVals() {
+    const base = [
+      { id: 'proef', title: 'Eerst een proefje', sub: '3 sec · snel klaar · aangeraden', price: '[PRIJS]' },
+      { id: 'vol', title: 'Meteen volledig', sub: '5 sec · zoals gekozen', price: '[PRIJS]' }
+    ];
+    const chosen = base.find((b) => b.id === this.state.picked);
+    return {
+      consent: this.state.consent,
+      toggleConsent: () => this.setState({ consent: !this.state.consent }),
+      chosenPrice: chosen.price,
+      ctaStyle: 'display:flex;align-items:center;justify-content:center;height:56px;border-radius:16px;font-size:17px;font-weight:600;text-decoration:none;' + (this.state.consent ? 'background:#8fe3b8;color:#0d1f17' : 'background:#232b2f;color:#7d8784;pointer-events:none'),
+      plans: base.map((o) => {
+        const on = this.state.picked === o.id;
+        return {
+          ...o,
+          pressed: on ? 'true' : 'false',
+          pick: () => this.setState({ picked: o.id }),
+          boxStyle: 'display:flex;align-items:center;gap:12px;padding:14px;border-radius:14px;background:#1a2023;font:inherit;cursor:pointer;width:100%;box-sizing:border-box;border:2px solid ' + (on ? '#8fe3b8' : '#2e383c'),
+          radioStyle: 'width:22px;height:22px;border-radius:11px;flex-shrink:0;box-sizing:border-box;' + (on ? 'border:7px solid #8fe3b8;background:#101416' : 'border:2px solid #5c686c')
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>RIG je video</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#8fe3b8}a:hover{color:#b6f0d2}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #101416; color: #eef2f0; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 20px 20px 28px; gap: 18px; overflow: hidden">
+  <div style="display: flex; align-items: center; justify-content: space-between; height: 44px">
+    <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px">RIG<span style="color: #8fe3b8">.</span></div>
+    <span style="font-size: 15px; font-weight: 500; color: #a9b3b0">Mijn video's</span>
+  </div>
+
+  <sc-if value="{{ waiting }}" hint-placeholder-val="{{ true }}">
+    <div style="display: flex; flex-direction: column; gap: 18px; flex-grow: 1">
+      <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 28px; line-height: 1.1">Je video wordt gemaakt</h1>
+      <div style="height: 380px; border-radius: 20px; background: #1a2023; border: 1px solid #2e383c; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; box-sizing: border-box">
+        <div style="width: 220px; height: 8px; border-radius: 4px; background: #232b2f">
+          <div style="width: 45%; height: 8px; border-radius: 4px; background: #8fe3b8"></div>
+        </div>
+        <span style="font-size: 15px; color: #eef2f0">Nog ongeveer 2 minuten</span>
+      </div>
+      <p style="margin: 0; font-size: 15px; line-height: 1.45; color: #a9b3b0">Je mag dit venster sluiten. Je video staat straks in <strong style="color: #eef2f0">Mijn video's</strong>.</p>
+      <div style="flex-grow: 1"></div>
+      <button type="button" onClick="{{ showResult }}" style="height: 44px; border-radius: 12px; border: 1px dashed #5c686c; background: transparent; color: #a9b3b0; font: inherit; font-size: 14px">Schets: toon resultaat</button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ done }}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; flex-direction: column; gap: 16px; flex-grow: 1">
+      <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 28px; line-height: 1.1">Je video is klaar</h1>
+      <div style="height: 440px; border-radius: 20px; background: #2c4238; display: flex; align-items: center; justify-content: center">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#8fe3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <button type="button" style="height: 56px; border-radius: 16px; border: 0; background: #8fe3b8; color: #0d1f17; font: inherit; font-size: 16px; font-weight: 600">Bewaar op gsm</button>
+        <button type="button" style="height: 56px; border-radius: 16px; border: 1px solid #2e383c; background: #1a2023; color: #eef2f0; font: inherit; font-size: 16px; font-weight: 600">Deel</button>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center">
+        <a href="Maak.dc.html" style="font-size: 15px; text-decoration: none; padding: 12px 0">Volledige versie maken</a>
+        <a href="Main.dc.html" style="font-size: 15px; text-decoration: none; padding: 12px 0">Nog eentje</a>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { done: false }; }
+  renderVals() {
+    return {
+      waiting: !this.state.done,
+      done: this.state.done,
+      showResult: () => this.setState({ done: true })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@
 import {createProductionGenerationContext} from './production-generation-context.mjs';
 import {createProductionVideoService} from './production-video-service.mjs';
 import {createProductionPayment} from './production-payment.mjs';
+import {validateProductionTenant} from './production-tenant.mjs';
 import {collectInvoiceDocuments} from './invoice-delivery.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -16,8 +17,12 @@ export async function collectProduction(env,{network=fetch,videoFactory=createPr
  if(env.RIG_AUTOMATIC_INVOICES_ENABLED==='yes')stats.invoices=await collectInvoiceDocuments(env,{now:clock(),limit});
  if(env.RIG_PRODUCTION_COLLECTION_ENABLED!=='yes')return stats;
  if(!Number.isInteger(limit)||limit<1||limit>4)throw Error('Invalid collection limit');
- const context=await createProductionGenerationContext(env);if(!context)return stats;
- const mapped=context.env,now=clock();if(!Number.isSafeInteger(now)||now<1)throw Error('Invalid collection time');
+ // Existing customer payments must recover even when new video generation is
+ // paused. Only the video branch requires a generation capability.
+ const mapped=await validateProductionTenant(env);if(!mapped)return stats;
+ const now=clock();if(!Number.isSafeInteger(now)||now<1)throw Error('Invalid collection time');
+ const context=await createProductionGenerationContext(env);
+ if(context){
  // Accepted workflows keep provider IDs per step. Keep collecting those exact
  // known requests even after dispatch flags are disabled; never advance a new
  // paid step here. A deployment without the optional migration stays valid.
@@ -38,6 +43,7 @@ export async function collectProduction(env,{network=fetch,videoFactory=createPr
    stats.videosChecked++;
    if(['failed','unknown','needs_review'].includes(status.state))stats.needsReview++;
   }catch{stats.unavailable++}finally{try{await response?.body?.cancel()}catch{}}
+ }
  }
  const payment=createProductionPayment({transport:network});
  const orders=await mapped.DB.prepare("SELECT o.id,o.user_id,o.request_id FROM rig_orders o LEFT JOIN rig_payment_reconciliation_attempts a ON a.order_id=o.id WHERE o.payment_id IS NOT NULL AND o.state IN ('open','unknown','creating','paid','credit_pending_review') AND COALESCE(a.last_attempt_at,0)<? ORDER BY COALESCE(a.last_attempt_at,0),o.created_at,o.id LIMIT ?").bind(now-300000,limit).all();

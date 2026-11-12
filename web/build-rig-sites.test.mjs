@@ -19,7 +19,7 @@ test('a fresh portable build creates its metadata and serves current UI without 
   const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(server).toString('base64'));
   const origin='https://rig.example.chatgpt.site',env={RIG_SITES_PRODUCER_ORIGIN:origin};
   const page=await worker.fetch(new Request(origin+'/'),env);assert.equal(page.status,200);const html=await page.text();
-  assert.match(html,/Op je foto/);assert.match(html,/id="briefDialog"/);assert.match(html,/id="tryShortVideo"[^>]*>Eerst een proefje · 5 s<\/button>/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
+  assert.match(html,/Op je foto/);assert.match(html,/id="briefDialog"/);assert.match(html,/id="tryShortVideo"/);assert.match(html,/id="flowTrialDuration"/);assert.match(html,/Eerst een proefje/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
   const canonical='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/';
   assert.match(html,/<title>RIG — Zet je foto in beweging<\/title>/);assert.ok(html.includes('<link rel="canonical" href="'+canonical+'">'));assert.ok(html.includes('<meta property="og:image" content="'+canonical+'social/rig-share-v1.png">'));assert.match(html,/<meta property="og:image:width" content="1200">/);assert.match(html,/<meta property="og:image:height" content="630">/);assert.match(html,/<meta name="twitter:card" content="summary_large_image">/);
   for(const path of ['/multiuser/','/?fbclid=untrusted-build-marker&utm_source=facebook','/multiuser/?utm_campaign=untrusted-build-marker']){
@@ -33,6 +33,7 @@ test('a fresh portable build creates its metadata and serves current UI without 
    if(name.endsWith('.ico'))assert.deepEqual(source.subarray(0,4),Buffer.from([0,0,1,0]));
   }
   const finance=await worker.fetch(new Request(origin+'/multiuser/finance.js'),env);assert.equal(finance.status,200);assert.match(await finance.text(),/\/api\/owner\/finance/);
+  const flow=await worker.fetch(new Request(origin+'/multiuser/flow.js'),env);assert.equal(flow.status,200);assert.match(await flow.text(),/rigFlow/);
   const security=await worker.fetch(new Request(origin+'/multiuser/owner-security.js'),env);assert.equal(security.status,200);assert.match(await security.text(),/rigOwnerVerification/);
   const cleanup=await worker.fetch(new Request(origin+'/multiuser/cleanup-client.js'),env);assert.equal(cleanup.status,200);const client=await cleanup.text();assert.match(client,/createCleanupClient/);assert.doesNotMatch(client,/from ["']mediabunny["']/,'the lazy entry must be portable without node_modules');
   for(const [path,config]of Object.entries(CLEANUP_STATIC_ASSETS)){

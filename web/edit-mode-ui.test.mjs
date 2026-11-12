@@ -45,7 +45,7 @@ test('editing appears only when the server offers edit-standard and adds no foot
  const unavailable=fixture({qualities:['standard','pro']});
  try{assert.equal(unavailable.el('videoModeTabs').hidden,true);unavailable.el('editModeButton').click();assert.equal(unavailable.w.rigVideoMode(),'motion');}finally{unavailable.dom.window.close();}
  const f=fixture();
- try{assert.equal(f.el('videoModePanel').hidden,false);assert.equal(f.el('motionModeButton').getAttribute('aria-pressed'),'true');assert.deepEqual([...f.d.querySelector('footer .actions').children].map(el=>el.id),['settingsToggle','prepare']);}finally{f.dom.window.close();}
+ try{assert.equal(f.el('videoModePanel').hidden,false);assert.equal(f.el('motionModeButton').getAttribute('aria-pressed'),'true');assert.deepEqual([...f.d.querySelector('footer .actions').children].filter(el=>!el.hidden).map(el=>el.id),['prepare']);assert.equal(f.el('settingsToggle').closest('#flowAdvanced'),f.el('flowAdvanced'));assert.equal(f.el('settingsToggle').textContent,'Instellingen');}finally{f.dom.window.close();}
 });
 test('a deliberate mode choice survives a real account-scoped page reload without storing private draft content',async()=>{
  const backing=new Map(),sessionStorage={getItem:key=>backing.get(key)??null,setItem:(key,value)=>backing.set(key,value),removeItem:key=>backing.delete(key)};
@@ -60,7 +60,7 @@ test('a deliberate mode choice survives a real account-scoped page reload withou
   reloaded.load();assert.equal(reloaded.el('prepare').disabled,true);assert.match(reloaded.el('videoModeHint').textContent,/niet beschikbaar.*Kies zelf/);
   reloaded.w.rigVideoQualities=['standard','pro','edit-standard'];reloaded.w.rigVideoEnabled=true;reloaded.d.dispatchEvent(new reloaded.w.Event('rig-video-availability'));
   assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('duration').value,'5');assert.equal(reloaded.el('prepare').disabled,false);
-  other=fixture({scopedStorage:bob.scopedStorage});assert.equal(other.w.rigVideoMode(),'motion');assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),null);assert.match(other.el('motionModeButton').textContent,/^Op je foto/);assert.match(other.el('videoModeHint').textContent,/lichaam/);
+  other=fixture({scopedStorage:bob.scopedStorage});assert.equal(other.w.rigVideoMode(),'motion');assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),null);assert.match(other.el('motionModeButton').querySelector('strong').textContent,/^Op je foto/);assert.match(other.el('videoModeHint').textContent,/lichaam/);
   other.el('motionModeButton').click();assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),'motion');assert.equal(alice.scopedStorage.getItem('rig-video-mode:v1'),'edit');assert.deepEqual([...backing.values()].sort(),['edit','motion']);
  }finally{first?.dom.window.close();reloaded?.dom.window.close();other?.dom.window.close();alice.dispose();bob.dispose();}
 });

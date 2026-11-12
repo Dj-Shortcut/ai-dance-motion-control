@@ -38,6 +38,10 @@
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
   function providerFailureMessage(data){
     if(data.state!=='failed')return null;
+    if(data.failureCode==='provider_billing_locked'){
+      if(ownerProvider(data))return 'Je Fal-account heeft onvoldoende tegoed. Controleer je saldo op fal.ai.'+(failureFinalized(data)?' De opdracht is afgesloten.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
+      return 'De videodienst is tijdelijk niet beschikbaar.'+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.');
+    }
     const reason=data.failureCode==='provider_input_unavailable'?'Fal kon je foto of video niet openen.':data.failureCode==='provider_subject_not_detected'?'Fal herkende geen duidelijk menselijk bovenlichaam op je foto.':null;
     if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
@@ -172,7 +176,7 @@
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
       if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
-      document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
+      document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');recentId=data.id;el('recentVideo').hidden=false;el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       if(intent.current())await follow(data.id,intent);
     } catch(error) {
       if(ownFal&&!sessionCurrent()||!intent.current())return;
@@ -218,7 +222,7 @@
     }
     note('Je opdracht loopt nog. Je kunt de status later opnieuw bekijken.');
   }
-  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');}}catch{}}
+  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job && ['completed','submitting','queued','processing','awaiting_client_processing','ready_to_advance','unknown','needs_review','failed'].includes(data.job.state) && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(data.job.state==='completed'&&window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');}}catch{}}
   el('recentVideo').addEventListener('click',async()=>{if(!recentId||active)return;el('quoteDialog').showModal();setActive(true);try{await follow(recentId)}catch{note('Je video is momenteel niet beschikbaar.')}finally{setActive(false)}});
   // The Mac app shows a non-binding fal USD estimate before submission.
   // This preliminary preview uses only browser metadata and the fixed dated

@@ -5,7 +5,7 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 const groups={
  unit:[
   'browser-preparation-capability-ui','screen-recording-crop-ui','browser-cleanup-preparation','browser-cleanup-aac','browser-cleanup-compositor','browser-cleanup-ui','browser-cleanup-client','overlay-cleanup-contract','workflow-client-contract','workflow-inputs','workflow-runtime',
-  'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
+  'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','guided-flow-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui',
   'browser-recording-integrity','browser-frame-padding','browser-edit-dimensions','rig-mcp','rig-chatgpt-files','rig-sites-app','build-rig-sites',
   'generation','rig-inline-inputs','rig-inline-assets','rig-inline-generation','rig-r2-delivery','rig-r2-inputs','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',
@@ -15,7 +15,7 @@ const groups={
  workerd:[
   'production-workflow-stores-workerd','production-workflow-client-workerd','workflow-runner-workerd','workflow-budget-workerd','workflow-http-workerd',
   'invoice-store-workerd','invoice-payment-workerd','invoice-delivery-workerd','purchase-billing-workerd','commercial-checkout-workerd','customer-support-workerd','accounting-export-workerd','owner-recovery-workerd','preparation-budget-workerd','owner-security-workerd','profit-guard-workerd','owner-finance-workerd','sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
-  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-invitation-workerd','production-video-workerd','owner-provider-funding-workerd','production-collector-workerd','gateway-relay-workerd'
+  'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-invitation-workerd','production-video-workerd','owner-provider-funding-workerd','production-collector-workerd','billing-refusal-workerd','gateway-relay-workerd'
  ],
  media:['workflow-fal-adapter','workflow-mp4-inspect','mp4-inspect','mp4-edit-support','video-preparer','cloud-media-service','long-duration','closed-video-service','normalize']
 };
