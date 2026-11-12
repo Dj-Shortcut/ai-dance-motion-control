@@ -28,12 +28,12 @@
   const first=el('flowClipStart'),last=el('flowClipEnd');
   if(!first||!last)return;
   first.disabled=last.disabled=!valid||window.rigGenerationBusy?.()===true;
-  first.min='0';first.max=valid?String(Math.max(0,duration-minimum())):'0';first.value=String(start);
-  last.min=String(minimum());last.max=valid?String(duration):String(minimum());last.value=String(start+length);
+  first.min=last.min='0';first.max=last.max=valid?String(duration):'0';first.value=String(start);last.value=String(start+length);
   el('flowClipLength').textContent=`${decimal(length)} sec`;
   first.parentElement?.style.setProperty('--clip-start',valid?`${start/duration*100}%`:'0%');
   first.parentElement?.style.setProperty('--clip-end',valid?`${(start+length)/duration*100}%`:'100%');
  }
+ function setClip(start,length){el('start').value=String(start);el('duration').value=String(length);el('duration').dispatchEvent(new Event('change',{bubbles:true}));el('start').dispatchEvent(new Event('change',{bubbles:true}));}
  function choose(next){if(!current()||lockedChoice)return;if(next==='trial'&&!trialAllowed())return;plan=next;renderPlans();}
  function renderPlans(){
   if(!el('chooseFullVideo'))return;
@@ -131,11 +131,30 @@
  on(el('chooseFullVideo'),'click',()=>choose('full'));
  on(el('confirmBrief'),'click',event=>{event.stopImmediatePropagation();if(!el('confirmBrief').disabled&&current())void window.rigPrepareChoice?.(plan==='trial');},{capture:true});
  on(el('flowClipStart'),'input',()=>{
-  const end=Number(el('start').value)+seconds(),start=Math.min(Number(el('flowClipStart').value),source().duration-minimum());
-  const duration=Math.max(minimum(),Math.min(Number(el('duration').max),Math.floor(end-start)));
-  el('duration').value=String(duration);el('duration').dispatchEvent(new Event('change',{bubbles:true}));el('start').value=String(start);el('start').dispatchEvent(new Event('change',{bubbles:true}));
+  const end=Number(el('start').value)+seconds(),maximum=Number(el('duration').max);
+  const requested=Math.max(0,end-maximum,Math.min(Number(el('flowClipStart').value),end-minimum(),source().duration-minimum()));
+  const duration=Math.max(minimum(),Math.min(maximum,Math.floor(end-requested))),start=end-duration;
+  setClip(start,duration);
  });
  on(el('flowClipEnd'),'input',()=>{el('duration').value=String(Math.max(minimum(),Math.min(Number(el('duration').max),Math.floor(Number(el('flowClipEnd').value)-Number(el('start').value)))));el('duration').dispatchEvent(new Event('change',{bubbles:true}));});
+ on(el('flowClipStart'),'keydown',event=>{
+  if(!current()||el('flowClipStart').disabled||event.altKey||event.ctrlKey||event.metaKey)return;
+  const delta={ArrowLeft:-1,ArrowDown:-1,ArrowRight:1,ArrowUp:1,PageDown:-5,PageUp:5};
+  if(!Object.hasOwn(delta,event.key)&&!['Home','End'].includes(event.key))return;
+  event.preventDefault();const end=Number(el('start').value)+seconds(),max=Math.floor(Math.min(Number(el('duration').max),end));
+  const requested=event.key==='Home'?max:event.key==='End'?minimum():seconds()-delta[event.key],length=Math.max(minimum(),Math.min(max,requested));
+  setClip(end-length,length);
+ });
+ // A tenth-second native key step would be rounded back to the same whole
+ // generation duration. Give keyboard users the same usable one-second edits.
+ on(el('flowClipEnd'),'keydown',event=>{
+  if(!current()||el('flowClipEnd').disabled||event.altKey||event.ctrlKey||event.metaKey)return;
+  const delta={ArrowLeft:-1,ArrowDown:-1,ArrowRight:1,ArrowUp:1,PageDown:-5,PageUp:5};
+  if(!Object.hasOwn(delta,event.key)&&!['Home','End'].includes(event.key))return;
+  event.preventDefault();const max=Math.floor(Math.min(Number(el('duration').max),source().duration-Number(el('start').value)));
+  const requested=event.key==='Home'?minimum():event.key==='End'?max:seconds()+delta[event.key];
+  el('duration').value=String(Math.max(minimum(),Math.min(max,requested)));el('duration').dispatchEvent(new Event('change',{bubbles:true}));
+ });
  for(const id of ['start','duration','cleanupEnabled'])on(el(id),'change',()=>{updateClip();if(view==='make')schedulePrices();});
  on(source(),'loadedmetadata',()=>queueMicrotask(updateClip));on(source(),'seeked',drawPreviews);
  on(el('newVideo'),'click',()=>{if(window.rigNewDraft?.()!==false){fullReview=false;shareSequence++;shareFile=null;show('start');}});

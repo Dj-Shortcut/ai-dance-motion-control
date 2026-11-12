@@ -62,6 +62,62 @@ test('source crop opens from the same prompt popup and returns without changing 
 test('read-only discovery never composes; an explicit existing-job recovery resumes once without a new generation',async()=>{
  const storage=new Map([['rig-generation-job','job-recast']]),f=fixture({storage,jobState:'awaiting_client_processing',recentJob:{id:'job-recast',state:'awaiting_client_processing'}});try{await new Promise(r=>setTimeout(r,15));assert.equal(f.cleanupCalls.length,0);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);f.el('checkGeneration').click();await settle(()=>f.el('quoteMessage').textContent==='Je video is klaar.');assert.equal(f.cleanupCalls.filter(([s])=>s==='resume').length,1);assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);}finally{f.dom.window.close();}
 });
+for(const jobState of ['awaiting_client_processing','ready_to_advance'])test(`a fresh browser discovers ${jobState} and can explicitly resume it without a new generation`,async()=>{
+ const f=fixture({jobState,recentJob:{id:'job-recast',state:jobState}});try{
+  await settle(()=>!f.el('recentVideo').hidden);assert.equal(f.storage.get('rig-generation-job'),'job-recast');assert.equal(f.cleanupCalls.length,0);assert.equal(f.el('quoteDialog').open,false,'discovery does not open a confirmation or start processing');
+  f.el('recentVideo').click();await settle(()=>!f.w.rigGenerationBusy()&&f.el('quoteMessage').textContent.includes('lokale tussenstap'));
+  assert.equal(f.cleanupCalls.length,0,'viewing status does not automatically advance the accepted workflow');assert.equal(f.el('checkGeneration').hidden,false);
+  f.el('checkGeneration').click();await settle(()=>f.el('quoteMessage').textContent==='Je video is klaar.');
+  assert.equal(f.cleanupCalls.filter(([stage])=>stage==='resume').length,1);assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+test('a discovered unfinished workflow never replaces a different stored job or pending intent',async()=>{
+ for(const [key,value] of [['rig-generation-job','another-job'],['rig-generation-pending',JSON.stringify({quoteId:'another-quote',idempotencyKey:'another-intent'})]]){
+  const f=fixture({storage:new Map([[key,value]]),jobState:'awaiting_client_processing',recentJob:{id:'job-recast',state:'awaiting_client_processing'}});try{
+   await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>!f.w.rigGenerationBusy());
+   assert.equal(f.storage.get(key),value);assert.equal(f.storage.size,1);assert.equal(f.el('checkGeneration').hidden,false);
+   assert.equal(f.calls.some(([p])=>p==='/api/generations/job-recast'),false,'the current recovery must be resolved before switching to another unfinished workflow');
+   assert.equal(f.cleanupCalls.length,0);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  }finally{f.dom.window.close();}
+ }
+});
+test('late discovery cannot bind a previous session or overwrite a recovery created while its read was pending',async()=>{
+ for(const replace of ['request','session','storage','pending']){
+  const f=fixture({jobState:'awaiting_client_processing',recentJob:{id:'job-recast',state:'awaiting_client_processing'}});try{
+   if(replace==='request')f.w.rigRequest=async()=>{throw Error('Different account request')};
+   else if(replace==='session')f.w.rigSessionActive=()=>false;
+   else if(replace==='storage')f.w.rigScopedStorage={getItem:()=>null,setItem:()=>{throw Error('Old discovery must not write new account storage')},removeItem:()=>{throw Error('Old discovery must not clear new account storage')}};
+   else f.storage.set('rig-generation-pending',JSON.stringify({quoteId:'new-quote',idempotencyKey:'new-intent'}));
+   await new Promise(resolve=>setTimeout(resolve,20));assert.equal(f.storage.has('rig-generation-job'),false);
+   assert.equal(f.el('recentVideo').hidden,replace!=='pending');assert.equal(f.cleanupCalls.length,0);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  }finally{f.dom.window.close();}
+ }
+});
+test('closing a discovered status view cancels its intent before a late workflow response can resume',async()=>{
+ const f=fixture({jobState:'awaiting_client_processing',recentJob:{id:'job-recast',state:'awaiting_client_processing'}});let release;try{
+  await settle(()=>!f.el('recentVideo').hidden);const original=f.w.rigRequest;
+  f.w.rigRequest=(path,options)=>path==='/api/generations/job-recast'?new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({id:'job-recast',state:'awaiting_client_processing',workflowVersion:'rig-workflow-v2'})});}):original(path,options);
+  f.el('recentVideo').click();await settle(()=>!!release);assert.equal(f.w.rigGenerationBusy(),true);f.el('closeQuote').click();release();await settle(()=>!f.w.rigGenerationBusy());
+  assert.equal(f.el('quoteDialog').open,false);assert.equal(f.el('recentVideo').disabled,false);assert.equal(f.el('checkGeneration').disabled,false);assert.equal(f.storage.get('rig-generation-job'),'job-recast');assert.equal(f.cleanupCalls.length,0);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{release?.();f.dom.window.close();}
+});
+test('a completed video fetched by an old session cannot appear after its binding changes',async()=>{
+ const f=fixture({jobState:'completed',recentJob:{id:'job-recast',state:'completed'}});let release;try{
+  await settle(()=>!f.el('recentVideo').hidden);let busyChanges=0;f.d.addEventListener('rig-generation-busy-change',()=>busyChanges++);f.w.rigOpenVideo=()=>new Promise(resolve=>{release=()=>resolve('blob:old-session-result')});
+  f.el('recentVideo').click();await settle(()=>!!release);
+  const beforeSwitch=busyChanges;
+  f.w.rigScopedStorage={getItem:()=>null,setItem:()=>{throw Error('Old request must not write a new session')},removeItem:()=>{throw Error('Old request must not clear a new session')}};
+  release();await settle(()=>!f.w.rigGenerationBusy());assert.equal(busyChanges,beforeSwitch,'old account must not dispatch UI-unlock events into the new binding');assert.equal(f.el('recentVideo').disabled,true);assert.equal(f.el('checkGeneration').disabled,true);assert.equal(f.el('resultVideo').hidden,true);assert.equal(f.el('export').hidden,true);assert.ok(f.revoked.includes('blob:old-session-result'));assert.equal(f.cleanupCalls.length,0);
+ }finally{release?.();f.dom.window.close();}
+});
+test('a late finalized failure cannot remove a newer recovery handle',async()=>{
+ const f=fixture({jobState:'failed',recentJob:{id:'job-recast',state:'failed'}});let release;try{
+  await settle(()=>!f.el('recentVideo').hidden);const original=f.w.rigRequest;
+  f.w.rigRequest=(path,options)=>path==='/api/generations/job-recast'?new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({id:'job-recast',state:'failed',funding:'owner-provider',finalizationConfirmed:true})});}):original(path,options);
+  f.el('recentVideo').click();await settle(()=>!!release);f.storage.set('rig-generation-job','newer-job');release();await settle(()=>!f.w.rigGenerationBusy());
+  assert.equal(f.storage.get('rig-generation-job'),'newer-job');assert.equal(f.el('checkGeneration').hidden,false);assert.equal(f.cleanupCalls.length,0);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+ }finally{release?.();f.dom.window.close();}
+});
 test('closing a workflow recovery aborts local processing and keeps the existing job recoverable',async()=>{
  const storage=new Map([['rig-generation-job','job-recast']]),f=fixture({storage,jobState:'awaiting_client_processing'});let release;try{f.suspendResume(new Promise(r=>release=r));f.el('checkGeneration').click();await settle(()=>f.cleanupCalls.some(([s])=>s==='resume'));const intent=f.cleanupCalls.find(([s])=>s==='resume')[1];f.el('closeQuote').click();assert.equal(intent.signal.aborted,true);release();await settle(()=>!f.w.rigGenerationBusy());assert.equal(f.storage.get('rig-generation-job'),'job-recast');assert.equal(f.el('resultVideo').hidden,true);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);}finally{release?.();f.dom.window.close();}
 });

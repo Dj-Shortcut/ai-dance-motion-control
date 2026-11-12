@@ -5,13 +5,13 @@ import {JSDOM} from 'jsdom';
 
 const source=name=>readFileSync(new URL(`./frontend/multiuser/${name}`,import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Guided RIG flow did not settle');};
-function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',statusResponse,shareRead,storage:savedStorage=new Map()}={}){
+function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',statusResponse,shareRead,recentJob=null,storage:savedStorage=new Map()}={}){
  const dom=new JSDOM(source('index.html'),{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],prepared=[],shared=[],storage=savedStorage;
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding=funding;w.rigVideoMode='live';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
  w.URL.createObjectURL=()=>`blob:rig-local-${Math.random()}`;w.URL.revokeObjectURL=()=>{};w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};w.HTMLElement.prototype.scrollIntoView=function(){};w.scrollTo=()=>{};w.HTMLCanvasElement.prototype.getContext=()=>({drawImage(){}});
  el('authGate').hidden=true;el('rigStudio').hidden=false;
- for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};}
+ for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){if(!this.open)return;this.open=false;this.dispatchEvent(new w.Event('close'));};}
  for(const video of d.querySelectorAll('video')){for(const [key,value] of Object.entries({duration:60,currentTime:0,paused:true,readyState:2,videoWidth:1280,videoHeight:720}))Object.defineProperty(video,key,{configurable:true,writable:true,value});video.pause=()=>{};video.play=async()=>{};}
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(value){this.onload?.();}};
  w.rigMedia={preparationCapability:()=>({supported:true}),bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async()=>({blob:new Blob(['prepared-image'],{type:'image/jpeg'}),width:1280,height:720}),prepareImageFile:async()=>({blob:new Blob(['prepared-image'],{type:'image/jpeg'}),width:1280,height:720}),prepareVideo:async(video,crop,start,duration,keepSound)=>{const output={blob:new Blob(['prepared-clip'],{type:'video/mp4'}),duration,width:1280,height:720};prepared.push({start,duration,keepSound,crop:{...crop},output});return output;}};
@@ -20,7 +20,7 @@ function fixture({withGeneration=false,canShare=false,qualities=['standard','pro
  let assets=0,quotes=0,generations=0;const durations=new Map();
  w.rigRequest=async(path,options={})=>{
   calls.push([path,options]);let data;
-  if(path==='/api/generations/recent')data={job:null};
+  if(path==='/api/generations/recent')data={job:recentJob};
   else if(path==='/api/payments/balance')data={mode:'live',currency:'EUR',balance:5000};
   else if(path.startsWith('/api/estimate/fal?')){const query=new URL(path,w.location.origin).searchParams,seconds=Number(query.get('duration'));data={quality:query.get('quality'),durationSeconds:seconds,customerProposal:{currency:'EUR',priceCents:Math.ceil(seconds)*40,binding:false}};}
   else if(path==='/api/assets'){const id=`asset-${++assets}`,kind=options.headers['X-Rig-Asset-Kind'];if(kind==='video')durations.set(id,Number(options.headers['X-Rig-Duration-Seconds']));data={id,kind,status:'ready'};}
@@ -82,10 +82,55 @@ test('valid files can reach an explicitly selectable Recast-only mode without an
 
 test('the clip handles alter the real start and integer duration within source and model bounds',()=>{
  const f=fixture();try{
-  f.el('prepare').click();f.load();assert.equal(Number(f.el('flowClipStart').min),0);assert.equal(Number(f.el('flowClipStart').max),57);assert.equal(Number(f.el('flowClipEnd').max),60);
+  f.el('prepare').click();f.load();assert.equal(Number(f.el('flowClipStart').min),0);assert.equal(Number(f.el('flowClipStart').max),60);assert.equal(Number(f.el('flowClipEnd').min),0);assert.equal(Number(f.el('flowClipEnd').max),60);
   f.change('flowClipStart',12,'input');f.change('flowClipEnd',28,'input');assert.equal(Number(f.el('start').value),12);assert.equal(Number(f.el('duration').value),16);
   f.change('flowClipEnd',12,'input');const start=Number(f.el('start').value),seconds=Number(f.el('duration').value);assert.equal(Number.isInteger(seconds),true);assert.ok(start>=0&&seconds>=3&&seconds<=30&&start+seconds<=60);
   assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+for(const recast of [false,true])test(`both clip handles share the full source scale and cannot cross a ${recast?6:3}-second minimum or exceed the model limit`,()=>{
+ const f=fixture({qualities:recast?['standard','pro','human-recast']:['standard','pro'],funding:recast?'owner-provider':'credits'}),minimum=recast?6:3,maximum=recast?15:30;try{
+  f.el('prepare').click();f.load();if(recast){f.el('prepare').click();f.el('editModeButton').click();f.el('flowBack').click();}f.change('start',12);f.change('duration',12);
+  for(const id of ['flowClipStart','flowClipEnd']){assert.equal(Number(f.el(id).min),0);assert.equal(Number(f.el(id).max),60);}
+  const assertBounds=()=>{const start=Number(f.el('start').value),duration=Number(f.el('duration').value),end=start+duration;assert.equal(Number.isInteger(duration),true);assert.ok(start>=0&&duration>=minimum&&duration<=maximum&&end<=60);assert.equal(Number(f.el('flowClipStart').value),start);assert.equal(Number(f.el('flowClipEnd').value),end);assert.ok(Number(f.el('flowClipStart').value)<Number(f.el('flowClipEnd').value));const track=f.el('flowClipStart').parentElement;assert.equal(parseFloat(track.style.getPropertyValue('--clip-start')),start/60*100);assert.equal(parseFloat(track.style.getPropertyValue('--clip-end')),end/60*100);return {start,duration,end};};
+  assertBounds();f.change('flowClipStart',60,'input');assert.deepEqual(assertBounds(),{start:24-minimum,duration:minimum,end:24});f.change('flowClipEnd',0,'input');assert.equal(assertBounds().end,24);
+  f.change('flowClipEnd',60,'input');const widest=assertBounds();assert.equal(widest.duration,maximum);f.change('flowClipStart',0,'input');assert.deepEqual(assertBounds(),widest,'dragging the start left retains the end while enforcing the maximum clip length');assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+for(const recast of [false,true])test(`the end handle supports whole-second keyboard editing within the ${recast?'Recast':'Motion'} clip limits`,()=>{
+ const f=fixture({qualities:recast?['standard','pro','human-recast']:['standard','pro'],funding:recast?'owner-provider':'credits'}),minimum=recast?6:3,maximum=recast?15:30;try{
+  f.el('prepare').click();f.load();if(recast){f.el('prepare').click();f.el('editModeButton').click();f.el('flowBack').click();}f.change('start',12);f.change('duration',8);
+  for(const [key,expected] of [['ArrowRight',9],['ArrowLeft',8],['PageUp',13],['PageDown',8],['Home',minimum],['End',maximum]]){const event=new f.w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});f.el('flowClipEnd').dispatchEvent(event);assert.equal(event.defaultPrevented,true,key+' must replace the native fractional range step');assert.equal(Number(f.el('duration').value),expected,key);assert.equal(Number(f.el('start').value),12);assert.equal(Number(f.el('flowClipEnd').value),12+expected);}
+  const untouched=new f.w.KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true});f.el('flowClipEnd').dispatchEvent(untouched);assert.equal(untouched.defaultPrevented,false);assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+for(const recast of [false,true])test(`the ${recast?'Recast':'Motion'} start handle supports keyboard edits while retaining the fractional selected end`,()=>{
+ const f=fixture({qualities:recast?['standard','pro','human-recast']:['standard','pro'],funding:recast?'owner-provider':'credits'}),minimum=recast?6:3,maximum=recast?15:30;try{
+  f.el('prepare').click();f.load();if(recast){f.el('prepare').click();f.el('editModeButton').click();f.el('flowBack').click();}f.change('start',12.7);f.change('duration',8);const end=Number(f.el('start').value)+8;
+  for(const [key,expected] of [['ArrowLeft',9],['ArrowRight',8],['PageDown',13],['PageUp',8],['Home',Math.floor(Math.min(maximum,end))],['End',minimum],['ArrowRight',minimum]]){
+   const event=new f.w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});f.el('flowClipStart').dispatchEvent(event);assert.equal(event.defaultPrevented,true,key);assert.equal(Number(f.el('duration').value),expected,key);assert.ok(Math.abs(Number(f.el('start').value)-(end-expected))<1e-9,key+' retains the original fractional end');assert.ok(Math.abs(Number(f.el('flowClipEnd').value)-end)<1e-9);assert.ok(Number(f.el('flowClipStart').value)<Number(f.el('flowClipEnd').value));
+  }
+  const untouched=new f.w.KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true});f.el('flowClipStart').dispatchEvent(untouched);assert.equal(untouched.defaultPrevented,false);assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('extending a clip left from the source end publishes both valid bounds before any change handler runs',()=>{
+ const f=fixture({qualities:['standard','pro']});try{
+  f.el('prepare').click();f.load();f.change('duration',5);f.change('start',55);const changes=[];
+  f.d.addEventListener('change',event=>{if(event.target.id==='duration')changes.push({start:Number(f.el('start').value),duration:Number(f.el('duration').value)});},{capture:true});
+  f.change('flowClipStart',40,'input');assert.deepEqual(changes,[{start:40,duration:20}],'downstream listeners must never see the old start with an extended duration past the source end');assert.equal(f.el('start').value,'40');assert.equal(f.el('duration').value,'20');assert.equal(Number(f.el('flowClipEnd').value),60);
+  f.change('duration',5);f.change('start',55);changes.length=0;const left=new f.w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true});f.el('flowClipStart').dispatchEvent(left);assert.equal(left.defaultPrevented,true);assert.deepEqual(changes,[{start:54,duration:6}]);assert.equal(Number(f.el('flowClipEnd').value),60);assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('moving the start handle preserves the fractional original end while keeping an integer clip duration',()=>{
+ const f=fixture({qualities:['standard','pro']});try{
+  f.el('prepare').click();f.load();f.change('start',12.7);f.change('duration',12);const end=Number(f.el('start').value)+Number(f.el('duration').value);
+  f.change('flowClipStart',16.2,'input');assert.equal(Number(f.el('duration').value),8);assert.ok(Math.abs(Number(f.el('start').value)-16.7)<1e-9);assert.ok(Math.abs(Number(f.el('flowClipEnd').value)-end)<1e-9);
+  f.change('flowClipStart',60,'input');assert.equal(Number(f.el('duration').value),3);assert.ok(Math.abs(Number(f.el('start').value)-(end-3))<1e-9);assert.ok(Math.abs(Number(f.el('flowClipEnd').value)-end)<1e-9);assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
 });
 
@@ -116,6 +161,24 @@ test('a priced offline trial reaches the result screen and continuing still need
   assert.equal(f.el('resultTitle').textContent,'Je proefje');assert.match(f.el('prepare').textContent,/volledige (?:video|versie)/i);assert.equal(f.el('quoteDialog').open,false);assert.equal(f.el('shareResult').hidden,true);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
   f.el('prepare').click();await settle(()=>f.el('briefDialog').open);assert.equal(f.el('chooseFullVideo').getAttribute('aria-pressed'),'true');assert.equal(f.el('tryShortVideo').hidden,true);assert.equal(f.el('duration').value,'18');assert.equal(f.el('start').value,'2');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
   f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().selectedSeconds,18);f.el('confirmUpload').click();await quoteReady(f);assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1,'a fresh full quote does not submit the full video');
+ }finally{f.close();}
+});
+
+for(const mode of ['motion','edit'])test(`a reloaded ${mode} trial with missing close-up and angle bytes reveals the actual file and reference controls without charging`,async()=>{
+ const first=fixture({withGeneration:true});let person,motion,saved;
+ try{
+  first.el('prepare').click();({person,motion}=first.load());first.el('flowAdvanced').open=true;first.el('moreOptions').open=true;
+  if(mode==='motion'){person=first.file('personInput','original-portrait-video.mp4','video/mp4');first.el('personVideo').dispatchEvent(new first.w.Event('loadedmetadata'));first.el('personVideo').dispatchEvent(new first.w.Event('loadeddata'));first.el('captureMain').click();await settle(()=>!first.el('mainReference').hidden);}
+  first.file('faceInput','original-closeup.jpg','image/jpeg');await settle(()=>!first.el('faceReference').hidden);first.file('anglesInput','original-angle.jpg','image/jpeg');await settle(()=>!first.el('angleReference0').hidden);
+  first.el('prepare').click();if(mode==='edit')first.el('editModeButton').click();first.change('duration',12);first.change('start',3);first.change('editPrompt','Mijn volledige scène met mijn eerdere close-up en hoek.','input');first.el('prepare').click();first.el('tryShortVideo').click();first.el('confirmBrief').click();await settle(()=>first.el('uploadDialog').open);first.el('confirmUpload').click();await quoteReady(first);first.el('confirmGeneration').click();await settle(()=>first.showing('result')&&!first.w.rigGenerationBusy());saved=new Map(first.storage);
+  const snapshot=JSON.parse(saved.get('rig-trial-continuation:v1'));assert.equal(snapshot.draft.faceRequired,true);assert.equal(snapshot.draft.angleCount,1);assert.equal(Object.hasOwn(snapshot.draft,'faceReferenceBlob'),false);assert.equal(Object.hasOwn(snapshot.draft,'angleReferenceBlobs'),false);
+ }finally{first.close();}
+ const f=fixture({withGeneration:true,storage:saved,recentJob:{id:'job-1',state:'completed'}});try{
+  await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());f.el('prepare').click();await settle(()=>f.showing('files'));
+  for(const [id,file] of [['personInput',person],['motionInput',motion]]){Object.defineProperty(f.el(id),'files',{configurable:true,value:[file]});f.el(id).dispatchEvent(new f.w.Event('change',{bubbles:true}));}
+  if(mode==='motion'){f.el('personVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('personVideo').dispatchEvent(new f.w.Event('loadeddata'));}f.el('motionVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('prepare').click();assert.equal(f.showing('where'),true);f.el('prepare').click();await settle(()=>f.el('status').textContent.includes('eerdere close-up en hoeken'));
+  assert.equal(f.showing('files'),true,'missing reference uploads must be reachable rather than hidden behind the make screen');
+  assert.equal(f.el('flowAdvanced').open,true,'the advanced controls must be expanded');assert.equal(f.el('moreOptions').open,true);assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('referenceFiles').hidden,false,'the reference upload controls must be shown');assert.equal(f.el('faceReference').hidden,true);assert.equal(f.el('angleReference0').hidden,true);assert.equal(f.el('briefDialog').open,false,'reference recovery must not be covered by another review dialog');assert.equal(f.el('personInput').files[0],person);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.el('duration').value,'12');assert.equal(f.el('start').value,'3');assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
 });
 

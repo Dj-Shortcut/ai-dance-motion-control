@@ -414,7 +414,7 @@ async function restoreFullDraft(d){
   if(originalPerson.type.startsWith('video/')){$('frameTime').value=String(d.frameTime);$('frameOutput').textContent=`${d.frameTime.toFixed(1)} s`;}
   faceReferenceBlob=d.personFile?d.faceReferenceBlob:d.faceRequired?faceReferenceBlob:null;angleReferenceBlobs=d.personFile?[...d.angleReferenceBlobs]:d.angleCount?angleReferenceBlobs:[];
   invalidate();revision=draftRevision;drawImage(imageSource);updateMotionPreview();renderReferences();
-  if(!recasting()&&(d.faceRequired&&!faceReferenceBlob||angleReferenceBlobs.length!==d.angleCount)){showError('Kies je eerdere close-up en hoeken opnieuw. Ze zijn niet in de browser opgeslagen. Ga daarna verder met je volledige video.');$('moreOptions').open=true;return false;}
+  if(!recasting()&&(d.faceRequired&&!faceReferenceBlob||angleReferenceBlobs.length!==d.angleCount)){showError('Kies je eerdere close-up en hoeken opnieuw. Ze zijn niet in de browser opgeslagen. Ga daarna verder met je volledige video.');window.rigFlow?.revealFiles({advanced:true});$('moreOptions').open=true;return false;}
   return true;
  }finally{if(restoreOperation===operation){restoreOperation=null;busy=false;for(const [element,disabled] of oldDisabled)element.disabled=disabled;if(sessionCurrent())updateCapabilities();renderContinuation();}}
 }

@@ -57,6 +57,14 @@ RIG-controle is nog niet gebouwd. Die moet ten minste:
   RIG-limiet beheerst niet automatisch andere Fal-toepassingen of alle
   kaartafschrijvingen.
 
+Een toekomstig maandplafond voor RIG-verbruik is niet hetzelfde als een
+maandplafond op kaartafschrijvingen: aanvulbedragen, resterende buffers en
+verbruik buiten RIG tellen anders. Reserveer dekking voor al verkocht tegoed
+en pauzeer nieuwe verkopen voordat die dekking tekortschiet. Een nieuw plafond
+mag niet zonder die reservering de levering aan bestaande betalende klanten
+blokkeren. Een afzonderlijk Fal-team voor RIG kan verbruik van andere apps
+scheiden, maar ook daarvan moeten financiering en accountbinding bewezen zijn.
+
 Bij een onzekere eerdere inzending mag deze controle geen automatische nieuwe
 opdracht of onbewezen terugboeking veroorzaken. De bestaande quote-,
 bevestigings-, dagbudget- en accountcontroles blijven gelden.
