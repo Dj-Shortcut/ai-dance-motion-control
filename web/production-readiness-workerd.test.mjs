@@ -17,12 +17,12 @@ async function fixture(){
  const env={RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_SITES_BRIDGE_ORIGIN:BRIDGE,RIG_SITES_BRIDGE_KEY:'ab'.repeat(32)};
  return {mf,db,async check(){const req=await signSitesBridgeRequest({env,subject:'verified-owner',path:'/api/payments/readiness'});return mf.dispatchFetch(req.url,{method:req.method,headers:[...req.headers]})},async scenario(value){await mf.dispatchFetch(BRIDGE+'/fixture/scenario?value='+value)},async calls(){return(await mf.dispatchFetch(BRIDGE+'/fixture/calls')).json()},async close(){await mf.dispose();await rm(dir,{recursive:true,force:true})}};
 }
-test('live readiness requires a signed exact GET, checks only profile and enabled EUR5 methods, and creates no financial record',async()=>{
+test('signed live readiness preserves available Mollie methods but missing funding pauses sales without a financial record',async()=>{
  const f=await fixture();try{
   assert.equal((await f.mf.dispatchFetch(BRIDGE+'/api/payments/readiness')).status,401);
   assert.equal((await f.mf.dispatchFetch(BRIDGE+'/api/payments/readiness',{method:'POST',headers:{origin:SITE}})).status,401);
   for(const [path,method]of [['/api/payments/readiness','POST'],['/api/payments/readiness?testmode=true','GET'],['/api/payments/readiness/','GET'],['/api/payments/webhook','GET']]){assert.equal(sitesPaymentPath(path,method),false);assert.equal(sitesPath(path,method),false)}
-  const r=await f.check();assert.equal(r.status,200);assert.deepEqual(await r.json(),{ready:true,profileId:'pfl_TESTPROFILE',methods:['bancontact','ideal']});assert.equal(r.headers.get('cache-control'),'no-store');
+  const r=await f.check();assert.equal(r.status,200);assert.deepEqual(await r.json(),{ready:false,reason:'funding_unavailable',profileId:'pfl_TESTPROFILE',methods:['bancontact','ideal']});assert.equal(r.headers.get('cache-control'),'no-store');
   assert.deepEqual(await f.calls(),[{path:'/v2/profiles/me',method:'GET'},{path:'/v2/methods?amount[value]=5.00&amount[currency]=EUR&locale=nl_BE',method:'GET'}]);
   for(const table of ['rig_orders','rig_ledger','rig_generation_jobs'])assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM '+table).first()).n,0);
  }finally{await f.close()}

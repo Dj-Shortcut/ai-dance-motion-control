@@ -7,7 +7,7 @@ import {closedPaymentWithFetch} from './closed-test-payment.mjs';
 
 const SITE='https://rig.example.chatgpt.site',HOOK='https://rig-api.example.workers.dev/api/payments/webhook',PROFILE='pfl_ADMISSION';
 const ALICE='u-12345678-1234-4123-8123-123456789abc',BOB='u-22345678-1234-4123-8123-123456789abc';
-const FAL_KEY='11111111-1111-4111-8111-111111111111:fixture-fal-secret-0123456789';
+const FAL_KEY='fixture-fal-billing-not-a-real-key';
 class PreDispatchFailure extends Error {}
 async function migrate(db,path){const triggers=[],sql=(await readFile(new URL(path,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'').replace(/CREATE TRIGGER\b[\s\S]*?\n\s*END\s*;/gi,statement=>{triggers.push(statement);return '';});for(const statement of [...sql.split(';').map(value=>value.trim()).filter(Boolean),...triggers])await db.prepare(statement).run();}
 async function fixture({admission,withAdmission=true,stock=500}={}){
@@ -99,7 +99,7 @@ test('the actual funding policy admits only one concurrent five-euro purchase ag
 });
 
 test('missing or wrong Fal credentials and unproven account balances refuse a checkout before Mollie or credit creation',async()=>{
- for(const options of [{key:null},{key:'22222222-2222-4222-8222-222222222222:fixture-wrong-secret-0123456789'},{scenario:'empty'},{balance:null},{balance:0},{scenario:'unavailable'},{username:'another-fixture-team'},{currency:'EUR'},{enabled:false}]){
+ for(const options of [{key:null},{key:'fixture-other-fal-key'},{scenario:'empty'},{balance:null},{balance:0},{scenario:'unavailable'},{username:'another-fixture-team'},{currency:'EUR'},{enabled:false}]){
   const {f,controls}=await coveredFixture(options);try{
    const reply=await f.create();assert.equal(reply.status,503,JSON.stringify(options));const body=await reply.json();assert.equal(body.checkoutUrl,undefined);assert.doesNotMatch(JSON.stringify(body),/fixture-fal|fixture-team|current_balance|Authorization/);assert.equal(f.created,0);assert.equal(f.calls.length,0);assert.equal(await f.count('rig_orders'),0);assert.equal(await f.count('rig_ledger'),0);if(options.key===null||options.enabled===false)assert.equal(controls.reads,0);
   }finally{await f.mf.dispose();}
