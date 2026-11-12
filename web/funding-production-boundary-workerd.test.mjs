@@ -24,7 +24,7 @@ async function migrate(db,path){
  for(const statement of sql.split(';').map(value=>value.trim()).filter(Boolean))await db.prepare(statement).run();
  for(const trigger of triggers)await db.prepare(trigger).run();
 }
-async function fixture({migration=false,enabled=false,flag=false}={}){
+async function fixture({migration=false,enabled=false,flag=false,billingResponse}={}){
  const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'test',PRODUCTION_DB:'production'}});
  try{
   const db=await mf.getD1Database('PRODUCTION_DB'),legacy=await mf.getD1Database('DB');
@@ -44,6 +44,7 @@ async function fixture({migration=false,enabled=false,flag=false}={}){
    if(url.origin==='https://api.fal.ai'){
     assert.equal(url.href,'https://api.fal.ai/v1/account/billing?expand=credits');
     assert.equal(new Headers(init.headers).get('authorization'),`Key ${FAL_KEY}`);
+    if(billingResponse)return billingResponse();
     return Response.json({username:FAL_ACCOUNT,credits:{current_balance:8.5,currency:'USD'}});
    }
    assert.equal(url.origin,'https://api.mollie.com');
@@ -69,7 +70,7 @@ async function fixture({migration=false,enabled=false,flag=false}={}){
 }
 function assertPublicOnly(value){
  const text=JSON.stringify(value);assert.doesNotMatch(text,new RegExp(FAL_ACCOUNT+'|'+FAL_KEY+'|"USD"|8500000|6000000'));
- const walk=data=>{if(!data||typeof data!=='object')return;for(const [key,item]of Object.entries(data)){assert.doesNotMatch(key,/usd|username|secret|snapshot|headroom|providerBalance|providerReserved|retailLiability|newCreditCapacity|policyVersion|financeVersion|fetchedAt|expiresAt/i);walk(item);}};
+ const walk=data=>{if(!data||typeof data!=='object')return;for(const [key,item]of Object.entries(data)){assert.doesNotMatch(key,/usd|username|secret|snapshot|headroom|providerBalance|providerReserved|retailLiability|newCreditCapacity|policyVersion|financeVersion|fetchedAt|expiresAt|diagnostic|httpStatus/i);walk(item);}};
  walk(value);
 }
 
@@ -172,6 +173,28 @@ test('owner funding checks the trusted owner ID before database or provider acce
  for(const [path,method]of [['/api/owner/finance/funding','POST'],['/api/owner/finance/funding','HEAD'],['/api/owner/finance/funding?month=2026-11','GET'],['/api/owner/finance/funding?','GET'],['/api/owner/finance/funding/','GET'],['/api/owner/finance/funding#extra','GET']]){
   assert.equal(sitesFinancePath(path,method),false,path+' '+method);assert.equal(sitesPath(path,method),false,path+' '+method);
  }
+});
+
+test('real signed owner route receives only fixed billing diagnostics; anonymous/customer and every public purchase surface cannot request them',async()=>{
+ const f=await fixture({migration:true,enabled:true,flag:true,billingResponse:()=>Response.json({error:FAL_KEY+' '+FAL_ACCOUNT+' arbitrary-provider-body'},{status:403})});try{
+  Object.assign(f.env,{RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_PRODUCTION_SITES_BRIDGE_KEY:'ba'.repeat(32)});
+  const worker=createProductionCommerceWorker({network:f.transport});
+  const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':'<main>RIG</main>'},fetchImpl:req=>worker.fetch(req,f.env)});
+  const browser=(subject,path)=>app.fetch(new Request(SITE+path,{headers:{...(subject?{'oai-authenticated-user-id':subject}:{}),'x-rig-diagnostics':'true'}}),f.env);
+  const session=await browser('diagnostic-owner','/api/session');assert.equal(session.status,200);const owner=await session.json();assertPublicOnly(owner);f.env.RIG_PRODUCTION_OWNER_USER_ID=owner.userId;
+  const customerSession=await browser('diagnostic-customer','/api/session');assert.equal(customerSession.status,200);assertPublicOnly(await customerSession.json());
+  const response=await browser('diagnostic-owner','/api/owner/finance/funding');assert.equal(response.status,200);const value=await response.json();assert.deepEqual(value.diagnostic,{stage:'http_status',httpStatus:403});assert.equal(value.reason,'funding_unavailable');
+  assert.doesNotMatch(JSON.stringify(value),new RegExp(FAL_KEY+'|'+FAL_ACCOUNT+'|arbitrary-provider-body|Authorization|api.fal.ai'));
+  const customerDenied=await browser('diagnostic-customer','/api/owner/finance/funding');assert.equal(customerDenied.status,403);assertPublicOnly(await customerDenied.json());
+  const reads=f.calls.length;
+  assert.equal((await browser(undefined,'/api/owner/finance/funding')).status,401);
+  assert.equal((await worker.fetch(new Request(BRIDGE+'/api/owner/finance/funding',{headers:{'oai-authenticated-user-id':'diagnostic-owner','x-rig-diagnostics':'true'}}),f.env)).status,401);
+  assert.equal((await browser('diagnostic-owner','/api/owner/finance/funding?diagnostics=true')).status,404);
+  assert.equal(f.calls.length,reads,'anonymous requests and debug query parameters cannot trigger a provider read');
+  for(const path of ['/api/session','/api/payments/packages','/api/payments/balance','/api/payments/readiness']){const publicResponse=await browser('diagnostic-customer',path);assert.equal(publicResponse.status,200,path);assertPublicOnly(await publicResponse.json());}
+  const checkout=await f.call('/api/payments/create',{packageId:'five',requestId:crypto.randomUUID()},{headers:{'x-rig-diagnostics':'true'}});assert.equal(checkout.status,503);const refusal=await checkout.json();assertPublicOnly(refusal);assert.equal(refusal.paymentCreated,false);
+  assert.equal(await f.count('rig_orders'),0);assert.equal(await f.count('rig_ledger'),0);assert.ok(f.calls.every(call=>call.method==='GET'));
+ }finally{await f.mf.dispose();}
 });
 
 test('production entrypoint dependency graphs never import the funding test bypass',async()=>{

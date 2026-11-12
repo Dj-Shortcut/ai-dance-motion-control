@@ -16,17 +16,14 @@ zie [profit-monitoring.md](profit-monitoring.md).
 
 ## Gezien in Fal op 12 november 2026
 
-In **Credits & Tiers** bestaat **Auto top-up**. Bij deze controle stond die uit
-en was geen kaart gekoppeld. Dit is een gedateerde waarneming, geen garantie
-over de huidige instellingen of het actuele Fal-saldo.
+De opnieuw geladen instelling in **Credits & Tiers → Auto top-up** is
+**ingeschakeld: US$20 aanvullen onder US$10**. Een later ingevulde wijziging
+is niet opgeslagen. Dit is een gedateerde controle van de opgeslagen instelling,
+geen bewijs van een latere automatische afschrijving.
 
-De in de Fal-bediening getoonde combinatie **US$20 aanvullen bij US$10
-resterend** is geen bewezen RIG-financieringsbeleid. Het voorstel voor een
-beperkte start is **US$20 aanvullen onder US$20**, naast de hieronder beschreven
-controle op uitstaand tegoed. De gebruiker heeft gekozen om eerst samen de
-bedragen te bekijken. Geen van deze instellingen is goedgekeurd of geactiveerd;
-er is hiervoor geen afschrijving toegestaan of uitgevoerd. Bij een saldo onder
-de drempel kan inschakelen al tot een aanvulling leiden.
+Fal voert de aanvulling uit via zijn eigen betaalinstelling. Mollie-ontvangsten
+worden niet automatisch naar Fal overgeboekt. RIG rekent uitsluitend aantoonbaar
+aanwezige Fal-dekking mee, nooit een toekomstige automatische aanvulling.
 
 In het bekeken Fal-scherm was geen maandlimiet zichtbaar. Daaruit volgt niet
 dat Fal nergens een aanvullende limiet aanbiedt. RIG heeft momenteel een
@@ -39,7 +36,7 @@ Automatisch aanvullen kan de kaart belasten voordat Mollie het klantgeld heeft
 uitbetaald. Een storing, geweigerde kaart of lege Fal-wallet kan generatie
 blokkeren terwijl klanten nog geldig RIG-tegoed hebben.
 
-## Nieuwe verkoopcontrole: geïmplementeerd, nog niet geactiveerd
+## Verkoopcontrole en afzonderlijke activering
 
 `web/funding-coverage.mjs` leest met de **generatiesleutel zelf** uitsluitend
 `GET https://api.fal.ai/v1/account/billing?expand=credits`. Vereist zijn
@@ -47,6 +44,14 @@ blokkeren terwijl klanten nog geldig RIG-tegoed hebben.
 Fal-accountnaam. Een ander account, ontbrekend recht, time-out, ongeldige
 respons of ontbrekende instelling weigert een nieuwe aankoop vóór Mollie.
 Er wordt geen sleutel of accountnaam aan klanten teruggestuurd.
+
+De uitgelezen antwoordbody blijft begrensd tot 16 KiB en tien seconden. Workers
+kan gzip/brotli al hebben uitgepakt terwijl `Content-Length` nog de ingepakte
+lengte aangeeft; alleen bij `identity` wordt die header daarom exact met de
+gelezen bytes vergeleken. Onbekende coderingen en ongeldige antwoorden blijven
+geweigerd. De bestaande eigenaarroute geeft bij een fout uitsluitend een vaste
+diagnosecategorie en HTTP-status, zonder providertekst of geheime gegevens.
+Klant- en kooproutes krijgen deze diagnose niet.
 
 Dezelfde D1-transactie als de nieuwe bestelling controleert opnieuw hoeveel
 ruimte over is. Twee klanten kunnen zo niet dezelfde voorraad toegewezen
@@ -88,11 +93,19 @@ onderliggende saldo of een gegarandeerde actualiteit. Het conservatieve venster
 van negentig minuten is een RIG-aanname, geen Fal-garantie. Buiten RIG gemaakte
 kosten en onverwachte prijsafwijkingen kunnen niet volledig worden afgeschermd.
 
-## Wat er nog voor activering nodig is
+## Activerings- en releasecontrole
 
-1. Publiceer de geteste server én website, met een vooraf gecontroleerde back-up
-   van de bestaande Cloudflare-instellingen en data. De Cloudflare-aanmelding
-   moet hiervoor beschikbaar zijn; samenvoegen op GitHub publiceert dit niet.
+1. Werk bij een gewijzigde gedeelde bridge-route alle betrokken deployments bij,
+   na een gecontroleerde back-up:
+   de native Sites-website (`rig-sites-app.mjs`), de publieke Cloudflare-relay
+   (`production-ingress.mjs`) en de private Cloudflare-service
+   (`closed-video-worker.mjs`). Bij nieuwe beheerroutes is alleen de website of
+   private worker publiceren onvoldoende: ook de relay moet ze doorlaten.
+   Een uitsluitend interne backendfix vraagt geen nieuwe publicatie van
+   ongewijzigde website- of relaycode.
+   Sites-versie 40 en beide Cloudflare-deployments zijn op 12 november bijgewerkt;
+   dat bewijst op zichzelf nog geen geactiveerde dekkingspolicy of echte verkoop.
+   Samenvoegen op GitHub publiceert deze drie onderdelen niet automatisch.
 2. Pas de vereiste additieve migratie
    `web/production-migrations/0015_funding_coverage.sql` toe op de aparte
    productiedatabase, na de bestaande commerciële migraties. Ook een nieuwe
@@ -107,15 +120,17 @@ kosten en onverwachte prijsafwijkingen kunnen niet volledig worden afgeschermd.
    `RIG_FUNDING_COVERAGE_ENABLED=yes` in. Ontbreekt één van deze zaken, dan
    blijven nieuwe aankopen geweigerd. Deel sleutels niet in chat/logs en verruim
    de sleutel niet voordat het ontbreken van het leesrecht werkelijk is bewezen.
-4. Spreek aanvulbedrag, drempel en gewenst budget af. De gebruiker koppelt zelf
-   een kaart bij Fal en bevestigt daar de automatische afschrijving. RIG heeft
-   geen kaart of bevoegdheid gekregen om zelf geld van Mollie naar Fal te sturen.
+4. Controleer de werkelijk opgeslagen automatische Fal-aanvulling, afzonderlijk
+   van de RIG-dekkingspolicy. Bij de laatste controle was dat US$20 onder US$10;
+   een wijziging vereist daadwerkelijk opslaan in Fal. RIG heeft geen bevoegdheid
+   om zelf geld van Mollie naar Fal te sturen.
 5. Controleer de werkelijke verkoopstatus. Een eerste live klantaankoop en de
    administratie blijven afzonderlijke bewijsstappen; lokale tests bewijzen die
    niet. Spreek een echte proefbetaling apart af.
 
-Bij de voorgestelde drempel van US$20 is er zonder andere verplichtingen ruimte
-voor één €25-pakket plus buffer. Veel ongebruikt klanttegoed kan de verkoop
+Bij een Fal-voorraad van US$20 is er zonder andere verplichtingen ruimte voor
+één €25-pakket plus buffer. Dat is een dekkingsvoorbeeld, niet de opgeslagen
+Fal-aanvuldrempel. Veel ongebruikt klanttegoed kan de verkoop
 echter pauzeren terwijl Fal nog boven zijn aanvuldrempel staat. Dat is bewust:
 een vast aanvulbedrag kan geen onbeperkte voorverkoop dekken. Er wordt nooit een
 onbewezen kaartaanvulling als al aanwezig budget meegeteld.
