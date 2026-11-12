@@ -1,6 +1,8 @@
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {prepareOwnerMutation} from './owner-security.mjs';
 import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} from './profit-policy.mjs';
+import {RECAST_QUALITY} from './recast-contract.mjs';
+import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -21,6 +23,7 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
  if(!isProductionGenerationContext(productionContext,{db}))throw Error('Invalid production funding capability');
  const ownerFor=user=>productionFundingKind(productionContext,user)==='owner-provider'?user:'';
  const mode="EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')";
+ const pendingProviderBudget=workflowProviderBudgetPredicate({enabled:productionContext.env.RIG_OWNER_CLEANUP_VALIDATION_ENABLED==='yes'});
  const jobSelect='SELECT j.*,q.funding_kind,q.input_json FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents';
  const getJob=(user,id)=>db.prepare(jobSelect+' WHERE j.user_id=? AND j.id=?').bind(user,id).first();
  const getByKey=(user,key)=>db.prepare(jobSelect+' WHERE j.user_id=? AND j.idempotency_key=?').bind(user,key).first();
@@ -87,7 +90,7 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
    if(!quote||quote.id!==quoteId||quote.userId!==userId||!['credits','owner-provider'].includes(quote.fundingKind))throw Error('Invalid funding quote');
    if(quote.fundingKind==='owner-provider'){
     const payload=verificationPayload??{quoteId,idempotencyKey};
-    const temporary=quote.input?.data?.quality==='edit-standard'&&quote.input.data.transferPolicy==='fal-temporary-links-v1';
+    const temporary=['edit-standard',RECAST_QUALITY].includes(quote.input?.data?.quality)&&quote.input.data.transferPolicy==='fal-temporary-links-v1';
     if(!payload||payload.quoteId!==quoteId||payload.idempotencyKey!==idempotencyKey||(temporary?payload.transferConsent!=='fal-temporary-links-v1':Object.hasOwn(payload,'transferConsent')))throw Error('Verification operation does not match generation');
    }
    const policy=await loadProfitPolicy(db);
@@ -141,7 +144,7 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
       AND eur_per_usd_micros=? AND provider_vat_bps=? AND payment_fee_bps=? AND failure_buffer_bps=? AND preparation_cents=?
       AND min_margin_bps=? AND min_price_cents=? AND min_pro_price_cents=?)
      AND NOT EXISTS(SELECT 1 FROM rig_generation_costs WHERE job_id=j.id)
-     AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c JOIN rig_generation_jobs pending ON pending.id=c.job_id WHERE c.budget_day=? OR pending.state IN ('unknown','submitting')),0)+?<=?`)
+     AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c JOIN rig_generation_jobs pending ON pending.id=c.job_id WHERE ${pendingProviderBudget}),0)+?<=?`)
     .bind(usd,day,now,JSON.stringify(snapshot),user,id,row.input_json,row.funding_kind,now,ownerFor(user),policy.version,policy.dailyProviderLimitUsdMicros,
      policy.eurPerUsdMicros,policy.providerVatBps,policy.paymentFeeBps,policy.failureBufferBps,policy.preparationCents,policy.minMarginBps,policy.minPriceCents,policy.minProPriceCents,day,usd,policy.dailyProviderLimitUsdMicros);
    const dispatch=db.prepare(`UPDATE rig_generation_jobs SET poll_token='dispatch-authorized',poll_lease_until=-1

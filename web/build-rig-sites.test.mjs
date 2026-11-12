@@ -5,6 +5,8 @@ import {promisify} from 'node:util';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {CLEANUP_STATIC_ASSETS} from './cleanup-static-assets.mjs';
+import {createHash} from 'node:crypto';
 const exec=promisify(execFile),root=fileURLToPath(new URL('./',import.meta.url));
 test('a fresh portable build creates its metadata and serves current UI without changing source bundles',async()=>{
  const directory=await mkdtemp(join(root,'.rig-build-test-')),output=join(directory,'site output');
@@ -32,6 +34,12 @@ test('a fresh portable build creates its metadata and serves current UI without 
   }
   const finance=await worker.fetch(new Request(origin+'/multiuser/finance.js'),env);assert.equal(finance.status,200);assert.match(await finance.text(),/\/api\/owner\/finance/);
   const security=await worker.fetch(new Request(origin+'/multiuser/owner-security.js'),env);assert.equal(security.status,200);assert.match(await security.text(),/rigOwnerVerification/);
+  const cleanup=await worker.fetch(new Request(origin+'/multiuser/cleanup-client.js'),env);assert.equal(cleanup.status,200);const client=await cleanup.text();assert.match(client,/createCleanupClient/);assert.doesNotMatch(client,/from ["']mediabunny["']/,'the lazy entry must be portable without node_modules');
+  for(const [path,config]of Object.entries(CLEANUP_STATIC_ASSETS)){
+   const response=await worker.fetch(new Request(origin+path),env);assert.equal(response.status,200,path);assert.equal(response.headers.get('content-type'),config.type);const bytes=Buffer.from(await response.arrayBuffer());assert.ok(bytes.length>0&&bytes.length<=config.max);
+   if(path.endsWith('eng.traineddata.gz'))assert.equal(createHash('sha256').update(bytes).digest('hex'),'4134b1377ebbc95404e581d9d0dc8b5b7e9c4c75a13a62ea897d27971de2ef24');
+   if(path.endsWith('.wasm'))assert.deepEqual(bytes.subarray(0,4),Buffer.from([0,97,115,109]));
+  }
   const discovery=await worker.fetch(new Request(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);
   assert.ok((await discovery.json()).result.tools.some(tool=>tool.name==='rig_create_quote'));
   for(let index=0;index<sourceFiles.length;index++)assert.deepEqual(await readFile(join(root,sourceFiles[index])),before[index]);

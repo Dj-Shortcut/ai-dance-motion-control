@@ -2,7 +2,8 @@ import ui from './rig-sites-ui-bundle.mjs';
 import {createRigMcp} from './rig-mcp.mjs';
 import {createChatgptFilePreparer} from './rig-chatgpt-files.mjs';
 import {commerceDocument} from './commerce-documents.mjs';
-import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,SITES_BODY_MAX,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
+import {CLEANUP_STATIC_ASSETS,OCR_WORKER_POLICY} from './cleanup-static-assets.mjs';
+import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesRequestBodyLimit,sitesPreparationWrite,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
@@ -67,7 +68,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
     else throw Error('Unsupported server body');
    }
    const signed=await signSitesBridgeRequest({env:selected,subject:identity,path,method,headers:options.headers??{},body});
-   return fetchImpl(new Request(signed,{signal:AbortSignal.timeout(path==='/api/assets'?120000:45000)}));
+   return fetchImpl(new Request(signed,{signal:AbortSignal.timeout(sitesPreparationWrite(path,method)?120000:45000)}));
   };
   const session=await readJson(await request('/api/session'),2048);
   if(!USER.test(session?.userId??''))throw Error('Invalid backend identity');
@@ -86,6 +87,14 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    let bytes;try{bytes=Uint8Array.from(atob(asset.base64),char=>char.charCodeAt(0))}catch{return reject(404)}
    if(!bytes.byteLength)return reject(404);
    return new Response(req.method==='HEAD'?null:bytes,{headers:{'content-type':config.type,'content-length':String(bytes.byteLength),'cache-control':config.cache,'x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; sandbox"}});
+  }
+  if(Object.hasOwn(CLEANUP_STATIC_ASSETS,url.pathname)){
+   if(!['GET','HEAD'].includes(req.method)||url.search)return reject(404);
+   const config=CLEANUP_STATIC_ASSETS[url.pathname],asset=uiFiles[url.pathname];
+   if(asset?.kind!=='public-cleanup-asset'||typeof asset.base64!=='string'||asset.base64.length>Math.ceil(config.max/3)*4)return reject(404);
+   let bytes;try{bytes=Uint8Array.from(atob(asset.base64),char=>char.charCodeAt(0))}catch{return reject(404)}
+   if(!bytes.byteLength||bytes.byteLength>config.max)return reject(404);
+   return new Response(req.method==='HEAD'?null:bytes,{headers:{'content-type':config.type,'content-length':String(bytes.byteLength),'cache-control':'public, max-age=3600','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','content-security-policy':config.worker?OCR_WORKER_POLICY:"default-src 'none'; sandbox"}});
   }
   if(req.method==='GET'&&!url.search){const document=commerceDocument(url.pathname);if(document)return document;}
   if(url.pathname==='/mcp'){
@@ -119,7 +128,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
     return json(url.pathname.endsWith('/packages')?{packages:[],...state}:{orders:[]});
    }
    try{
-    const max=url.pathname==='/api/assets'?SITES_BODY_MAX:8192,length=req.headers.get('content-length');
+    const max=sitesRequestBodyLimit(url.pathname,req.method),length=req.headers.get('content-length');
     if(length&&(!/^\d+$/.test(length)||Number(length)>max))return reject(413);
     const body=req.method==='POST'?await readBytes(req.body,max):undefined;
     const response=await ctx.request(url.pathname+url.search,{method:req.method,headers:req.headers,body});
@@ -138,7 +147,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
   const path=url.pathname==='/'||url.pathname==='/multiuser/'?'/multiuser/index.html':url.pathname;
   const asset=uiFiles[path];if(typeof asset!=='string')return reject(404);
   const type=path.endsWith('.html')?'text/html; charset=utf-8':path.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8';
-  return new Response(asset,{headers:{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'publickey-credentials-create=(self), publickey-credentials-get=(self)','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
+  return new Response(asset,{headers:{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'publickey-credentials-create=(self), publickey-credentials-get=(self)','content-security-policy':"default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
  }};
 }
 export default createRigSitesApp();

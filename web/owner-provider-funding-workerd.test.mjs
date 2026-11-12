@@ -6,6 +6,7 @@ import {createD1GenerationStores} from './d1.mjs';
 import {createProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {closedVideoTesting} from './closed-video-service.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {RECAST_MODEL,RECAST_QUALITY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS} from './recast-contract.mjs';
 
 const OWNER='u-12345678-1234-4123-8123-123456789abc',CUSTOMER='u-22345678-1234-4123-8123-123456789abc';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
@@ -131,5 +132,21 @@ test('owner verification payload cannot authorize different actual quote or requ
    await assert.rejects(f.stores.jobs.begin({userId:OWNER,quoteId:quote.id,idempotencyKey:key,quote,verificationPayload:payload}),/Verification operation does not match generation/);
   }
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
+ }finally{await f.mf.dispose();}
+});
+test('human Recast provider funding requires the same exact transfer consent inside the operation-bound owner assertion',async()=>{
+ const f=await fixture();try{
+  const policy='fal-temporary-links-v1',q=await f.quote(OWNER,{model:RECAST_MODEL,priceCents:240,durationSeconds:5.94,input:{data:{quality:RECAST_QUALITY,transferPolicy:policy},providerEstimateUsdMicros:1800000,providerContract:RECAST_PROVIDER_CONTRACT,providerSettings:{...RECAST_SETTINGS}}}),key='confirmed-human-recast';
+  for(const consent of [undefined,'private',true]){
+   const payload={quoteId:q.id,idempotencyKey:key,...(consent===undefined?{}:{transferConsent:consent})};
+   await assert.rejects(f.stores.jobs.begin({userId:OWNER,quoteId:q.id,idempotencyKey:key,quote:q,verificationPayload:payload}),/Verification operation does not match generation/);
+  }
+  const payload={quoteId:q.id,idempotencyKey:key,transferConsent:policy};
+  const withoutProof=await f.stores.jobs.begin({userId:OWNER,quoteId:q.id,idempotencyKey:key,quote:q,verificationPayload:payload});assert.equal(withoutProof.kind,'verification');assert.equal(withoutProof.response.status,428);
+  const wrongProof=await verificationFor(f.db,OWNER,'owner-generation',{quoteId:q.id,idempotencyKey:key},Date.now(),{env:f.env});
+  const wrong=await f.stores.jobs.begin({userId:OWNER,quoteId:q.id,idempotencyKey:key,quote:q,verification:wrongProof,verificationPayload:payload});assert.equal(wrong.kind,'verification');
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_owner_provider_usage').first()).n,0);assert.deepEqual(await f.ledger(),[]);
+  const verification=await verificationFor(f.db,OWNER,'owner-generation',payload,Date.now(),{env:f.env});
+  const started=await f.stores.jobs.begin({userId:OWNER,quoteId:q.id,idempotencyKey:key,quote:q,verification,verificationPayload:payload});assert.equal(started.kind,'created');assert.equal(started.job.fundingKind,'owner-provider');assert.equal((await f.usage(started.job.id)).estimated_usd_micros,1800000);assert.deepEqual(await f.ledger(),[]);
  }finally{await f.mf.dispose();}
 });

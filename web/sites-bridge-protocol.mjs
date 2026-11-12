@@ -4,6 +4,21 @@ export const SITES_PROTOCOL='rig-sites-bridge-v1';
 export const SITE_HEADER_NAMES=Object.freeze({site:'x-rig-sites-project',subject:'x-rig-sites-subject',time:'x-rig-sites-time',nonce:'x-rig-sites-nonce',digest:'x-rig-sites-body-sha256',signature:'x-rig-sites-signature'});
 export const SIGNED_CONTENT_HEADERS=Object.freeze(['content-type','x-rig-asset-kind','x-rig-duration-seconds','x-rig-keep-sound','x-rig-start-seconds']);
 export const SITES_BODY_MAX=16*1024*1024;
+const WORKFLOW_UUID='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
+const workflowInput=new RegExp('^/api/workflow-inputs/'+WORKFLOW_UUID+'$');
+const workflowMask=new RegExp('^/api/workflow-inputs/'+WORKFLOW_UUID+'/mask$');
+const workflowClient=new RegExp('^/api/generations/'+WORKFLOW_UUID+'/client(?:/(source|clean|mask|output))?$');
+const workflowAdvance=new RegExp('^/api/generations/'+WORKFLOW_UUID+'/client/advance$');
+export function sitesWorkflowPath(path,method){
+ if(typeof path!=='string'||path.includes('?')||path.includes('#'))return false;
+ if(method==='GET')return workflowInput.test(path)||workflowClient.test(path);
+ return method==='POST'&&(path==='/api/workflow-inputs/source'||workflowMask.test(path)||workflowAdvance.test(path)||workflowClient.test(path)&&path.endsWith('/output'));
+}
+// Keep the v1 canonical header array unchanged: old producers/consumers remain
+// interoperable during rolling deployments. All input IDs are signed in the
+// exact path and the digest covers the complete upload body.
+export function sitesPreparationWrite(path,method){return method==='POST'&&(path==='/api/assets'||path==='/api/workflow-inputs/source'||workflowMask.test(path)||workflowClient.test(path)&&path.endsWith('/output'));}
+export function sitesRequestBodyLimit(path,method){return method==='GET'?0:workflowMask.test(path)?2*1024*1024:sitesPreparationWrite(path,method)?SITES_BODY_MAX:8192;}
 const HASH=/^[a-f0-9]{64}$/,SITE=/^appgprj_[a-zA-Z0-9]{20,80}$/;
 const hex=data=>Array.from(new Uint8Array(data),x=>x.toString(16).padStart(2,'0')).join('');
 export const sitesDigest=async data=>hex(await crypto.subtle.digest('SHA-256',data));
@@ -40,6 +55,7 @@ export function sitesPath(path,method){
  if(sitesFinancePath(path,method))return true;
  if(sitesAdministrationPath(path,method))return true;
  if(sitesOwnerSecurityPath(path,method))return true;
+ if(sitesWorkflowPath(path,method))return true;
  if(method==='GET')return ['/api/session','/api/video-config','/api/sponsor-invitations/status','/api/generations/recent'].includes(path)||u.pathname==='/api/estimate/fal'||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
  return ['/api/sponsor-invitations/redeem','/api/assets','/api/generation-quotes','/api/generations','/api/chatgpt/quote-approvals','/api/chatgpt/quote-approvals/consume','/api/generations/a5db90b7-7558-40bf-a013-2e121d056f2d/verify-gateway'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[0-9a-f-]{36}\/verify-inputs$/.test(path);
 }
@@ -53,7 +69,7 @@ export async function sitesHmac(key,value){
  return hex(await crypto.subtle.sign('HMAC',cryptoKey,new TextEncoder().encode(value)));
 }
 export async function signSitesBridgeRequest({env,subject,path,method='GET',headers:inputHeaders={},body=new Uint8Array(),now=Date.now(),nonce=hex(crypto.getRandomValues(new Uint8Array(16)))}={}){
- if(!sitesProtocolConfig(env)||typeof subject!=='string'||!subject.length||subject.length>512||/[\u0000-\u001f\u007f]/.test(subject)||!sitesPath(path,method)||!(body instanceof Uint8Array)||body.length>(path==='/api/assets'?SITES_BODY_MAX:8192)||method==='GET'&&body.length||!Number.isSafeInteger(now)||now<0||!/^[a-f0-9]{32}$/.test(nonce))throw Error('Invalid Sites bridge request');
+ if(!sitesProtocolConfig(env)||typeof subject!=='string'||!subject.length||subject.length>512||/[\u0000-\u001f\u007f]/.test(subject)||!sitesPath(path,method)||!(body instanceof Uint8Array)||body.length>sitesRequestBodyLimit(path,method)||method==='GET'&&body.length||!Number.isSafeInteger(now)||now<0||!/^[a-f0-9]{32}$/.test(nonce))throw Error('Invalid Sites bridge request');
  const source=new Headers(inputHeaders),headers=new Headers();
  for(const name of SIGNED_CONTENT_HEADERS){const value=source.get(name);if(value!==null){if(value.length>256)throw Error('Invalid content header');headers.set(name,value)}}
  const subjectHash=await sitesDigest(new TextEncoder().encode(env.RIG_SITES_PROJECT_ID+'\0'+subject)),time=String(now),digest=await sitesDigest(body);

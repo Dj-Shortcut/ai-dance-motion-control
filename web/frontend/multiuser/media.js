@@ -95,6 +95,18 @@
     const width=Math.max(d.width,minSide),height=Math.max(d.height,minSide);
     return {...d,width,height,contentWidth:d.width,contentHeight:d.height,dx:(width-d.width)/2,dy:(height-d.height)/2};
   }
+  // Read support only: no canvas, stream, recorder, file bytes or network work.
+  // Runtime capture can still fail, and prepareVideo retains its own checks.
+  function preparationCapability({keepSound=true}={}) {
+    const recordingMessage='Deze browser kan je video niet lokaal als MP4 voorbereiden. Kies een andere browser die MP4-opname ondersteunt.';
+    if(typeof keepSound!=='boolean'||typeof MediaRecorder==='undefined'||typeof MediaRecorder.isTypeSupported!=='function'||typeof HTMLCanvasElement==='undefined'||typeof HTMLCanvasElement.prototype.captureStream!=='function')return {supported:false,code:'mp4-recording',message:recordingMessage};
+    const mimes=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1','video/mp4'];
+    const mime=mimes.find(type=>{try{return MediaRecorder.isTypeSupported(type)===true}catch{return false}});
+    if(!mime)return {supported:false,code:'mp4-recording',message:recordingMessage};
+    const sourceAudio=typeof HTMLVideoElement!=='undefined'&&typeof HTMLVideoElement.prototype.captureStream==='function'||typeof HTMLMediaElement!=='undefined'&&typeof HTMLMediaElement.prototype.captureStream==='function';
+    if(keepSound&&!sourceAudio)return {supported:false,code:'source-audio',message:'Deze browser kan het originele geluid niet meenemen bij het voorbereiden. Kies een andere browser die MP4-opname met brongeluid ondersteunt.'};
+    return {supported:true,mime};
+  }
   async function prepareVideo(video,crop,start,duration,keepSound,onProgress=()=>{},options={}) {
     const maxDuration=options.maxDuration??30;
     if(![15,30].includes(maxDuration)||!Number.isFinite(start)||!Number.isFinite(duration)||start<0||duration<3||duration>maxDuration||start+duration>video.duration+0.001) throw Error(`Kies een geldig fragment van 3 tot ${[15,30].includes(maxDuration)?maxDuration:30} seconden binnen de video.`);
@@ -161,5 +173,5 @@
       for(const track of tracks)try{track.stop()}catch{}
     }
   }
-  window.rigMedia={bounds,dimensions,paint,prepareImage,prepareImageFile,prepareVideo,recordingDuration,videoDimensions};
+  window.rigMedia={bounds,dimensions,paint,prepareImage,prepareImageFile,prepareVideo,recordingDuration,videoDimensions,preparationCapability};
 })();

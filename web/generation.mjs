@@ -3,17 +3,19 @@ import {providerJSON,providerInputValidation} from './provider-response.mjs';
 import {isProviderInputUrl} from './rig-provider-inputs.mjs';
 import {isR2InputUrl} from './rig-r2-inputs.mjs';
 import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
+import {RECAST_QUALITY,RECAST_MODEL,RECAST_QUEUE_FAMILY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS,validRecastSettings,validRecastVideo} from './recast-contract.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const REQ_ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const QUEUE = 'https://queue.fal.run';
 const SUBJECT_REJECTED='Deze foto is niet geschikt voor persoonsbeweging. Kies Video bewerken, of gebruik een foto met een duidelijk zichtbaar menselijk bovenlichaam.';
-const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at a fixed distance and focal length throughout. Keep the person centered and their complete body visible from the top of the head to both shoes, with generous space above the head, below the feet and on both sides for all dance movements. Maintain the initial wide framing throughout the entire clip, with a stable background and realistic proportions. ';
+const CAMERA_PROMPT = 'Single continuous wide full-body shot. The tripod camera remains stationary at fixed distance and focal length. Keep the person centered, visible from head to both shoes, with generous space above, below and beside them for every dance movement. Maintain the initial framing, stable background and realistic proportions throughout. ';
 // Ask for clean output in the existing generation, without a separate paid
 // cleanup job. This does not modify source files or guarantee text removal.
 const TEXT_CLEANUP_PROMPT = 'Remove all visible text, letters, captions, subtitles, app interfaces, logos and overlays. Restore the scene beneath, preserving the subject, movement, camera and audio. ';
-const MODEL = Object.freeze({ standard: 'fal-ai/kling-video/v3/standard/motion-control', pro: 'fal-ai/kling-video/v3/pro/motion-control', 'edit-standard':'fal-ai/kling-video/o3/standard/video-to-video/edit' });
+const MODEL = Object.freeze({ standard: 'fal-ai/kling-video/v3/standard/motion-control', pro: 'fal-ai/kling-video/v3/pro/motion-control', 'edit-standard':'fal-ai/kling-video/o3/standard/video-to-video/edit',[RECAST_QUALITY]:RECAST_MODEL });
+const O3_IDENTITY_CONTRACT='o3-identity-only-v1';
 // This transfer changes who can read Fal's temporary copies. It is opt-in per
 // quoted O3 edit, never inferred from the user, model default or runtime owner.
 const TEMPORARY_FAL_LINKS='fal-temporary-links-v1';
@@ -31,19 +33,19 @@ function validTemporaryAsset(x,kind,ref) {
   try{const u=new URL(x.url);return u.href===u.origin+u.pathname;}catch{return false;}
 }
 function validPrepared(x,kind,id) { return !!x && x.verified===true && x.kind===kind && x.id===id && /^[a-f0-9]{64}$/.test(x.sha256??''); }
-function configuredRate(s,quality) { return quality==='edit-standard'?s.pricing.editStandard:s.pricing[quality]; }
+function configuredRate(s,quality) { return quality===RECAST_QUALITY?s.pricing.recast:quality==='edit-standard'?s.pricing.editStandard:s.pricing[quality]; }
 function qualityEnabled(s,quality) { const rate=configuredRate(s,quality);return Number.isSafeInteger(rate)&&rate>0; }
 function validEditVideo(video) { return video.durationVerified===true&&Number.isFinite(video.durationSeconds)&&video.durationSeconds>=3&&video.durationSeconds<=15&&Number.isSafeInteger(video.width)&&video.width>=720&&video.width<=3840&&Number.isSafeInteger(video.height)&&video.height>=720&&video.height<=3840&&Number.isFinite(video.fps)&&video.fps>=23&&video.fps<=60; }
 const inlineFiveSeconds=duration=>Number.isFinite(duration)&&duration>=4.9&&duration<=5;
 function editPrompt(prompt,hasIdentity=false) { return `Edit @Video1 using the subject shown in @Image1 as the replacement subject. Keep the original camera framing, camera movement and scene timing. ${hasIdentity?'Use @Element1 for the replacement subject identity and its appearance from different angles. ':''}${TEXT_CLEANUP_PROMPT}${prompt}`; }
+function identityEditPrompt(prompt) { return `Edit @Video1 in place. Replace only the main subject's appearance with @Element1. @Video1 alone defines the scene, background, shot size, camera, body and facial motion, and timing. Keep its original audio. The identity photos define appearance only; never copy their room, pose or framing. ${TEXT_CLEANUP_PROMPT}${prompt}`; }
 function generationPrompt(data){
- if(data.quality==='edit-standard')return editPrompt(data.prompt,Boolean(data.faceId));
+ if(data.quality===RECAST_QUALITY)return data.prompt;
+ if(data.quality==='edit-standard')return data.transferPolicy===TEMPORARY_FAL_LINKS?identityEditPrompt(data.prompt):editPrompt(data.prompt,Boolean(data.faceId));
  const prefix=(data.steadyCamera?CAMERA_PROMPT:'')+TEXT_CLEANUP_PROMPT+(data.faceId?'The replacement subject is @Element1. ':'');
- // Preserve the existing steady-camera user limit and keep the complete
- // provider prompt <=2500 UTF-16 units without splitting a surrogate pair.
- const selected=data.steadyCamera?Array.from(data.prompt).slice(0,1300).join(''):data.prompt;
- let userPrompt='';for(const character of selected){if(prefix.length+userPrompt.length+character.length>2500)break;userPrompt+=character;}
- return prefix+userPrompt;
+ // Every permitted1900-unit user description fits with the fixed prefixes,
+ // including identity and camera guidance. Never silently discard its ending.
+ return prefix+data.prompt;
 }
 function configured(s) {
   if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
@@ -86,13 +88,14 @@ async function readJSON(req) {
 
 function inputData(o) {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
-  const { imageId, videoId, faceId=null, angleIds=[], quality, prompt='', keepSound=true, steadyCamera=quality!=='edit-standard', transferPolicy }=o;
+  const { imageId, videoId, faceId=null, angleIds=[], quality, prompt='', keepSound=true, steadyCamera=!['edit-standard',RECAST_QUALITY].includes(quality), transferPolicy }=o;
   if (!ID.test(imageId??'') || !ID.test(videoId??'') || !Object.hasOwn(MODEL, quality) || typeof prompt!=='string' || prompt.length>1900 || typeof keepSound!=='boolean' || typeof steadyCamera!=='boolean' || !(faceId===null || ID.test(faceId)) || !Array.isArray(angleIds) || angleIds.length>3 || angleIds.some(x=>typeof x!=='string'||!ID.test(x)) || (angleIds.length>0 && !faceId)) return null;
   if (quality==='edit-standard' && (!prompt.trim() || steadyCamera)) return null;
+  if(quality===RECAST_QUALITY&&(!prompt.trim()||faceId!==null||angleIds.length||steadyCamera||keepSound!==true||transferPolicy!==TEMPORARY_FAL_LINKS||['resolution','enhance_realism','enable_safety_checker'].some(key=>Object.hasOwn(o,key))))return null;
   // Extra edit identities use the current quote-bound temporary transfer.
   // Historical gateway/inline probes remain limited to their original pair.
   if (quality==='edit-standard' && faceId!==null && transferPolicy!==TEMPORARY_FAL_LINKS) return null;
-  if(Object.hasOwn(o,'transferPolicy')&&(quality!=='edit-standard'||transferPolicy!==TEMPORARY_FAL_LINKS))return null;
+  if(Object.hasOwn(o,'transferPolicy')&&(!['edit-standard',RECAST_QUALITY].includes(quality)||transferPolicy!==TEMPORARY_FAL_LINKS))return null;
   return {imageId,videoId,faceId,angleIds:[...angleIds],quality,prompt,keepSound,steadyCamera,...(transferPolicy?{transferPolicy}:{})};
 }
 
@@ -119,7 +122,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       try {const job=await services.jobs.getRecent(user.id);if(!job)return respond({job:null});if(job.userId!==user.id)return fail('Opdracht niet gevonden.',404);return respond({job:{...publicJob(job),...(job.state==='completed'?{videoPath:`/api/generations/${job.id}/video`}:{})}});} catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
     }
     if (req.method==='POST' && path==='/api/generation-quotes') {
-      const data=inputData(await readJSON(req)); if (!data) return fail('Controleer je invoer.',400);
+      const raw=await readJSON(req);
+      if(raw?.quality==='edit-standard'&&Array.isArray(raw.angleIds)&&raw.angleIds.length>2)return fail('Gebruik voor videobewerking maximaal vier foto’s: een hoofdbeeld, een close-up en twee hoeken.',400);
+      const data=inputData(raw); if (!data) return fail('Controleer je invoer.',400);
       if (!qualityEnabled(services,data.quality)) return fail('Dit videomodel is nog niet beschikbaar.',503);
       if(services.mode==='live'&&data.quality==='edit-standard'&&data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',400);
       const prompt=generationPrompt(data);if(prompt.length>2500)return fail('Houd je beschrijving korter.',400);
@@ -129,13 +134,14 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       const [image,video,...rest]=assets;
       const ids=[data.imageId,data.videoId,...(data.faceId?[data.faceId]:[]),...data.angleIds];
       if (!validPrepared(image,'image',ids[0]) || !validPrepared(video,'video',ids[1]) || rest.some((x,i)=>!validPrepared(x,'image',ids[i+2]))) return fail('Kies geldige voorbereide bestanden.',400);
-      if(data.quality!=='edit-standard'){
+      if(['standard','pro'].includes(data.quality)){
         try{if(typeof services.jobs.hasKnownSubjectRejection!=='function')throw Error('Subject check unavailable');if(await services.jobs.hasKnownSubjectRejection(user.id,image.sha256))return rejectSubject(400)}catch{return fail('De fotocontrole is tijdelijk niet beschikbaar.',503)}
       }
       // durationSeconds MUST be obtained by an independent trusted server verifier,
       // not from a browser, file name or untrusted user-provided metadata.
       if (video.durationVerified!==true || !Number.isFinite(video.durationSeconds) || video.durationSeconds<3 || video.durationSeconds>30) return fail('De videoduur kon niet veilig worden vastgesteld.',400);
       if (data.quality==='edit-standard' && !validEditVideo(video)) return fail('Kies voor deze videobewerking 3 tot 15 seconden, minstens 720 pixels breed en hoog, met 23 tot 60 beelden per seconde.',400);
+      if(data.quality===RECAST_QUALITY&&!validRecastVideo(video))return fail('Kies voor personen vervangen een voorbereid fragment van minstens 5 en maximaal 15 echte seconden. Bereid je video opnieuw voor; een fragment van 4,92 seconden is te kort.',400);
       if (data.quality==='edit-standard' && data.transferPolicy!==TEMPORARY_FAL_LINKS && services.inlineO3Owner===user.id && !inlineFiveSeconds(video.durationSeconds)) return fail('Kies voor deze privéproef een fragment van 5 seconden.',400);
       let cents,providerEstimateUsdMicros=null;
       try{
@@ -149,10 +155,10 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(services.mode!=='live'&&services.trialGuard){try{providerEstimateUsdMicros=await services.trialGuard.estimate(data.quality,video.durationSeconds)}catch{return fail('De actuele fal-prijs is niet beschikbaar of valt buiten de testlimiet.',503)}}
       // Store only owned asset identifiers and hashes; sending bytes to fal is
       // deferred until the customer confirms the quote and funds are reserved.
-      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt,...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
+      const input={data,refs:assets.map((asset,i)=>({id:ids[i],kind:asset.kind,sha256:asset.sha256})),prompt,...(data.quality==='edit-standard'&&data.transferPolicy===TEMPORARY_FAL_LINKS?{providerContract:O3_IDENTITY_CONTRACT}:{}),...(data.quality===RECAST_QUALITY?{providerContract:RECAST_PROVIDER_CONTRACT,providerSettings:{...RECAST_SETTINGS}}:{}),...(providerEstimateUsdMicros!==null?{providerEstimateUsdMicros}:{})};
       let quote; try {quote=await services.quotes.create({userId:user.id,model:MODEL[data.quality],input,priceCents:cents,pricingVersion:services.pricing.version,durationSeconds:video.durationSeconds});} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
       if (!quote || !ID.test(quote.id??'') || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now()) return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);
-      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null&&!(services.mode==='live'&&quote.fundingKind==='credits')?{providerEstimateUsdMicros}:{})},201);
+      return respond({id:quote.id,quality:data.quality,durationSeconds:video.durationSeconds,billedSeconds:Math.ceil(video.durationSeconds),...(data.quality===RECAST_QUALITY?{outputResolution:input.providerSettings.resolution}:{}),...publicFunding({...quote,priceCents:cents,providerEstimateUsdMicros}),expiresAt:quote.expiresAt,...(data.transferPolicy?{transferPolicy:data.transferPolicy,transferConsentRequired:true}:{}),...(providerEstimateUsdMicros!==null&&!(services.mode==='live'&&quote.fundingKind==='credits')?{providerEstimateUsdMicros}:{})},201);
     }
     if (req.method==='POST' && path==='/api/generations') {
       const data=await readJSON(req);
@@ -161,10 +167,14 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       let prior; try {prior=await services.jobs.getByIdempotency(user.id,data.idempotencyKey);} catch {return fail('Aanvraagstatus is tijdelijk niet beschikbaar.',503);}
       if(prior){if(prior.userId!==user.id || prior.quoteId!==data.quoteId)return fail('Deze aanvraagcode is al gebruikt.',409);return respond(publicJob(prior));}
       let quote; try {quote=await services.quotes.getOwned(user.id,data.quoteId);} catch {return fail('Prijsopgave is tijdelijk niet beschikbaar.',503);}
+      // Existing jobs remain recoverable above. An unstarted edit must obtain
+      // a fresh quote for the changed identity-only provider contract.
+      if(quote?.userId===user.id&&quote.model===MODEL['edit-standard']&&quote.input?.data?.transferPolicy===TEMPORARY_FAL_LINKS&&(quote.input.providerContract!==O3_IDENTITY_CONTRACT||Array.isArray(quote.input.data.angleIds)&&quote.input.data.angleIds.length>2))return fail('Vraag opnieuw de prijs op om deze videobewerking te bevestigen.',409);
+      if(quote?.userId===user.id&&quote.model===RECAST_MODEL&&(quote.input?.providerContract!==RECAST_PROVIDER_CONTRACT||!validRecastSettings(quote.input?.providerSettings)||quote.input?.prompt!==quote.input?.data?.prompt||quote.input?.refs?.length!==2))return fail('Vraag opnieuw de prijs op om deze personenvervanging te bevestigen.',409);
       if (!quote || quote.userId!==user.id || !Object.values(MODEL).includes(quote.model) || !Number.isSafeInteger(quote.priceCents) || quote.priceCents<=0 || !Number.isFinite(quote.expiresAt) || quote.expiresAt<=Date.now() || !quote.input || !inputData(quote.input.data) || !Array.isArray(quote.input.refs) || quote.input.refs.length<2 || quote.input.refs.length>6) return fail('Prijsopgave is niet geldig of verlopen.',409);
       if (quote.model!==MODEL[quote.input.data.quality] || !qualityEnabled(services,quote.input.data.quality)) return fail('Dit videomodel is niet beschikbaar. Vraag opnieuw de prijs op.',409);
       if(services.mode==='live'&&quote.input.data.quality==='edit-standard'&&quote.input.data.transferPolicy!==TEMPORARY_FAL_LINKS)return fail('Bevestig de tijdelijke Fal-bestandslinks voor deze videobewerking.',409);
-      const temporaryLinks=quote.model===MODEL['edit-standard']&&quote.input.data.transferPolicy===TEMPORARY_FAL_LINKS;
+      const temporaryLinks=[MODEL['edit-standard'],RECAST_MODEL].includes(quote.model)&&quote.input.data.transferPolicy===TEMPORARY_FAL_LINKS;
       // Consent authorizes this quote only. Reject before credit reservation,
       // media export or provider work, while preserving prior-job recovery.
       if(Object.hasOwn(data,'transferPolicy')||(temporaryLinks?data.transferConsent!==TEMPORARY_FAL_LINKS:Object.hasOwn(data,'transferConsent')))return fail('Bevestig opnieuw de prijs en de tijdelijke Fal-bestandslinks.',400);
@@ -174,7 +184,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         try{if(!await services.trialGuard.quoteCurrent(quote))return fail('Vraag de prijs opnieuw op en bevestig die opnieuw.',409);}catch{return fail('De prijs kon tijdelijk niet worden gecontroleerd.',503)}
       }
       if(services.trialGuard && !await services.trialGuard.permits({durationSeconds:quote.durationSeconds,priceCents:quote.priceCents,quote}))return fail(services.trialGuard.limitMessage||'Deze prijs past niet binnen het beschikbare testbudget.',409);
-      if(quote.input.data.quality!=='edit-standard'){
+      if(['standard','pro'].includes(quote.input.data.quality)){
         const imageRef=quote.input.refs[0];
         if(!imageRef||imageRef.kind!=='image'||imageRef.id!==quote.input.data.imageId||!/^[a-f0-9]{64}$/.test(imageRef.sha256??''))return fail('Prijsopgave is niet geldig of verlopen.',409);
         try{if(typeof services.jobs.hasKnownSubjectRejection!=='function')throw Error('Subject check unavailable');if(await services.jobs.hasKnownSubjectRejection(user.id,imageRef.sha256))return rejectSubject(409)}catch{return fail('De fotocontrole is tijdelijk niet beschikbaar.',503)}
@@ -205,11 +215,15 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           const verified=await services.assets.getOwned(user.id,selected.videoId);
           if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validEditVideo(verified)||inlineEdit&&!inlineFiveSeconds(verified.durationSeconds))throw Error('Invalid prepared edit video');
         }
+        if(selected.quality===RECAST_QUALITY){
+          const verified=await services.assets.getOwned(user.id,selected.videoId);
+          if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validRecastVideo(verified))throw Error('Invalid prepared recast video');
+        }
         const uploaded=[];
         for(let i=0;i<refs.length;i++){
           const kind=i===1?'video':'image', ref=refs[i];
           if(!ref||ref.id!==ids[i]||ref.kind!==kind||!/^[a-f0-9]{64}$/.test(ref.sha256??''))throw Error('invalid reference');
-          const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,selected.quality==='edit-standard'?{jobId,model:quote.model,...(temporaryLinks?{transferPolicy:TEMPORARY_FAL_LINKS}:{})}:undefined);
+          const asset=await services.assets.uploadOwned(user.id,ref.id,ref.sha256,['edit-standard',RECAST_QUALITY].includes(selected.quality)?{jobId,model:quote.model,...(temporaryLinks?{transferPolicy:TEMPORARY_FAL_LINKS}:{})}:undefined);
           if(temporaryLinks){
             if(!validTemporaryAsset(asset,kind,ref))throw Error('Invalid temporary Fal input');
           }else if(inlineEdit){
@@ -218,15 +232,23 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           uploaded.push(asset);
         }
         const [image,video,...rest]=uploaded;
-        if(selected.quality==='edit-standard'){
-          if(!validEditVideo(video)||!quote.input.prompt.includes('@Image1')||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
-          providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,...(temporaryLinks?{shot_type:'customize'}:{})};
-          // O3 accepts identity elements with 1–3 angle images. Keep the main
-          // image and one element instead of exceeding its four-reference cap
-          // by flattening a main image, close-up and three angles into image_urls.
-          if(selected.faceId){
-            if(!quote.input.prompt.includes('@Element1'))throw Error('Invalid edit identity');
-            providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];
+        if(selected.quality===RECAST_QUALITY){
+          if(!temporaryLinks||quote.input.providerContract!==RECAST_PROVIDER_CONTRACT||!validRecastSettings(quote.input.providerSettings)||quote.input.prompt!==selected.prompt||!validRecastVideo(video)||rest.length)throw Error('Invalid recast input');
+          providerInput={video_url:video.url,reference_image_urls:[image.url],prompt:quote.input.prompt,...RECAST_SETTINGS};
+        }else if(selected.quality==='edit-standard'){
+          if(!validEditVideo(video)||!quote.input.prompt.includes('@Video1'))throw Error('Invalid edit input');
+          if(temporaryLinks){
+            if(quote.input.providerContract!==O3_IDENTITY_CONTRACT||!quote.input.prompt.includes('@Element1'))throw Error('Invalid edit identity');
+            // All selected photos condition one identity element. No image_urls
+            // field may condition the scene: the video is the sole base footage.
+            // With a close-up, main + at most two angles fit its three references.
+            const identity={frontal_image_url:selected.faceId?rest[0].url:image.url,reference_image_urls:[image.url,...(selected.faceId?rest.slice(1).map(x=>x.url):[])]};
+            providerInput={video_url:video.url,elements:[identity],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true,shot_type:'customize'};
+          }else{
+            // Historical private gateway/inline probes retain their original
+            // two-input contract and never receive the new scene-role mapping.
+            if(!quote.input.prompt.includes('@Image1'))throw Error('Invalid edit input');
+            providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true};
           }
         }else{
           providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
@@ -294,14 +316,15 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       if(match[2]) { if(job.state!=='completed') return fail('Video is nog niet beschikbaar.',404); try {return await services.results.read(job);} catch {return fail('Video is tijdelijk niet beschikbaar.',503);} }
       if(job.state==='completed') return respond({...publicJob(job),videoPath:`/api/generations/${job.id}/video`});
       if(job.state!=='queued' || !REQ_ID.test(job.falRequestId??'')) return respond(await publicFailure(job));
-      let allowInlineEcho=false,resultTransferPolicy;
+      let allowInlineEcho=false,resultTransferPolicy,requestFamily;
       try{
         const q=await services.quotes.getOwned(user.id,job.quoteId);
         if(!q||q.userId!==user.id||q.id!==job.quoteId||!Object.values(MODEL).includes(q.model)||!inputData(q.input?.data))return fail('Status is tijdelijk niet beschikbaar.',503);
-        if(q.model===MODEL['edit-standard']&&q.input.data.quality==='edit-standard'&&q.input.data.transferPolicy===TEMPORARY_FAL_LINKS)resultTransferPolicy=TEMPORARY_FAL_LINKS;
+        requestFamily=q.model===RECAST_MODEL?RECAST_QUEUE_FAMILY:'fal-ai/kling-video';
+        if([MODEL['edit-standard'],RECAST_MODEL].includes(q.model)&&MODEL[q.input.data.quality]===q.model&&q.input.data.transferPolicy===TEMPORARY_FAL_LINKS)resultTransferPolicy=TEMPORARY_FAL_LINKS;
         allowInlineEcho=resultTransferPolicy===undefined&&services.inlineO3Owner===user.id&&q.model===MODEL['edit-standard']&&inlineFiveSeconds(q.durationSeconds);
       }catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
-      const url=`${QUEUE}/fal-ai/kling-video/requests/${encodeURIComponent(job.falRequestId)}`;
+      const url=`${QUEUE}/${requestFamily}/requests/${encodeURIComponent(job.falRequestId)}`;
       let claim; try {claim=await services.jobs.claimPoll(user.id,job.id);} catch {return fail('Status is tijdelijk niet beschikbaar.',503);}
       if(!claim || claim.kind!=='acquired' || !REQ_ID.test(claim.token??'')) {
         // Re-read: another poll may have completed just before the claim.

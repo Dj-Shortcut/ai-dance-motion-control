@@ -81,3 +81,16 @@ test('owner security transport is explicit and cannot extend to recovery, key de
  for(const opts of [{},{allowFinance:true},{allowGeneration:true}])assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/owner/security',method:'GET'}),env,opts),null);
  const auth=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/owner/security',method:'GET'}),env,{allowSecurity:true});assert.match(auth.userId,/^u-/);
 });
+
+test('workflow binary writes use the same signed identity, cumulative preparation admission and shared lease before buffering',async()=>{
+ const env=await environment();env.RIG_PRODUCTION_VIDEO_ENABLED='yes';const who=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/session',method:'GET'}),env);env.RIG_PRODUCTION_OWNER_USER_ID=who.userId;const productionContext=await createProductionGenerationContext(env);
+ const id='12345678-1234-4123-8123-123456789abc';let acquired=0,completed=0;
+ const leaseFactory=()=>({async acquire(){acquired++;return {state:'acquired',token:'workflow-lease'}},async complete(){completed++}});
+ for(const path of ['/api/workflow-inputs/source',`/api/workflow-inputs/${id}/mask`,`/api/generations/${id}/client/output`]){
+  const req=await sign(env,crypto.randomUUID().replaceAll('-',''),'bounded binary',{path});const before=acquired;
+  const body=new ReadableStream({pull(c){assert.equal(acquired,before+1);c.enqueue(new TextEncoder().encode('bounded binary'));c.close()}},{highWaterMark:0});
+  const verified=await authenticateProductionSites(new Request(req,{body,duplex:'half'}),env,{allowGeneration:true,productionContext,leaseFactory});assert.equal(verified.userId,who.userId);assert.ok(verified.preparationReservation);assert.equal(await verified.request.text(),'bounded binary');await verified.releaseUnused();
+ }
+ assert.equal(acquired,3);assert.equal(completed,3);
+ for(const [path,method] of [[`/api/workflow-inputs/${id}/mask`,'GET'],[`/api/generations/${id}/client/advance`,'GET'],['/api/workflow-inputs/source?owner=1','POST'],[`/api/generations/${id}/client/clean?url=https://evil.invalid`,'GET'],['/api/workflow-inputs/../payments/balance','POST']])assert.equal(sitesPath(path,method),false);
+});

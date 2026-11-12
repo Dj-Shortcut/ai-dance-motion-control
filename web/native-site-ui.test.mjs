@@ -43,14 +43,14 @@ test('native account changes abort the bound UI and cannot authorize a write as 
 });
 test('native boot reuses the studio, keeps native sign-in anchors and mounts the gift invitation',async()=>{
  const code='x'.repeat(43),{dom,w,d}=page('https://rig.example.chatgpt.site/#invite='+code),loaded=[],calls=[];
- let listener,disposed=false;
+ let listener,disposed=false,generationDisposed=0;w.rigGenerationDispose=()=>{generationDisposed++;};
  const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:fn=>{listener=fn;return ()=>{};},dispose:()=>{disposed=true;},api:async(path)=>{calls.push(path);if(path==='/api/session')return Response.json({userId:alice});if(path==='/api/video-config')return Response.json({enabled:true,funding:'sponsored'});throw Error('unexpected request');}};
  const started=await startNativeSiteApp({window:w,auth,loadScript:async name=>{loaded.push(name);}});
  try{
   assert.deepEqual(loaded,['media.js','app.js','owner-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);assert.equal(w.rigNativeSite,true);assert.equal(w.rigVideoFunding,'sponsored');assert.equal(d.getElementById('rigStudio').hidden,false);
   assert.equal(d.getElementById('authLogin').tagName,'A');assert.match(d.getElementById('authLogin').href,/\/signin-with-chatgpt\?return_to=%2F$/);assert.equal(d.getElementById('authLogin').target,'_top');assert.match(d.getElementById('authLogout').href,/\/signout-with-chatgpt$/);
   assert.equal(w.location.hash,'');assert.match(d.querySelector('.sponsor-invitation').textContent,/Activeer gratis €5/);assert.equal(calls.some(path=>path.includes('redeem')),false);
-  listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);
+  listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(generationDisposed,1);started.dispose();assert.equal(generationDisposed,1);
  }finally{started.dispose();dom.window.close();}
 });
 test('native visitor can sign in without loading the studio or requiring Google',async()=>{

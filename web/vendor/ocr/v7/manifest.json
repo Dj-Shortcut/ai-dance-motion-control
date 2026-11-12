@@ -1,0 +1,9 @@
+{
+  "version": "eng-best-int-v7-reviewed-20261110",
+  "upstream": "https://tessdata.projectnaptha.com/4.0.0_best_int/eng.traineddata.gz",
+  "license": "Apache-2.0",
+  "uncompressedBytes": 5199098,
+  "uncompressedSha256": "5dc5d8d640a212c9d6184921ba103b186f50e0fed9ee716c53e6b312b400d747",
+  "gzipBytes": 2937634,
+  "gzipSha256": "4134b1377ebbc95404e581d9d0dc8b5b7e9c4c75a13a62ea897d27971de2ef24"
+}

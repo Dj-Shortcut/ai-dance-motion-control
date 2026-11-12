@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createAssets} from './assets.mjs';
 import {validateInlineInput,INLINE_VIDEO_MAX_BYTES} from './rig-inline-inputs.mjs';
+import {RECAST_MODEL} from './recast-contract.mjs';
 const owner='u-owner',other='u-other',origin='https://rig.example',secret='x'.repeat(40),jobId='33333333-3333-4333-8333-333333333333';
 const model='fal-ai/kling-video/o3/standard/video-to-video/edit',imageId='11111111-1111-4111-8111-111111111111',videoId='22222222-2222-4222-8222-222222222222';
 const hash=async bytes=>Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
@@ -40,7 +41,7 @@ test('an unconfigured owner keeps the R2 path and motion keeps the existing Fal 
  }
  const f=await fixture();await assert.rejects(f.assets.uploadOwned(owner,imageId,f.data.get(imageId).sha256,{jobId,model:'fal-ai/kling-video/v3/pro/motion-control'}),/Existing private Fal route reached/);assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:1});
 });
-test('only quote-bound O3 transfer context can upload owned bytes to new temporary Fal URLs',async()=>{
+test('only quote-bound O3 or human Recast transfer context uploads exact owned bytes to new temporary Fal URLs',async()=>{
  const policy='fal-temporary-links-v1',files=new Map(),seen=[];let pending;
  const providerFetch=async(url,options)=>{
   seen.push({url,options});assert.equal(options.redirect,'manual');
@@ -52,14 +53,14 @@ test('only quote-bound O3 transfer context can upload owned bytes to new tempora
   const file=files.get(url);assert.ok(file);assert.equal(new Headers(options.headers).has('authorization'),false);return new Response(file.bytes,{headers:{'content-type':file.mime,'content-length':String(file.bytes.length)}});
  };
  const f=await fixture({providerFetch});
- for(const id of [imageId,videoId]){
-  const original=f.data.get(id),uploaded=await f.assets.uploadOwned(owner,id,original.sha256,{jobId,model,transferPolicy:policy});
+ for(const selectedModel of [model,RECAST_MODEL])for(const id of [imageId,videoId]){
+  const original=f.data.get(id),uploaded=await f.assets.uploadOwned(owner,id,original.sha256,{jobId,model:selectedModel,transferPolicy:policy});
   assert.equal(uploaded.id,id);assert.equal(uploaded.sha256,original.sha256);assert.equal(uploaded.size,original.bytes.length);assert.equal(uploaded.inline,undefined);assert.equal(new URL(uploaded.url).search,'');assert.deepEqual(files.get(uploaded.url).bytes,new Uint8Array(original.bytes));
  }
- assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:6});
+ assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:12});
  // Neither the prior inline-owner flag nor the configured R2 credentials can
  // redirect an expressly consented direct upload back into a failing path.
- const legacy=await f.assets.uploadOwned(owner,imageId,f.data.get(imageId).sha256,{jobId,model});assert.equal(legacy.inline,true);assert.equal(seen.length,6);
+ const legacy=await f.assets.uploadOwned(owner,imageId,f.data.get(imageId).sha256,{jobId,model});assert.equal(legacy.inline,true);assert.equal(seen.length,12);
 });
 test('temporary transfer cannot widen ownership, change quoted digest or apply to motion through a forged context',async()=>{
  const f=await fixture(),sha=f.data.get(imageId).sha256,policy='fal-temporary-links-v1';
@@ -67,5 +68,12 @@ test('temporary transfer cannot widen ownership, change quoted digest or apply t
  for(const context of [{jobId,model,transferPolicy:'public'},{jobId,model:'fal-ai/kling-video/v3/pro/motion-control',transferPolicy:policy},{model,transferPolicy:policy},{jobId:'bad-job',model,transferPolicy:policy}])await assert.rejects(f.assets.uploadOwned(owner,imageId,sha,context),/Invalid provider transfer context/);
  await assert.rejects(f.assets.uploadOwned(owner,imageId,'0'.repeat(64),{jobId,model,transferPolicy:policy}),/asset changed/);
  await assert.rejects(f.assets.uploadOwned(owner,imageId,undefined,{jobId,model,transferPolicy:policy}),/Invalid provider transfer context/);
+ assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:0});
+});
+test('human Recast cannot export without its exact consent context or fall back to inline, R2 or private Fal uploads',async()=>{
+ const f=await fixture(),sha=f.data.get(imageId).sha256,policy='fal-temporary-links-v1';
+ for(const context of [{jobId,model:RECAST_MODEL},{jobId,model:RECAST_MODEL,transferPolicy:'private'},{jobId,model:RECAST_MODEL,transferPolicy:'public'}])await assert.rejects(f.assets.uploadOwned(owner,imageId,sha,context));
+ assert.equal(await f.assets.uploadOwned(other,imageId,sha,{jobId,model:RECAST_MODEL,transferPolicy:policy}),null);
+ await assert.rejects(f.assets.uploadOwned(owner,imageId,'0'.repeat(64),{jobId,model:RECAST_MODEL,transferPolicy:policy}),/asset changed/);
  assert.deepEqual(f.counts(),{copies:0,signReads:0,providerCalls:0});
 });

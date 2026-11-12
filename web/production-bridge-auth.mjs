@@ -1,7 +1,7 @@
 // Production Sites identity: private payment Worker only, validated BEFORE
 // trusting a subject or request. Uses the same nonce and identity tables as
 // production video; never share these tables with the test database.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesPath,SITES_BODY_MAX} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesPath,sitesRequestBodyLimit,sitesPreparationWrite} from './sites-bridge-protocol.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {createPreparationBudget,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -43,17 +43,17 @@ export async function authenticateProductionSites(req,env,options={}){
   const candidate='u-'+crypto.randomUUID();await mapped.DB.prepare("INSERT INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live') ON CONFLICT(site_id,subject_hash) DO NOTHING").bind(v.site,v.subject,candidate,now).run();
   const identity=await mapped.DB.prepare('SELECT user_id FROM rig_sites_identities WHERE site_id=? AND subject_hash=?').bind(v.site,v.subject).first();if(!USER.test(identity?.user_id||''))return null;
   const userId=identity.user_id;
-  if(req.method==='POST'&&path==='/api/assets'){
+  if(sitesPreparationWrite(path,req.method)){
    if(!allowGeneration||typeof leaseFactory!=='function')return null;
    const reservedBytes=preparationRequestBytes(req);
-   if(reservedBytes===null)return {deniedResponse:Response.json({error:'Ongeldige bestandsgrootte.'},{status:400,headers:{'cache-control':'no-store'}})};
+   if(reservedBytes===null||req.headers.has('content-length')&&reservedBytes>sitesRequestBodyLimit(path,req.method))return {deniedResponse:Response.json({error:'Ongeldige bestandsgrootte.'},{status:400,headers:{'cache-control':'no-store'}})};
    const budget=await createPreparationBudget(mapped.DB,{productionContext:options.productionContext}).reserve({userId,bytes:reservedBytes});
    if(budget.state!=='reserved')return {deniedResponse:preparationDeniedResponse(budget.state)};
    preparationReservation=budget.reservation;
    lease=leaseFactory(mapped.DB);claim=await lease.acquire(userId);
    if(claim?.state!=='acquired'||typeof claim.token!=='string')return null;
   }
-  const body=await bytes(req,path==='/api/assets'?SITES_BODY_MAX:req.method==='GET'?0:8192);
+  const body=await bytes(req,sitesRequestBodyLimit(path,req.method));
   if(await sitesDigest(body)!==v.digest)return null;
   if(req.method==='POST')headers.set('origin',mapped.RIG_PUBLIC_ORIGIN);
   let taken=false;

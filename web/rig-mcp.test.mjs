@@ -250,3 +250,13 @@ test('read-only owner status and completed results preserve USD funding without 
  }
  assert.ok(f.calls.every(x=>x.method==='GET'&&x.path.startsWith('/api/generations/')));assert.deepEqual(f.counts(),{preparations:0,issues:0,consumes:0});
 });
+
+
+test('file preparation defaults to Pro independent of capability order and never overrides an explicit Standard choice or generates',async()=>{
+ const file={file_id:'file_quality',download_url:'https://files.oaiusercontent.com/file'};
+ const f=fixture({qualities:['standard','pro','edit-standard']});const tools=(await f.send('tools/list')).body.result.tools;assert.equal(tools.find(t=>t.name==='rig_prepare_files').inputSchema.properties.quality.default,'pro');
+ const prepared=(await f.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:4})).body.result;assert.equal(prepared.structuredContent.quality,'pro');assert.equal(f.uploads[0].input.quality,'pro');assert.equal(f.dispatches.size,0);assert.equal(f.approvals.length,0);
+ const explicit=(await f.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:4,quality:'standard'})).body.result;assert.equal(explicit.structuredContent.quality,'standard');assert.equal(f.uploads[1].input.quality,'standard');assert.equal(f.dispatches.size,0);
+ const reordered=fixture({qualities:['edit-standard','standard','pro']});assert.equal((await reordered.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:4})).body.result.structuredContent.quality,'pro');assert.equal(reordered.uploads[0].input.quality,'pro');
+ const missing=fixture({qualities:['standard']});const rejection=(await missing.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:4})).body.result;assert.equal(rejection.isError,true);assert.equal(missing.uploads.length,0);assert.equal(missing.calls.length,0);assert.equal(missing.dispatches.size,0);assert.equal((await missing.call('rig_prepare_files',{reference_file:file,motion_file:file,seconds:4,quality:'standard'})).body.result.structuredContent.quality,'standard');
+});

@@ -3,6 +3,29 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createRigSitesApp} from './rig-sites-app.mjs';
 import {sitesCanonical,sitesHmac,sitesPaymentPath} from './sites-bridge-protocol.mjs';
+import {CLEANUP_STATIC_ASSETS,OCR_WORKER_POLICY} from './cleanup-static-assets.mjs';
+
+test('fixed local OCR software has a worker-only Wasm policy and never reaches private services',async()=>{
+ const bytes=Uint8Array.from([0,97,115,109,0,1,2,255]),origin='https://rig.example.chatgpt.site';
+ const entries=Object.fromEntries(Object.keys(CLEANUP_STATIC_ASSETS).map(path=>[path,{kind:'public-cleanup-asset',base64:Buffer.from(bytes).toString('base64'),type:'text/html'}]));
+ entries['/multiuser/index.html']='<h1>RIG</h1>';
+ entries['/multiuser/ocr/v7/private.mp4']={kind:'public-cleanup-asset',base64:Buffer.from(bytes).toString('base64')};
+ const app=createRigSitesApp({uiFiles:entries,fetchImpl:()=>{throw Error('Software must never reach private services')}}),env={RIG_SITES_PRODUCER_ORIGIN:origin};
+ for(const [path,config]of Object.entries(CLEANUP_STATIC_ASSETS)){
+  const response=await app.fetch(new Request(origin+path),env);
+  assert.equal(response.status,200,path);assert.equal(response.headers.get('content-type'),config.type);
+  assert.equal(response.headers.get('content-encoding'),null,'trained data is a gzip file; Tesseract performs decompression');
+  assert.equal(response.headers.get('cross-origin-resource-policy'),'same-origin');
+  assert.equal(response.headers.get('content-security-policy'),config.worker?OCR_WORKER_POLICY:"default-src 'none'; sandbox");
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()),bytes);
+  assert.equal((await app.fetch(new Request(origin+path,{method:'HEAD'}),env)).body,null);
+  assert.equal((await app.fetch(new Request(origin+path+'?file=private'),env)).status,404);
+  assert.equal((await app.fetch(new Request(origin+path,{method:'POST'}),env)).status,404);
+ }
+ const page=await app.fetch(new Request(origin+'/'),env),policy=page.headers.get('content-security-policy');
+ assert.match(policy,/worker-src 'self'/);assert.doesNotMatch(policy,/wasm-unsafe-eval|unsafe-eval/);
+ assert.equal((await app.fetch(new Request(origin+'/multiuser/ocr/v7/private.mp4'),env)).status,404);
+});
 
 test('owner finance routes use native identity, a signed exact month and no browser-supplied role',async()=>{
  const origin='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',bridge='https://rig-api.shortcut-computerguy.workers.dev',project='appgprj_6aeec13b50448191b88da670dac8aa98',key='a'.repeat(64),owner='u-11111111-1111-4111-8111-111111111111',calls=[];

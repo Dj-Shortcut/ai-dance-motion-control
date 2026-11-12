@@ -61,3 +61,12 @@ test('missing or malformed policy and invalid values fail closed instead of inve
  for(const usd of [0,-1,0.1,6000001,Number.MAX_SAFE_INTEGER])assert.throws(()=>createProfitSnapshot({policy,fundingKind:'credits',retailPriceCents:175,providerEstimateUsdMicros:usd}));
  assert.throws(()=>createProfitSnapshot({policy,fundingKind:'forged',retailPriceCents:175,providerEstimateUsdMicros:700000}));
 });
+test('Recast uses its explicit owner-only 5–15-second cost contract and normal caps without touching customer margin policy',()=>{
+ const args={quality:'human-recast',billedSeconds:6,rateCents:30,providerEstimateUsdMicros:2700000,fundingKind:'owner-provider'};
+ const price=retailPriceCents(policy,args);assert.equal(price,180);const snapshot=createProfitSnapshot({policy,fundingKind:'owner-provider',retailPriceCents:price,providerEstimateUsdMicros:2700000});
+ assert.equal(snapshot.providerNetCostCents,270);assert.equal(snapshot.revenueCents,0);assert.equal(snapshot.paymentFeeReserveCents,0);assert.equal(profitable(snapshot),true);
+ for(const billedSeconds of [3,4,16,30])assert.throws(()=>retailPriceCents(policy,{...args,billedSeconds}));
+ assert.throws(()=>retailPriceCents(policy,{...args,fundingKind:'credits'}));assert.throws(()=>retailPriceCents(policy,{...args,rateCents:0}));assert.throws(()=>retailPriceCents(policy,{...args,maxPriceCents:100}));
+ assert.equal(retailPriceCents(policy,{...args,billedSeconds:13,providerEstimateUsdMicros:5850000}),390);
+ assert.throws(()=>retailPriceCents(policy,{...args,billedSeconds:14,providerEstimateUsdMicros:6300000}));
+});
