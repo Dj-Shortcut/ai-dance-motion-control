@@ -1,3 +1,4 @@
+import {videoDraftPath} from './video-drafts.mjs';
 import {isProductionGenerationContext} from './production-generation-context.mjs';
 import { handlePaymentRoute } from './payment.mjs';
 import { createGenerationHandler } from './generation.mjs';
@@ -28,6 +29,7 @@ function endpoint(path) {
   if (path === '/api/payments/webhook') return 'webhook';
   if (['/api/payments/packages','/api/payments/balance','/api/payments/create','/api/payments/orders'].includes(path) || /^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}(?:\/reconcile)?$/.test(path)) return 'payment';
   if (path === '/api/assets') return 'asset';
+  if (videoDraftPath(path,'GET')||videoDraftPath(path,'POST')) return 'generation';
   if (path === '/api/generation-quotes' || path === '/api/generations' || path === '/api/generations/recent' || /^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path) || /^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path)) return 'generation';
   return null;
 }

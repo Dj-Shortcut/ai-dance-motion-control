@@ -1,3 +1,5 @@
+import {workflowLeaseResponse} from './media-lease-response.mjs';
+import {createVideoDraftHandler,videoDraftPath} from './video-drafts.mjs';
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 // Shared, ledger-funded private composition; test remains the default. Not routed or deployed by this module.
 // The caller must authenticate the subject and provide an actual shared media
@@ -145,15 +147,16 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
    };
   }
   return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),...(recastAvailable?{recast:+env.RIG_PRICE_RECAST}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
- },generationFactory:s=>createGenerationHandler(s,transport)});
+ },generationFactory:s=>{const generation=createGenerationHandler(s,transport),drafts=createVideoDraftHandler({...s,bucket:env.BUCKET});return req=>videoDraftPath(new URL(req.url).pathname,req.method)?drafts(req):generation(req);}});
  return async req=>{
   const p=new URL(req.url).pathname;
-  if(!['/api/assets','/api/generation-quotes','/api/generations','/api/generations/recent'].includes(p)&&!/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(p)&&!/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(p))return new Response(null,{status:404});
+  if(!videoDraftPath(p,req.method)&&!['/api/assets','/api/generation-quotes','/api/generations','/api/generations/recent'].includes(p)&&!/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(p)&&!/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(p))return new Response(null,{status:404});
   try{if(await verifyTenant(env)!==true)return unavailable();}catch{return unavailable()}
   // Only asset preparation starts a remote transform. Status, recovery, result
   // reads and generation use their own D1 idempotency/uncertainty state and
   // must remain available even when this transform lock needs review.
-  if(p!=='/api/assets'||req.method!=='POST'){try{return await router(req,env)}catch{return unavailable()}}
+  const draft=videoDraftPath(p,req.method);
+  if(!draft&&(p!=='/api/assets'||req.method!=='POST')){try{return await router(req,env)}catch{return unavailable()}}
   let claim;try{claim=await lease.acquire(trustedUserId)}catch{return unavailable()}
   if(claim?.state!=='acquired'||typeof claim.token!=='string')return unavailable();
   let response,outcome='uncertain';
@@ -162,6 +165,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
    const uncertain=response.headers.get('x-rig-media-uncertain')==='1';
    const settled=response.status<500||response.headers.get('x-rig-media-settled')==='1';
    if(!uncertain&&settled)outcome='settled';
+   if(draft&&response.ok&&['image/jpeg','video/mp4'].includes(response.headers.get('content-type'))&&response.body)return workflowLeaseResponse(response,()=>lease.complete(claim.token,'settled'));
   }catch{response=unavailable()}
   try{await lease.complete(claim.token,outcome)}catch{return unavailable()}
   const headers=new Headers(response.headers);headers.delete('x-rig-media-settled');headers.delete('x-rig-media-uncertain');

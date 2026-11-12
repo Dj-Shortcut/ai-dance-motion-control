@@ -2,16 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
+import {createHash,webcrypto} from 'node:crypto';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8');
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Recast UI did not settle');};
-function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94,outputResolution='1080P',omitResolution=false,estimateLimit=false,estimateFailureCode='provider_limit_exceeded',storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,jobState='failed',recentJob=null}={}){
- const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],images=[],videos=[],storage=savedStorage,verifications=[],created=[],revoked=[];
- w.Blob=Blob;el('rigStudio').hidden=false;el('authGate').hidden=true;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding='owner-provider';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
- w.URL.createObjectURL=blob=>{const url=`blob:fixture-${created.length}`;created.push({url,blob});return url;};w.URL.revokeObjectURL=url=>revoked.push(url);w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
+const privateDraftStore=()=>({assets:new Map(),drafts:new Map(),quotes:new Map(),jobs:new Map(),assetsCreated:0,quotesCreated:0,jobsCreated:0});
+function draftDto(store,quoteId){
+ const row=store.drafts.get(quoteId);if(!row)return {available:false,reason:'missing'};
+ const descriptor=id=>{const asset=store.assets.get(id);if(!asset)throw Error('Fixture draft asset missing');return {...asset.meta,path:`/api/video-drafts/${quoteId}/assets/${id}`};};
+ return {available:true,expiresAt:row.expiresAt,request:{imageId:row.imageId,videoId:row.fullVideoId,faceId:row.faceId,angleIds:row.angleIds,quality:row.quality,keepSound:row.keepSound,steadyCamera:row.steadyCamera??false,prompt:row.prompt,...(row.transferPolicy?{transferPolicy:row.transferPolicy}:{})},durationSeconds:store.assets.get(row.fullVideoId).meta.durationSeconds,selectedSeconds:row.selectedSeconds,originalStartSeconds:row.originalStartSeconds,cleanup:row.cleanup,assets:{image:descriptor(row.imageId),video:descriptor(row.fullVideoId),face:row.faceId?descriptor(row.faceId):null,angles:row.angleIds.map(descriptor)}};
+}
+function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94,outputResolution='1080P',omitResolution=false,estimateLimit=false,estimateFailureCode='provider_limit_exceeded',storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,jobState='failed',recentJob=null,persistDrafts=false,serverStore=privateDraftStore(),savedDraftResponse,legacyDraftServer=false,saveDraftResponse,assetRead}={}){
+ const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],images=[],videos=[],storage=savedStorage,verifications=[],created=[],revoked=[],restoredUrls=new Map();
+ w.Blob=Blob;Object.defineProperty(w,'crypto',{configurable:true,value:webcrypto});el('rigStudio').hidden=false;el('authGate').hidden=true;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding='owner-provider';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
+ w.URL.createObjectURL=blob=>{const url=`blob:fixture-${created.length}`;created.push({url,blob});if(persistDrafts&&blob?.type==='video/mp4'&&serverStore.drafts.size){const row=[...serverStore.drafts.values()].at(-1);restoredUrls.set(url,serverStore.assets.get(row?.fullVideoId)?.meta.durationSeconds);}return url;};w.URL.revokeObjectURL=url=>revoked.push(url);w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
  for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;};}
- for(const video of d.querySelectorAll('video')){for(const [key,value] of Object.entries({duration:60,currentTime:0,paused:true,readyState:2,videoWidth:1280,videoHeight:720}))Object.defineProperty(video,key,{configurable:true,writable:true,value});video.pause=()=>{};video.play=async()=>{};}
+ for(const video of d.querySelectorAll('video')){for(const [key,value] of Object.entries({duration:60,currentTime:0,paused:true,readyState:2,videoWidth:1280,videoHeight:720}))Object.defineProperty(video,key,{configurable:true,writable:true,value});video.pause=()=>{};video.play=async()=>{};const src=Object.getOwnPropertyDescriptor(w.HTMLMediaElement.prototype,'src');Object.defineProperty(video,'src',{configurable:true,get(){return src.get.call(this);},set(value){src.set.call(this,value);if(restoredUrls.has(value))queueMicrotask(()=>{video.duration=restoredUrls.get(value);for(const event of ['loadedmetadata','loadeddata','seeked'])video.dispatchEvent(new w.Event(event));});}});}
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(value){this.onload?.();}};
  w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image-'+images.length],{type:'image/jpeg'}),width:1280,height:720};images.push({source,crop:{...crop},image});return image;},prepareImageFile:async file=>({blob:new Blob(['prepared '+file.name],{type:'image/jpeg'}),width:1280,height:720}),prepareVideo:async(...args)=>{videos.push(args);return {blob:new Blob(['prepared-video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
@@ -22,11 +29,14 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
  w.rigRequest=async(path,options={})=>{
   calls.push([path,options]);let value;
   if(path==='/api/generations/recent')value={job:recentJob};
-  else if(path==='/api/assets'){const id='asset'+(++assets);if(options.headers['X-Rig-Asset-Kind']==='video')uploadedDurations.set(id,Number(options.headers['X-Rig-Duration-Seconds']));value={id,status:'ready',kind:options.headers['X-Rig-Asset-Kind']};}
+  else if(path==='/api/assets'){const id=persistDrafts?`a0000000-0000-4000-8000-${String(++serverStore.assetsCreated).padStart(12,'0')}`:'asset'+(++assets),kind=options.headers['X-Rig-Asset-Kind'],bytes=Buffer.from(await options.body.arrayBuffer()),duration=Number(options.headers['X-Rig-Duration-Seconds']);if(kind==='video')uploadedDurations.set(id,duration);serverStore.assets.set(id,{bytes,meta:{id,mime:kind==='video'?'video/mp4':'image/jpeg',sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length,width:1280,height:720,...(kind==='video'?{durationSeconds:duration}:{})}});value={id,status:'ready',kind};}
   else if(path==='/api/generation-quotes'){
-   const input=JSON.parse(options.body),duration=verifiedDuration??uploadedDurations.get(input.videoId),id='quote'+(++quotes);
+   const input=JSON.parse(options.body),duration=verifiedDuration??uploadedDurations.get(input.videoId)??serverStore.assets.get(input.videoId)?.meta.durationSeconds,id=persistDrafts?`b0000000-0000-4000-8000-${String(++serverStore.quotesCreated).padStart(12,'0')}`:'quote'+(++quotes);serverStore.quotes.set(id,input);
    value={id,quality:input.quality,...(input.quality==='human-recast'&&!omitResolution?{outputResolution}:{}),funding:'owner-provider',providerCurrency:'USD',providerEstimateUsdMicros:987654,durationSeconds:duration,billedSeconds:Math.ceil(duration),transferPolicy:input.transferPolicy,approvalToken:'t'.repeat(43),idempotencyKey:'approval-'+id};
-  }else if(path==='/api/generations')value={id:'job-recast',state:jobState,funding:'owner-provider',providerEstimateUsdMicros:987654,finalizationConfirmed:true};
+  }else if(path==='/api/video-drafts'){const input=JSON.parse(options.body);serverStore.drafts.set(input.quoteId,{...input,expiresAt:Date.now()+86400000});value=saveDraftResponse??{saved:true,expiresAt:Date.now()+86400000};}
+  else if(/^\/api\/generations\/[^/]+\/draft$/.test(path)){if(legacyDraftServer)return Response.json({error:'Not found'},{status:404});const id=path.split('/')[3];value=savedDraftResponse??(persistDrafts?draftDto(serverStore,serverStore.jobs.get(id)):{available:false,reason:'missing'});}
+  else if(/^\/api\/video-drafts\/[^/]+\/assets\/[^/]+$/.test(path)){const id=path.split('/').at(-1),asset=serverStore.assets.get(id);if(assetRead)return assetRead(path,asset,options);return asset?new Response(new Uint8Array(asset.bytes),{headers:{'content-type':asset.meta.mime,'content-length':String(asset.bytes.length)}}):Response.json({error:'Bronbestand niet meer beschikbaar.'},{status:404});}
+  else if(path==='/api/generations'){value={id:'job-recast',state:jobState,funding:'owner-provider',providerEstimateUsdMicros:987654,finalizationConfirmed:true};serverStore.jobs.set(value.id,JSON.parse(options.body).quoteId);}
   else if(recentJob?.id&&path===`/api/generations/${recentJob.id}`)value={...recentJob,videoPath:`/api/generations/${recentJob.id}/video`,funding:'owner-provider',finalizationConfirmed:true};
   else if(path==='/api/generations/job-recast')value={id:'job-recast',state:jobState==='failed'?'failed':'completed',videoPath:'/api/generations/job-recast/video',funding:'owner-provider',finalizationConfirmed:true};
   else if(path.startsWith('/api/estimate/fal?')){const p=new URL(path,w.location.origin).searchParams,duration=Number(p.get('duration')),micros=estimateLimit?Math.ceil(duration)*450000:987654;if(estimateLimit&&p.get('quality')==='human-recast'&&micros>6000000)return {ok:false,status:400,json:async()=>({error:'Dit fragment valt buiten de ingestelde Fal-limiet per video. Kies een korter fragment.',code:estimateFailureCode})};value={quality:p.get('quality'),durationSeconds:duration,billedSeconds:Math.ceil(duration),funding:'owner-provider',providerEstimate:{currency:'USD',usdMicros:micros,binding:false}};}
@@ -41,7 +51,7 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
  const file=(id,name,type)=>{const source=new w.File(['source'],name,{type});Object.defineProperty(el(id),'files',{configurable:true,value:[source]});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));return source;};
  const load=()=>{file('personInput','my-portrait.jpg','image/jpeg');file('motionInput','reference.mp4','video/mp4');el('motionVideo').dispatchEvent(new w.Event('loadedmetadata'));};
  const prepare=()=>{el('prepare').click();el('confirmBrief').click();};
- return {dom,w,d,el,calls,images,videos,storage,verifications,created,revoked,change,prompt,file,load,prepare};
+ return {dom,w,d,el,calls,images,videos,storage,serverStore,verifications,created,revoked,change,prompt,file,load,prepare};
 }
 test('the video-mode choice uses the advertised Recast capability and never falls back to an absent edit route',()=>{
  const f=fixture({qualities:['standard','pro','edit-standard','human-recast']});
@@ -179,7 +189,7 @@ test('a completed trial restores the exact full draft only on request, then requ
   crop(f,'person',10,80);f.el('captureMain').click();await settle(()=>!f.el('mainReference').hidden);const portrait=f.images[0].image.blob;
   crop(f,'motion',20,70);f.el('editModeButton').click();f.change('duration',13);f.change('start',9.5);f.prompt('Mijn oorspronkelijke volledige scène.');
   await finishShortTrial(f);
-  assert.equal(f.el('duration').value,'13');assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.equal(f.videos[0][3],6);
+  assert.equal(f.el('duration').value,'13');assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.deepEqual(f.videos.map(video=>video[3]),[13,6]);
   assert.equal(f.calls.filter(([p])=>p==='/api/assets')[1][1].headers['X-Rig-Duration-Seconds'],'6');
   assertSingleMainAction(f);assert.equal(f.el('quoteDialog').open,false);assert.equal(f.el('resultTitle').textContent,'Je proefje');assert.equal(f.el('resultVideo').hidden,false);
   const saved=JSON.parse(f.storage.get('rig-trial-continuation:v1'));assert.equal(saved.state,'completed');assert.equal(saved.draft.seconds,13);assert.equal(saved.draft.start,9.5);assert.equal(saved.draft.person.name,person.name);assert.equal(saved.draft.mainSelection.time,null);
@@ -256,7 +266,7 @@ test('a reloaded completed trial retains settings but requires original files; a
   first.load();person=first.file('personInput','original-4k.mp4','video/mp4');first.el('personVideo').dispatchEvent(new first.w.Event('loadedmetadata'));first.el('personVideo').dispatchEvent(new first.w.Event('loadeddata'));first.change('frameTime',12.5);first.el('frameTime').dispatchEvent(new first.w.Event('input'));first.el('captureMain').click();await settle(()=>!first.el('mainReference').hidden);motion=first.el('motionInput').files[0];first.el('editModeButton').click();first.change('duration',13);first.change('start',4.5);first.prompt('Oorspronkelijk portret en scène.');await finishShortTrial(first);saved=new Map(first.storage);
  }finally{first.dom.window.close();}
  for(const replacement of ['draft','session']){
-  const f=fixture({storage:new Map(saved),recentJob:{id:'job-recast',state:'completed'}});
+  const f=fixture({storage:new Map(saved),legacyDraftServer:true,recentJob:{id:'job-recast',state:'completed'}});
   try{
    await openRecentResult(f);assert.equal(fullVideoActionReady(f),true);f.el('prepare').click();assert.equal(f.d.activeElement.id,'personName');assert.equal(f.el('briefDialog').open,false);assert.match(f.el('status').textContent,/instellingen zijn bewaard/);
    const select=(id,file)=>{Object.defineProperty(f.el(id),'files',{configurable:true,value:[file]});f.el(id).dispatchEvent(new f.w.Event('change',{bubbles:true}));};
@@ -286,7 +296,7 @@ test('explicitly reselected originals reconstruct a saved full draft after reloa
  try{
   first.load();person=first.file('personInput','reference-4k.mp4','video/mp4');first.el('personVideo').dispatchEvent(new first.w.Event('loadedmetadata'));first.el('personVideo').dispatchEvent(new first.w.Event('loadeddata'));first.el('frameTime').value='12.5';first.el('frameTime').dispatchEvent(new first.w.Event('input'));crop(first,'person',10,80);first.el('captureMain').click();await settle(()=>!first.el('mainReference').hidden);first.el('frameTime').value='18.5';first.el('frameTime').dispatchEvent(new first.w.Event('input'));motion=first.el('motionInput').files[0];first.el('editModeButton').click();first.change('duration',13);first.change('start',4.5);first.prompt('Deze scène blijft volledig bewaard.');await finishShortTrial(first);saved=new Map(first.storage);
  }finally{first.dom.window.close();}
- const f=fixture({storage:saved,recentJob:{id:'job-recast',state:'completed'},verifiedDuration:null});
+ const f=fixture({storage:saved,legacyDraftServer:true,recentJob:{id:'job-recast',state:'completed'},verifiedDuration:null});
  try{
   await openRecentResult(f);assert.equal(fullVideoActionReady(f),true);f.el('prepare').click();assert.equal(f.d.activeElement.id,'personName');
   for(const [id,file] of [['personInput',person],['motionInput',motion]]){Object.defineProperty(f.el(id),'files',{configurable:true,value:[file]});f.el(id).dispatchEvent(new f.w.Event('change',{bubbles:true}));}
@@ -328,7 +338,7 @@ test('Motion continuation restores explicit Standard, audio, camera, crops and e
  try{
   f.load();const standard=f.d.querySelector('input[name=quality][value=standard]');standard.checked=true;standard.dispatchEvent(new f.w.Event('change'));f.el('sound').checked=false;f.el('sound').dispatchEvent(new f.w.Event('change'));f.el('steady').checked=true;f.el('steady').dispatchEvent(new f.w.Event('change'));crop(f,'person',15,70);
   for(const id of ['captureMain','captureFace','captureAngle','captureAngle']){f.el(id).click();await settle(()=>!f.el(id).disabled);}
-  const blobs=f.images.map(x=>x.image.blob);f.change('duration',20);f.change('start',2.5);f.prompt('De volledige dans in dezelfde stijl.');await finishShortTrial(f);assert.equal(f.videos[0][3],5);assert.equal(f.el('duration').value,'20');
+  const blobs=f.images.map(x=>x.image.blob);f.change('duration',20);f.change('start',2.5);f.prompt('De volledige dans in dezelfde stijl.');await finishShortTrial(f);assert.deepEqual(f.videos.map(video=>video[3]),[20,5]);assert.equal(f.el('duration').value,'20');
   f.el('prepare').click();await settle(()=>f.el('briefDialog').open);
   assert.equal(f.w.rigGenerationQuality(),'standard');assert.equal(standard.checked,true);assert.equal(f.el('sound').checked,false);assert.equal(f.el('steady').checked,true);assert.equal(f.el('duration').value,'20');assert.equal(f.el('start').value,'2.5');assert.equal(f.el('editPrompt').value,'De volledige dans in dezelfde stijl.');
   f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);const media=f.w.rigPreparedMedia();assert.equal(media.quality,'standard');assert.equal(media.keepSound,false);assert.equal(media.steady,true);assert.equal(media.image.blob,blobs[0]);assert.equal(media.face,blobs[1]);assert.deepEqual([...media.angles],blobs.slice(2));assert.equal(f.videos.at(-1)[3],20);assert.equal(f.calls.filter(([p])=>p==='/api/generations').length,1);
@@ -359,12 +369,36 @@ for(const selected of [13,18])test(`Recast preserves a ${selected}-second full s
   f.load();const person=f.el('personInput').files[0],motion=f.el('motionInput').files[0];f.change('duration',selected);f.change('start',2.5);f.el('editModeButton').click();
   const full=Math.min(15,selected);assert.equal(Number(f.el('duration').value),full);assert.equal(f.el('start').value,'2.5');assert.equal(f.images.length,0);assert.equal(f.videos.length,0);
   f.prompt('Vervang alleen de persoon en behoud deze volledige scène.');f.el('prepare').click();f.el('tryShortVideo').click();await settle(()=>f.el('uploadDialog').open);
-  assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.ok(f.w.rigPreparedMedia().trialToken);assert.equal(Number(f.el('duration').value),full);assert.equal(f.videos[0][3],6);assert.equal(f.el('personInput').files[0],person);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'||p==='/api/payments/create'),false);
+  assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.ok(f.w.rigPreparedMedia().trialToken);assert.equal(Number(f.el('duration').value),full);assert.deepEqual(f.videos.map(video=>video[3]),[full,6]);assert.equal(f.el('personInput').files[0],person);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'||p==='/api/payments/create'),false);
  }finally{f.dom.window.close();}
 });
 
 test('a new source loaded while Recast is selected starts with its actual capped full selection rather than six seconds',()=>{
  const f=fixture({storage:new Map([['rig-video-mode:v1','edit']])});try{
   assert.equal(f.w.rigGenerationQuality(),'human-recast');f.load();assert.equal(f.el('motionVideo').duration,60);assert.equal(f.el('duration').value,'15');assert.equal(f.images.length,0);assert.equal(f.videos.length,0);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'),false);
+ }finally{f.dom.window.close();}
+});
+
+test('an owner restores a verified 12.94-second saved clip as the original 13-second selection after reload without re-encoding or uploading',async()=>{
+ const server=privateDraftStore(),first=fixture({verifiedDuration:null,jobState:'queued',persistDrafts:true,serverStore:server});let saved;
+ try{
+  first.load();crop(first,'person',10,80);first.el('captureMain').click();await settle(()=>!first.el('mainReference').hidden);crop(first,'motion',20,70);first.el('editModeButton').click();first.change('duration',13);first.change('start',9.5);first.prompt('Mijn hele scène met dezelfde camera en timing.');await finishShortTrial(first);saved=draftDto(server,server.jobs.get('job-recast'));server.assets.get(saved.request.videoId).meta.durationSeconds=12.94;
+ }finally{first.dom.window.close();}
+ const f=fixture({verifiedDuration:null,jobState:'queued',persistDrafts:true,serverStore:server,recentJob:{id:'job-recast',state:'completed'}});try{
+  assert.equal(f.storage.size,0);await openRecentResult(f);assert.equal(fullVideoActionReady(f),true);f.el('prepare').click();await settle(()=>f.el('briefDialog').open).catch(error=>{error.message+=`: ${f.el('status').textContent}; paths=${f.calls.map(([path])=>path).join(',')}`;throw error;});
+  assert.equal(f.el('motionVideo').duration,12.94);assert.equal(f.el('duration').value,'13');assert.equal(f.el('start').value,'0');assert.equal(f.el('editPrompt').value,saved.request.prompt);assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.videos.length,0);assert.equal(f.images.length,0);assert.equal(f.el('personInput').files.length,0);assert.equal(f.el('motionInput').files.length,0);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false);
+  f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden&&!f.el('confirmUpload').disabled);
+  const request=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(request.imageId,saved.request.imageId);assert.equal(request.videoId,saved.request.videoId);assert.equal(request.prompt,saved.request.prompt);assert.equal(request.quality,'human-recast');assert.match(f.el('quoteMessage').textContent,/13 seconden/);assert.match(f.el('quoteMessage').textContent,/1080p/);assert.equal(f.videos.length,0);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'||path.includes('/advance')),false);
+  f.el('confirmGeneration').click();await settle(()=>!f.el('confirmGeneration').disabled);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false,'the old trial device approval cannot authorize the full video');
+  f.w.rigOwnerVerification.prepare=async()=>({proof:'new-explicit-full-device-confirmation'});f.el('confirmGeneration').click();await settle(()=>f.calls.some(([path])=>path==='/api/generations')&&!f.w.rigGenerationBusy());assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
+ }finally{f.dom.window.close();}
+});
+
+test('editing only the restored full prompt keeps the verified private assets while requiring a new quote',async()=>{
+ const server=privateDraftStore(),first=fixture({verifiedDuration:null,jobState:'queued',persistDrafts:true,serverStore:server});let saved;
+ try{first.load();first.el('editModeButton').click();first.change('duration',13);first.prompt('Oude omschrijving.');await finishShortTrial(first);saved=draftDto(server,server.jobs.get('job-recast'));}finally{first.dom.window.close();}
+ const f=fixture({verifiedDuration:null,persistDrafts:true,serverStore:server,recentJob:{id:'job-recast',state:'completed'}});try{
+  await openRecentResult(f);f.el('prepare').click();await settle(()=>f.el('briefDialog').open).catch(error=>{error.message+=`: ${f.el('status').textContent}; paths=${f.calls.map(([path])=>path).join(',')}`;throw error;});f.prompt('Nieuwe omschrijving, dezelfde voorbereide beelden.');f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden&&!f.el('confirmUpload').disabled);
+  const request=JSON.parse(f.calls.find(([path])=>path==='/api/generation-quotes')[1].body);assert.equal(request.prompt,'Nieuwe omschrijving, dezelfde voorbereide beelden.');assert.equal(request.imageId,saved.request.imageId);assert.equal(request.videoId,saved.request.videoId);assert.equal(f.videos.length,0);assert.equal(f.images.length,0);assert.equal(f.calls.some(([path])=>path==='/api/assets'||path==='/api/generations'),false);
  }finally{f.dom.window.close();}
 });

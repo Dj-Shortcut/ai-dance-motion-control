@@ -91,9 +91,10 @@
       note('Je bestanden worden veilig voorbereid…');
       const cleanup=media.cleanup;
       if(cleanup){const module=await loadCleanupModule();if(!recast||!module.cleanupAllowed(window)||cleanup.version!=='owner-cleanup-v1'||cleanup.reviewed!==true||!/^[A-Za-z0-9_-]{1,100}$/.test(cleanup.sourceId||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(cleanup.maskId||''))throw new Error('Controleer het masker opnieuw voor je de prijs bekijkt.');}
-      const imageId=await upload('image',media.image.blob),videoId=cleanup?cleanup.sourceId:await upload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
-      const faceId=media.face ? await upload('face',media.face) : null;
-      const angleIds=[];for(const angle of media.angles)angleIds.push(await upload('angle',angle));
+      const refs=media.assetRefs;
+      const imageId=refs?.imageId??await upload('image',media.image.blob),videoId=cleanup?cleanup.sourceId:refs?.videoId??await upload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
+      const faceId=media.face?(refs?.faceId??await upload('face',media.face)):null;
+      const angleIds=[];for(let i=0;i<media.angles.length;i++)angleIds.push(refs?.angleIds?.[i]??await upload('angle',media.angles[i]));
       if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
       const request={imageId,videoId,faceId,angleIds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady}),...(cleanup?{cleanupMaskId:cleanup.maskId}:{})};
       const data=await call('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -138,6 +139,21 @@
         }
       }
       if(cleanup)note(el('quoteMessage').textContent+'\nDit is de totale raming voor tekst en overlays bijwerken en je persoon in de video plaatsen. Sluit RIG tijdens de lokale tussenstap niet af; je kunt een onderbroken opdracht later hervatten.');
+      if(media.trialToken&&media.fullDraft){
+        const full=media.fullDraft;
+        const reviewedMessage=el('quoteMessage').textContent;
+        if(!Number.isInteger(full.selectedSeconds)||full.selectedSeconds<=seconds||full.selectedSeconds>limit||full.quality!==media.quality||full.prompt!==media.prompt||full.keepSound!==media.keepSound)throw Error('Je volledige selectie kon niet veilig worden bewaard.');
+        note('Je volledige fragment wordt privé bewaard, zodat je na je proefje meteen verder kunt…');
+        const fullVideoId=await upload('video',full.video.blob,{duration:full.selectedSeconds,keepSound:full.keepSound,maxDuration:limit});
+        if(window.rigPreparedMedia()!==media)throw Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
+        const stored=await call('/api/video-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:data.id,fullVideoId,imageId,faceId,angleIds,selectedSeconds:full.selectedSeconds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady}),cleanup:full.cleanupWanted===true,originalStartSeconds:full.originalStartSeconds})});
+        if(stored.saved!==true||!Number.isSafeInteger(stored.expiresAt)||stored.expiresAt<=Date.now())throw Error('Je volledige fragment kon niet worden bewaard. Start je proefje nog niet.');
+        document.dispatchEvent(new CustomEvent('rig-trial-draft-saved',{detail:{quoteId:data.id,expiresAt:stored.expiresAt}}));
+        // Restore the reviewed price/consent text; storage never authorizes Fal.
+        note(reviewedMessage);
+        note(el('quoteMessage').textContent+'\nJe volledige gekozen fragment blijft maximaal 24 uur privé beschikbaar voor het vervolg.');
+        if(cleanup)note(el('quoteMessage').textContent+'\nVoor de volledige versie controleer je het masker opnieuw.');
+      }
       if(recast){note(el('quoteMessage').textContent+'\nKwaliteit: '+data.outputResolution.toLowerCase()+'.');showQuotePortrait(media);}
       if(edit)note(el('quoteMessage').textContent+'\n\n'+(cleanup?'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo, masker, opgeschoonde clip en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.':recast?falRecastNotice:falTransferNotice));
       el('confirmGeneration').hidden=false;
@@ -216,7 +232,7 @@
       }
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery,fromHistory}}));return;
+        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');let savedDraft=null;try{const draft=await call(`/api/generations/${encodeURIComponent(id)}/draft`);if(typeof draft?.available==='boolean')savedDraft=draft;}catch{}if(intent&&!intent.current())return;document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery,fromHistory,savedDraft}}));return;
       }
       if(data.state==='failed'){
         document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));

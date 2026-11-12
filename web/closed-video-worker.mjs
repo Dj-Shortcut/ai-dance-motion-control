@@ -1,3 +1,4 @@
+import {videoDraftPath} from './video-drafts.mjs';
 // Private, owner-gated test composition. Never expose a route or preview URL.
 // Authentication is performed by the separately bound private identity Worker.
 import {createClosedVideoService,closedVideoTesting} from './closed-video-service.mjs';
@@ -21,7 +22,7 @@ const tokenPattern=/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const editEnabled=env=>env.RIG_EDIT_ENABLED==='yes'&&typeof env.RIG_PRICE_EDIT==='string'&&/^[1-9][0-9]*$/.test(env.RIG_PRICE_EDIT)&&Number.isSafeInteger(+env.RIG_PRICE_EDIT)&&+env.RIG_PRICE_EDIT<=250;
 const reply=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>reply({error:'Videogeneratie is nog niet beschikbaar.'},503);
-const recognized=path=>['/api/video-config','/api/estimate/fal','/api/assets','/api/generation-quotes','/api/generations','/api/generations/recent','/api/sponsor-invitations/status','/api/sponsor-invitations/redeem'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
+const recognized=path=>videoDraftPath(path,'GET')||videoDraftPath(path,'POST')||['/api/video-config','/api/estimate/fal','/api/assets','/api/generation-quotes','/api/generations','/api/generations/recent','/api/sponsor-invitations/status','/api/sponsor-invitations/redeem'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
 
 async function verifiedUser(req,env){
  const authorization=req.headers.get('authorization')||'';
