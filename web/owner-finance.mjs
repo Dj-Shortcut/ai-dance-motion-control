@@ -172,7 +172,7 @@ export async function handleOwnerFinance(req,env,{userId,now=Date.now(),network=
  if(url.origin!==mapped.RIG_PUBLIC_ORIGIN||!['GET','POST'].includes(req.method)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return error('Aanvraag geweigerd.',403);
  if(await d1Limit({env:mapped,category:'finance',userId,method:req.method})!==true)return error('Te veel aanvragen. Probeer later opnieuw.',429);
  try{
-  if(req.method==='GET'&&url.pathname==='/api/owner/finance/funding'&&!url.search)return json(await readFundingCoverage(mapped,{network,now}));
+  if(req.method==='GET'&&url.pathname==='/api/owner/finance/funding'&&!url.search)return json(await readFundingCoverage(mapped,{network,now,diagnostics:true}));
   if(req.method==='GET'&&url.pathname==='/api/owner/finance'){
    const period=reportPeriod(url);if(!period)return error('Kies een geldige maand.',400);
    return json(await summary(mapped,period,now));

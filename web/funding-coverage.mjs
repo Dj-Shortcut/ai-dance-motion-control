@@ -8,6 +8,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const VERSION=/^[A-Za-z0-9_.-]{1,64}$/,USERNAME=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const whole=(x,min,max)=>Number.isSafeInteger(x)&&x>=min&&x<=max;
 const caches=new WeakMap();
+const failureDiagnostics=new WeakMap();
+const failureStages=new Set(['network','deadline','http_status','content_type','content_encoding','body_size','content_length_invalid','content_length_mismatch','json','schema','account_mismatch','currency','balance','exposure']);
 export class FundingCoverageError extends Error{
  constructor(code='funding_unavailable',reason='unavailable'){
   super(code==='funding_capacity'?'Nieuwe tegoedaankopen zijn tijdelijk niet beschikbaar.':'De beschikbaarheid van nieuwe tegoedaankopen kon niet worden gecontroleerd.');
@@ -15,6 +17,13 @@ export class FundingCoverageError extends Error{
  }
 }
 const refused=(code,reason)=>new FundingCoverageError(code,reason);
+function diagnosticFailure(stage,httpStatus=null,reason='provider_unavailable'){
+ const error=refused('funding_unavailable',reason);
+ // No response text, credential, account identity, URL or arbitrary exception
+ // field enters this record. Only the explicit owner read may serialize it.
+ if(failureStages.has(stage))failureDiagnostics.set(error,Object.freeze({stage,httpStatus:whole(httpStatus,100,599)?httpStatus:null}));
+ return error;
+}
 function database(env){const db=env?.PRODUCTION_DB??env?.DB;if(!db?.prepare||!db?.batch)throw refused('funding_setup','database_unavailable');return db;}
 function coefficient(finance){
  // Ignoring preparation and every rounding cost gives an UPPER bound for net
@@ -36,16 +45,27 @@ async function configuration(env){
  return {db,policy:row,finance,factor:coefficient(finance),key:env.FAL_KEY};
 }
 async function boundedJSON(response,signal){
- if(!response?.ok||response.redirected||!response.body||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw Error('Provider unavailable');
- const length=response.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>16384))throw Error('Provider response size');
+ const status=response?.status;
+ if(!whole(status,100,599))throw diagnosticFailure('network');
+ if(!response.ok||response.redirected)throw diagnosticFailure('http_status',status);
+ if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw diagnosticFailure('content_type',status);
+ if(!response.body)throw diagnosticFailure('json',status);
+ const encoding=(response.headers.get('content-encoding')??'identity').trim().toLowerCase();
+ if(!['identity','gzip','br'].includes(encoding))throw diagnosticFailure('content_encoding',status);
+ const length=response.headers.get('content-length');
+ if(length!==null&&!/^\d+$/.test(length))throw diagnosticFailure('content_length_invalid',status);
+ if(length!==null&&Number(length)>16384)throw diagnosticFailure('body_size',status);
  const reader=response.body.getReader(),chunks=[];let total=0,onAbort;
- const deadline=new Promise((_,reject)=>{onAbort=()=>reject(Error('Provider deadline'));signal.addEventListener('abort',onAbort,{once:true});});
+ const deadline=new Promise((_,reject)=>{onAbort=()=>reject(diagnosticFailure('deadline',status));signal.addEventListener('abort',onAbort,{once:true});});
  try{
-  if(signal.aborted)throw Error('Provider deadline');
-  for(;;){const {done,value}=await Promise.race([reader.read(),deadline]);if(signal.aborted)throw Error('Provider deadline');if(done)break;if(!(value instanceof Uint8Array)||total+value.length>16384)throw Error('Provider response size');chunks.push(value);total+=value.length;}
-  if(length!==null&&Number(length)!==total)throw Error('Incomplete provider response');
+  if(signal.aborted)throw diagnosticFailure('deadline',status);
+  for(;;){const {done,value}=await Promise.race([reader.read(),deadline]);if(signal.aborted)throw diagnosticFailure('deadline',status);if(done)break;if(!(value instanceof Uint8Array)||total+value.length>16384)throw diagnosticFailure('body_size',status);chunks.push(value);total+=value.length;}
+  // Fetch can decode a compressed response while retaining its wire headers.
+  // Only identity Content-Length describes these bytes. The decoded stream is
+  // still capped above, regardless of the advertised encoding or wire length.
+  if(encoding==='identity'&&length!==null&&Number(length)!==total)throw diagnosticFailure('content_length_mismatch',status);
   const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
-  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  try{return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw diagnosticFailure('json',status);}
  }finally{signal.removeEventListener('abort',onAbort);void reader.cancel().catch(()=>{});reader.releaseLock();}
 }
 async function fetchBalance(config,network,now){
@@ -61,27 +81,31 @@ async function fetchBalance(config,network,now){
  const pending=(async()=>{
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
   const fetchDeadline=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(Error('Provider deadline')),{once:true}));
-  try{
+  let httpStatus=null;try{
    const response=await Promise.race([network(BILLING,{method:'GET',redirect:'manual',credentials:'omit',cache:'no-store',signal:controller.signal,headers:{Authorization:`Key ${config.key}`,Accept:'application/json'}}),fetchDeadline]);
+   httpStatus=whole(response?.status,100,599)?response.status:null;
    const value=await boundedJSON(response,controller.signal),credits=value?.credits;
-   if(value?.username!==config.policy.expected_username||!credits||typeof credits!=='object'||Array.isArray(credits)||credits.currency!=='USD'||typeof credits.current_balance!=='number'||!Number.isFinite(credits.current_balance)||credits.current_balance<0)throw Error('Invalid provider account or balance');
-   const micros=Math.floor(credits.current_balance*1000000);if(!whole(micros,0,MAX_USD))throw Error('Invalid provider balance');
+   if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.username!=='string'||!credits||typeof credits!=='object'||Array.isArray(credits))throw diagnosticFailure('schema',httpStatus);
+   if(value.username!==config.policy.expected_username)throw diagnosticFailure('account_mismatch',httpStatus);
+   if(credits.currency!=='USD')throw diagnosticFailure('currency',httpStatus);
+   if(typeof credits.current_balance!=='number'||!Number.isFinite(credits.current_balance)||credits.current_balance<0)throw diagnosticFailure('balance',httpStatus);
+   const micros=Math.floor(credits.current_balance*1000000);if(!whole(micros,0,MAX_USD))throw diagnosticFailure('balance',httpStatus);
    // Fal supplies no balance-as-of timestamp or freshness guarantee. fetchedAt
    // is only our observation time, and recent/uncertain costs are kept covered.
    const result=Object.freeze({availableUsdMicros:micros,fetchedAt:now,expiresAt:now+config.policy.max_snapshot_age_ms});cache.value=result;return result;
-  }catch{throw refused('funding_unavailable','provider_unavailable');}finally{clearTimeout(timer);}
+  }catch(error){throw failureDiagnostics.has(error)?error:diagnosticFailure(controller.signal.aborted?'deadline':'network',httpStatus);}finally{clearTimeout(timer);}
  })();cache.pending=pending;
  try{return await pending;}finally{if(cache.pending===pending)cache.pending=null;}
 }
 async function exposure(db){
- let row;try{row=await db.prepare("SELECT *,typeof(positive_wallet_cents) wallet_type,typeof(held_retail_cents) held_type,typeof(payable_order_cents) orders_type,typeof(provider_reserved_usd_micros) provider_type FROM rig_funding_exposure").first();}catch{throw refused('funding_unavailable','exposure_unavailable');}
- if(!row||!['wallet_type','held_type','orders_type','provider_type'].every(key=>row[key]==='integer')||!['positive_wallet_cents','held_retail_cents','payable_order_cents'].every(key=>whole(row[key],0,MAX_CENTS))||!whole(row.provider_reserved_usd_micros,0,MAX_USD))throw refused('funding_unavailable','exposure_unavailable');
- const total=row.positive_wallet_cents+row.held_retail_cents+row.payable_order_cents;if(!whole(total,0,MAX_CENTS))throw refused('funding_unavailable','exposure_unavailable');
+ let row;try{row=await db.prepare("SELECT *,typeof(positive_wallet_cents) wallet_type,typeof(held_retail_cents) held_type,typeof(payable_order_cents) orders_type,typeof(provider_reserved_usd_micros) provider_type FROM rig_funding_exposure").first();}catch{throw diagnosticFailure('exposure',null,'exposure_unavailable');}
+ if(!row||!['wallet_type','held_type','orders_type','provider_type'].every(key=>row[key]==='integer')||!['positive_wallet_cents','held_retail_cents','payable_order_cents'].every(key=>whole(row[key],0,MAX_CENTS))||!whole(row.provider_reserved_usd_micros,0,MAX_USD))throw diagnosticFailure('exposure',null,'exposure_unavailable');
+ const total=row.positive_wallet_cents+row.held_retail_cents+row.payable_order_cents;if(!whole(total,0,MAX_CENTS))throw diagnosticFailure('exposure',null,'exposure_unavailable');
  return {positiveWalletCents:row.positive_wallet_cents,heldRetailCents:row.held_retail_cents,payableOrderCents:row.payable_order_cents,retailLiabilityCents:total,providerReservedUsdMicros:row.provider_reserved_usd_micros};
 }
 function summary(config,reading,owed){
  const requiredUsdMicros=owed.retailLiabilityCents*config.factor+owed.providerReservedUsdMicros+config.policy.buffer_usd_micros;
- if(!whole(requiredUsdMicros,0,Number.MAX_SAFE_INTEGER))throw refused('funding_unavailable','exposure_unavailable');
+ if(!whole(requiredUsdMicros,0,Number.MAX_SAFE_INTEGER))throw diagnosticFailure('exposure',null,'exposure_unavailable');
  const headroomUsdMicros=reading.availableUsdMicros-requiredUsdMicros;
  return {enabled:true,status:headroomUsdMicros>=0?'ready':'insufficient',reason:headroomUsdMicros>=0?null:'funding_capacity',...reading,providerBalanceAsOf:null,...owed,usdMicrosPerEuroCent:config.factor,bufferUsdMicros:config.policy.buffer_usd_micros,requiredUsdMicros,headroomUsdMicros,newCreditCapacityCents:Math.max(0,Math.floor(headroomUsdMicros/config.factor)),policyVersion:config.policy.version,financeVersion:config.finance.version};
 }
@@ -89,10 +113,10 @@ function snapshot(config,reading){
  const id=crypto.randomUUID();
  return {id,statement:config.db.prepare('INSERT INTO rig_funding_snapshots(id,funding_version,finance_version,finance_json,username,balance_usd_micros,usd_micros_per_euro_cent,buffer_usd_micros,fetched_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id,config.policy.version,config.finance.version,JSON.stringify(config.finance),config.policy.expected_username,reading.availableUsdMicros,config.factor,config.policy.buffer_usd_micros,reading.fetchedAt,reading.expiresAt)};
 }
-export async function readFundingCoverage(env,{network=fetch,now=Date.now()}={}){
+export async function readFundingCoverage(env,{network=fetch,now=Date.now(),diagnostics=false}={}){
  let config;
  try{config=await configuration(env);const reading=await fetchBalance(config,network,now);return summary(config,reading,await exposure(config.db));}
- catch(error){return {enabled:Boolean(config),status:error?.code==='funding_setup'?'setup':'unavailable',reason:error instanceof FundingCoverageError?error.code:'funding_unavailable',fetchedAt:null,expiresAt:null,providerBalanceAsOf:null,availableUsdMicros:null,retailLiabilityCents:null,providerReservedUsdMicros:null,requiredUsdMicros:null,headroomUsdMicros:null,...(config?{policyVersion:config.policy.version,financeVersion:config.finance.version}:{})};}
+ catch(error){return {enabled:Boolean(config),status:error?.code==='funding_setup'?'setup':'unavailable',reason:error instanceof FundingCoverageError?error.code:'funding_unavailable',fetchedAt:null,expiresAt:null,providerBalanceAsOf:null,availableUsdMicros:null,retailLiabilityCents:null,providerReservedUsdMicros:null,requiredUsdMicros:null,headroomUsdMicros:null,...(config?{policyVersion:config.policy.version,financeVersion:config.finance.version}:{}),...(diagnostics===true&&failureDiagnostics.has(error)?{diagnostic:failureDiagnostics.get(error)}:{})};}
 }
 export async function prepareFundingAdmission(mappedEnv,{userId,orderId,requestId,pkg,network=fetch,now=Date.now()}={}){
  if(!USER.test(userId||'')||!UUID.test(orderId||'')||typeof requestId!=='string'||!/^[A-Za-z0-9_-]{12,80}$/.test(requestId)||!pkg||!/^[a-z0-9_-]{1,40}$/.test(pkg.id||'')||!whole(pkg.amountCents,1,1000000)||!whole(pkg.credits,1,100000000))throw refused('funding_setup','invalid_request');

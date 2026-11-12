@@ -41,14 +41,24 @@ No new paid Fal request is needed to test this implementation locally.
 - Site: `rig-sites-app.mjs`, separate production bridge configuration and key.
 - Public relay: `production-ingress.mjs`, no secrets, DB or storage. Only signed
   app routes, the exact Mollie webhook and expiring media capabilities pass.
-- Private service: `production-commerce-worker.mjs` inside the existing private
-  video worker. Payment/profile/key access never reaches the Site or browser.
+- Private entrypoint: `closed-video-worker.mjs`, composing the production
+  commerce service from `production-commerce-worker.mjs`. Payment/profile/key
+  access never reaches the Site or browser.
 - Database: fresh `production-schema.sql` in distinct `PRODUCTION_DB`. Physical
   binding IDs must be checked at deployment; JS object inequality is insufficient.
 - Scheduler: `production-collector.mjs`, bounded multiuser queued-result collection
   and known-payment reconciliation. It never creates a payment or Fal job. It
   rotates across users and checks already-paid orders for missed reversals.
 - Existing private media and EU result buckets retain their access rules.
+
+When a release changes a shared bridge route, update all affected deployments:
+the Sites website, the public Cloudflare relay and the private commerce/video
+worker. Updating only the Site and private worker can leave new owner routes
+unavailable in the relay. A private backend fix that preserves that route contract
+does not require republishing unchanged Site or relay code. All three were updated
+on 12 November 2026 (Sites version 40); funding-policy activation and a first real
+purchase remain separate verification gates. Keep the existing scheduler and
+runtime bindings intact; a Git merge is not a deployment.
 
 Production generation requires a server-created branded capability after tenant
 validation. A browser flag, plain object, test database or legacy test credential
@@ -74,7 +84,11 @@ Before opening paid sales, confirm the live key belongs to the pinned RIG profil
 enabled payment methods and current website; verify scheduler/private deployment;
 have the owner complete a small real checkout and confirm exact credit once.
 A live Mollie checkout may be prepared without paying it; an open payment is not
-proof of receipt or settlement. Video acceptance is a separate pending check. Customer terms/privacy information,
+proof of receipt or settlement. The first real customer payment, exact automatic
+credit award, issued invoice and confirmed Accountable import remain unverified.
+Customer receipts reach Mollie first; Fal usage spends the owner's separate USD
+wallet, and Fal auto top-up is a separate outlay rather than a Mollie transfer.
+Video acceptance is a separate pending check. Customer terms/privacy information,
 refund/support procedure and commercial pricing review remain release work.
 
 Provider references:
