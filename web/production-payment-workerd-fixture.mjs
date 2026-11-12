@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 // Test fixture only. No live endpoints, keys, or public deployment.
 import {createProductionPayment} from './production-payment.mjs';
 let created=0,reads=0;const payments=new Map();let replayKey='',scenario='';
@@ -32,7 +33,7 @@ const fake=async(input,init)=>{
  if(scenario==='recovery_bad_profile')return Response.json({...p,profileId:'pfl_WRONGPROFILE',_links:{checkout:{href:PPRO}}});
  return Response.json(p);
 };
-const payment=createProductionPayment({transport:fake});
+const payment=createProductionPayment({...testCheckoutFunding,transport:fake});
 export default {async fetch(req,env){
  const u=new URL(req.url);
  if(u.pathname==='/fixture/scenario'){scenario=u.searchParams.get('value')||'';return Response.json({ok:true})}

@@ -25,8 +25,8 @@ async function readJSON(req){
  const reader=req.body?.getReader();if(!reader)return null;let size=0;const parts=[];
  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>8192)return null;parts.push(value)}const bytes=new Uint8Array(size);let i=0;for(const p of parts){bytes.set(p,i);i+=p.length}const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));return data&&typeof data==='object'&&!Array.isArray(data)?data:null}catch{return null}finally{void reader.cancel().catch(()=>{})}
 }
-export function createProductionCommerceWorker({network=fetch,videoFactory=createProductionVideoService}={}){
- const payments=createProductionPayment({transport:network});
+export function createProductionCommerceWorker({network=fetch,videoFactory=createProductionVideoService,orderAdmission,coverageReader}={}){
+ const payments=createProductionPayment({transport:network,orderAdmission,coverageReader});
  return {async fetch(req,env){
   let authenticated;
   try{
@@ -53,7 +53,7 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
-    return handleOwnerFinance(authenticated.request,env,{userId:authenticated.userId});
+    return handleOwnerFinance(authenticated.request,env,{userId:authenticated.userId,network});
    }
    // Existing purchases must stay recoverable while generation is suspended.
    // These routes still require the live tenant and the signed Sites identity,

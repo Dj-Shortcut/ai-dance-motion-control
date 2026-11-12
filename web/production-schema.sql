@@ -3,6 +3,9 @@
 -- The administrator must explicitly insert exactly one row setting mode to
 -- 'test' OR 'live'. Use completely separate DBs for test and live; never
 -- change an existing environment row to live or reuse its balances.
+-- Commercial funding coverage additionally requires
+-- production-migrations/0015_funding_coverage.sql, with complete triggers.
+-- Missing funding setup refuses new purchases; it never grants test coverage.
 CREATE TABLE IF NOT EXISTS rig_payment_environment (
   id INTEGER PRIMARY KEY CHECK (id=1),
   mode TEXT NOT NULL CHECK (mode IN ('test','live'))

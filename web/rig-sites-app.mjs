@@ -72,7 +72,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
   };
   const session=await readJson(await request('/api/session'),2048);
   if(!USER.test(session?.userId??''))throw Error('Invalid backend identity');
-  if(env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes'&&(session.mode!=='live'||session.currency!=='EUR'||session.purchasesEnabled!==true||!Number.isSafeInteger(session.balanceCents)))throw Error('Invalid production session');
+  if(env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes'&&(session.mode!=='live'||session.currency!=='EUR'||typeof session.purchasesEnabled!=='boolean'||!Number.isSafeInteger(session.balanceCents)))throw Error('Invalid production session');
   return {userId:session.userId,request,session};
  }
  return {async fetch(req,env){

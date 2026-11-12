@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 // Actual payment/invoice/collector composition with local D1 + R2 and a fixed
 // in-process Mollie transport. No real bank, Fal, email or OAuth request exists.
 import test from 'node:test';
@@ -25,7 +26,7 @@ async function fixture(){
    if(url.pathname==='/v2/payments'){assert.equal(method,'POST');created++;const body=JSON.parse(init.body),payment={id:'tr_Pay'+String(created).padStart(6,'0'),mode:'live',profileId:'pfl_PAYINVOICE',status:'open',amount:body.amount,metadata:body.metadata,_links:{checkout:{href:'https://www.mollie.com/checkout/fixture'}}};payments.set(payment.id,payment);return Response.json(payment,{status:201});}
    assert.equal(method,'GET');const match=/^\/v2\/payments\/(tr_[A-Za-z0-9]+)(?:\/(refunds|chargebacks))?$/.exec(url.pathname);assert.ok(match,'Only known payment status can be read');assert.ok(payments.has(match[1]));return match[2]?Response.json({_embedded:{[match[2]]:[]}}):Response.json(payments.get(match[1]));
   };
-  const payment=createProductionPayment({transport:network});
+  const payment=createProductionPayment({...testCheckoutFunding,transport:network});
   const request=(path,data)=>new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{origin:SITE,'content-type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
   const body=()=>({packageId:'five',requestId:crypto.randomUUID(),commerce:{version:COMMERCE_VERSION,accepted:true,customerType:'consumer',country:'BE'},billing:{name:'Testklant Facturen',street:'Stationsstraat 12',postalCode:'9400',city:'Ninove'}});
   const create=async({userId=ALICE}={})=>{const data=body(),response=await payment.user(request('/api/payments/create',data),env,userId);assert.equal(response.status,200,await response.clone().text());const row=await db.prepare('SELECT * FROM rig_orders WHERE user_id=? AND request_id=?').bind(userId,data.requestId).first();assert.ok(row.payment_id);return {...row,data};};

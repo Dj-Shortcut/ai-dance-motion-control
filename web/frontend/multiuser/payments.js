@@ -9,7 +9,7 @@
   const native=()=>window.rigNativeSite===true;
   let purchaseReady=false,balanceRequestSequence=0,dialogSequence=0,resumeUrl=null,resumeContext=null;
   let payment={mode:null,enabled:false,frozen:false};
-  let commerce=null,historySequence=0;const downloadUrls=new Set();
+  let commerce=null,historySequence=0;const downloadUrls=new Set(),availablePackages=new WeakSet();
   function captureContext(){return {request:window.rigRequest,storage:window.rigScopedStorage,active:window.rigSessionActive};}
   function current(ctx){return ctx.request===window.rigRequest&&ctx.storage===window.rigScopedStorage&&ctx.active===window.rigSessionActive&&(!ctx.active||ctx.active()===true);}
   function checkContext(ctx){if(!current(ctx))throw Error('Je aanmelding is gewijzigd. Meld je opnieuw aan.');}
@@ -23,17 +23,23 @@
     // Site must receive an explicit authenticated checkout capability.
     return {mode:native()?null:'test',enabled:!native()&&!sponsored(),frozen:data?.frozen===true};
   }
-  const canPurchase=()=>!ownerProvider()&&payment.enabled&&!payment.frozen;
+  // Pausing new sales must not strand an already-attributed Mollie payment.
+  const canRecover=()=>!ownerProvider()&&!sponsored()&&['test','live'].includes(payment.mode);
+  const canResume=()=>canRecover()&&!payment.frozen;
+  const canPurchase=()=>canResume()&&payment.enabled;
+  const pausedMessage='Tegoed kopen is tijdelijk gepauzeerd. Je bestaande RIG-tegoed blijft beschikbaar.';
+  const choiceMessage=()=>payment.frozen?'Je tegoed wordt gecontroleerd. Neem contact op met de ondersteuning.':!payment.enabled?pausedMessage:!byId('packageList').children.length?'Tegoedpakketten zijn momenteel niet beschikbaar. Open dit venster later opnieuw.':![...byId('packageList').children].some(button=>availablePackages.has(button))?pausedMessage:payment.mode==='live'?'Kies je tegoed. Je betaalt veilig via Mollie.':'Kies een testpakket. Mollie staat in testmodus; er wordt geen echt geld afgeschreven.';
   const budgetLabel=()=>ownerProvider()?'Eigen fal-account':payment.mode==='live'?'RIG-tegoed':sponsored()?'Gratis RIG-tegoed':window.rigVideoFunding==='owner'?'RIG-testbudget':'RIG-testtegoed';
   function configureCreditsDialog(){
     const gift=sponsored()&&payment.mode!=='live',explanation=byId('creditExplanation');
     byId('creditsTitle').textContent=budgetLabel();
     if(explanation)explanation.textContent=ownerProvider()?'Je video’s gebruiken het gekoppelde fal-account. Je hoeft hiervoor geen RIG-tegoed te kopen. Je ziet de Fal-raming vóór je bevestigt.':payment.mode==='live'?'Koop RIG-tegoed in euro. Je ziet de prijs vóór elke video. Dit staat los van een eigen fal.ai-saldo.':gift?'Gratis RIG-tegoed voor je testvideo’s. Je betaalt niets; de maker betaalt de generatie.':window.rigVideoFunding==='owner'?'Dit is fictief RIG-testbudget. Je echte fal-tegoed staat apart op fal.ai.':'Dit is RIG-testtegoed voor deze proef; geen saldo van fal.ai.';
-    byId('refreshPayment').hidden=!canPurchase();
-    if(!canPurchase()){setPurchaseReady(false);byId('packageList').replaceChildren();clearResume();}
+    byId('refreshPayment').hidden=!canRecover();
+    if(!canPurchase()){setPurchaseReady(false);byId('packageList').replaceChildren();}
+    if(!canResume())clearResume();
   }
   function clearResume(){resumeUrl=null;resumeContext=null;byId('resumePayment').hidden=true;}
-  function setPurchaseReady(ready){purchaseReady=ready&&canPurchase();for(const button of byId('packageList').children)button.disabled=!(purchaseReady&&consentReady());}
+  function setPurchaseReady(ready){purchaseReady=ready&&canPurchase()&&[...byId('packageList').children].some(button=>availablePackages.has(button));for(const button of byId('packageList').children)button.disabled=!(purchaseReady&&consentReady()&&availablePackages.has(button));}
   const node=(tag,text)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
   function consentReady(){return !commerce||['BE','NL'].includes(commerce.country)&&commerce.accepted===true&&(!commerce.billingRequired||billingReady());}
   function billingReady(){const b=commerce?.billing;return b&&['name','city'].every(key=>typeof b[key]==='string'&&b[key].trim().length>0)&&typeof b.street==='string'&&b.street.trim().length>=3&&(['BE','NL'].includes(commerce.country))&&(commerce.country==='BE'?/^\d{4}$/:/^\d{4}\s?[A-Za-z]{2}$/).test(b.postalCode.trim());}
@@ -140,7 +146,7 @@
     checkContext(ctx);
     let body;try{body=await response.json();}catch{throw Error('Tegoed is momenteel niet beschikbaar.');}
     checkContext(ctx);
-    if(!response.ok)throw Error(body?.error||'Tegoed is momenteel niet beschikbaar.');
+    if(!response.ok){const error=Error(body?.error||'Tegoed is momenteel niet beschikbaar.');error.status=response.status;error.code=body?.code;error.paymentCreated=body?.paymentCreated;throw error;}
     return body;
   }
   function isCheckout(value){
@@ -172,6 +178,7 @@
       byId('creditsButton').textContent=`${budgetLabel()} ${money(balance)}`;
       if(gift&&payment.mode!=='live')message(`Je hebt ${money(balance)} gratis RIG-tegoed over.`);
       else message(`Je hebt ${money(balance)} ${budgetLabel()}. Je ziet de prijs vóór je bevestigt.`);
+      if(canRecover()&&!payment.enabled)message(pausedMessage);
       if(payment.frozen)message('Je tegoed wordt gecontroleerd. Neem contact op met de ondersteuning.');
       return true;
     }catch{
@@ -185,17 +192,20 @@
     setPurchaseReady(false);message('Tegoedpakketten ophalen…');byId('packageList').replaceChildren();
     try{
       const data=await request('/api/payments/packages',{},ctx),details=paymentDetails(data);
-      if(sequence!==dialogSequence||!current(ctx))return false;await applyCommerce(data.commerce,ctx,sequence);if(sequence!==dialogSequence||!current(ctx))return false;
-      if(!details.enabled||details.mode!==payment.mode||details.frozen)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
+      if(sequence!==dialogSequence||!current(ctx))return false;
+      if(details.mode!==payment.mode)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
+      if(!details.enabled||details.frozen){payment=details;configureCreditsDialog();message(choiceMessage());return false;}
+      await applyCommerce(data.commerce,ctx,sequence);if(sequence!==dialogSequence||!current(ctx))return false;
       if(!Array.isArray(data.packages)||!data.packages.length)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
       for(const item of data.packages){
         if(!/^[a-z0-9_-]{1,40}$/.test(item?.id||'')||!Number.isSafeInteger(item.amountCents)||item.amountCents<1||item.amountCents>1000000||!Number.isSafeInteger(item.credits)||item.credits<1||item.credits>100000000)continue;
         const button=document.createElement('button');button.type='button';button.className='package-button';
         button.textContent=`${money(item.credits)} tegoed · ${money(item.amountCents)}`;button.disabled=true;
-        button.addEventListener('click',()=>{void createPayment(item.id,ctx);});byId('packageList').appendChild(button);
+        if(item.available===undefined||item.available===true)availablePackages.add(button);
+        button.addEventListener('click',()=>{if(availablePackages.has(button))void createPayment(item.id,ctx);});byId('packageList').appendChild(button);
       }
       if(!byId('packageList').children.length)throw Error('Tegoed kopen is momenteel niet beschikbaar.');
-      message(details.mode==='live'?'Kies je tegoed. Je betaalt veilig via Mollie.':'Kies een testpakket. Mollie staat in testmodus; er wordt geen echt geld afgeschreven.');
+      message(choiceMessage());
       return true;
     }catch(error){if(current(ctx)){byId('packageList').replaceChildren();message(error.message||'Tegoed is momenteel niet beschikbaar.');}return false;}
   }
@@ -207,16 +217,21 @@
   async function createPayment(packageId,ctx){
     if(!purchaseReady||!canPurchase()||!consentReady()||!current(ctx))return;
     setPurchaseReady(false);clearResume();
+    let id=null;
     try{
       if(ctx.storage.getItem(requestIdKey)){message('Er is al een betaling gestart. Controleer eerst de status.');return;}
-      const id=crypto.randomUUID();ctx.storage.setItem(requestIdKey,id);message('Betaling wordt klaargezet…');
+      id=crypto.randomUUID();ctx.storage.setItem(requestIdKey,id);message('Betaling wordt klaargezet…');
       const data=await request('/api/payments/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageId,requestId:id,...(commerce?{commerce:{version:commerce.version,country:commerce.country,customerType:'consumer',accepted:true},...(commerce.billingRequired?{billing:{...commerce.billing}}:{})}:{})})},ctx);
       await navigateCheckout(data.checkoutUrl,ctx);
-    }catch(error){if(current(ctx))message(`${error.message||'Betaling kon niet worden gestart.'} Controleer de status voordat je opnieuw probeert.`);}
+    }catch(error){if(current(ctx)){
+      // This response proves the server tombstoned this exact intent before an order existed.
+      if(id&&error.status===503&&error.code==='funding_unavailable'&&error.paymentCreated===false&&ctx.storage.getItem(requestIdKey)===id){ctx.storage.removeItem(requestIdKey);payment={...payment,enabled:false};configureCreditsDialog();message(pausedMessage);}
+      else message(`${error.message||'Betaling kon niet worden gestart.'} Controleer de status voordat je opnieuw probeert.`);
+    }}
     finally{if(current(ctx))setPurchaseReady(false);}
   }
   async function recover(ctx=captureContext()){
-    if(!canPurchase()||!current(ctx))return;
+    if(!canRecover()||!current(ctx))return;
     setPurchaseReady(false);clearResume();
     try{
       let id=ctx.storage.getItem(requestIdKey);
@@ -226,15 +241,15 @@
         const unfinished=result.orders.find(x=>['open','unknown','creating','credit_pending_review','reversal_review'].includes(x?.state));
         if(unfinished){if(!/^[a-zA-Z0-9_-]{12,80}$/.test(unfinished.requestId||''))throw Error();id=unfinished.requestId;ctx.storage.setItem(requestIdKey,id);}
       }
-      if(!id){if(await refreshBalance()&&current(ctx)){setPurchaseReady(true);message(payment.mode==='live'?'Kies je tegoed. Je betaalt veilig via Mollie.':'Kies een testpakket. Mollie staat in testmodus; er wordt geen echt geld afgeschreven.');}return;}
+      if(!id){if(await refreshBalance()&&current(ctx)){setPurchaseReady(byId('packageList').children.length>0);message(choiceMessage());}return;}
       if(!/^[a-zA-Z0-9_-]{12,80}$/.test(id)){message('De eerdere betaling moet worden gecontroleerd.');return;}
       const order=await request(`/api/payments/orders/${encodeURIComponent(id)}/reconcile`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},ctx);
       if(order.state==='paid'){
         ctx.storage.removeItem(requestIdKey);
         if(await refreshBalance()){message('Betaling ontvangen. Je tegoed is bijgewerkt.');setPurchaseReady(true);}
       }else if(['failed','expired','canceled'].includes(order.state)){
-        ctx.storage.removeItem(requestIdKey);message('De betaling is niet afgerond. Je kunt opnieuw kiezen.');setPurchaseReady(true);
-      }else if(order.state==='open'&&isCheckout(order.checkoutUrl)){
+        ctx.storage.removeItem(requestIdKey);message(canPurchase()?'De betaling is niet afgerond. Je kunt opnieuw kiezen.':'De betaling is niet afgerond. '+choiceMessage());setPurchaseReady(true);
+      }else if(order.state==='open'&&canResume()&&isCheckout(order.checkoutUrl)){
         resumeUrl=order.checkoutUrl;resumeContext=ctx;byId('resumePayment').hidden=false;message('Deze betaling staat nog open. Je kunt verdergaan bij Mollie.');
       }else message('De betaling wordt nog gecontroleerd. Vernieuw de status later.');
     }catch{if(current(ctx))message('De betaalstatus is nog niet beschikbaar. Probeer later opnieuw.');}
@@ -242,10 +257,11 @@
   async function openCredits(){
     const sequence=++dialogSequence,ctx=captureContext();
     resetCommerce();configureCreditsDialog();setPurchaseReady(false);mountHistory(ctx);byId('creditsDialog').showModal();
-    if(!await refreshBalance()||sequence!==dialogSequence||!current(ctx)||!canPurchase())return;
-    if(await showPackages(ctx)&&sequence===dialogSequence&&current(ctx))await recover(ctx);
+    if(!await refreshBalance()||sequence!==dialogSequence||!current(ctx))return;
+    if(canPurchase())await showPackages(ctx);
+    if(sequence===dialogSequence&&current(ctx)&&canRecover())await recover(ctx);
   }
-  byId('resumePayment').addEventListener('click',()=>{const ctx=resumeContext,url=resumeUrl;if(!ctx||!canPurchase()||!current(ctx))return;clearResume();void navigateCheckout(url,ctx).catch(()=>{if(current(ctx))message('De betaalpagina kon niet worden geopend. Controleer de status.');});});
+  byId('resumePayment').addEventListener('click',()=>{const ctx=resumeContext,url=resumeUrl;if(!ctx||!canResume()||!current(ctx))return;clearResume();void navigateCheckout(url,ctx).catch(()=>{if(current(ctx))message('De betaalpagina kon niet worden geopend. Controleer de status.');});});
   byId('creditsButton').addEventListener('click',()=>{void openCredits();});
   byId('refreshPayment').addEventListener('click',()=>{void recover();});
   byId('closeCredits').addEventListener('click',()=>{dialogSequence++;clearHistory();resetCommerce();byId('creditsDialog').close();});

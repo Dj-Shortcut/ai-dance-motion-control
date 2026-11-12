@@ -33,6 +33,7 @@ export function sitesPaymentPath(path,method){
 // Financial data remains owner-only in the private service. Keep its signed
 // transport surface small and independent of video generation availability.
 export function sitesFinancePath(path,method){
+ if(method==='GET'&&path==='/api/owner/finance/funding')return true;
  if(typeof path!=='string')return false;
  if(method==='POST')return ['/api/owner/finance/expenses','/api/owner/finance/policy'].includes(path);
  return method==='GET'&&/^\/api\/owner\/finance(?:\?month=20[0-9]{2}-(?:0[1-9]|1[0-2]))?$/.test(path);

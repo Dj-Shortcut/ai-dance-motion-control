@@ -1,3 +1,4 @@
+import {testCheckoutFunding} from './funding-test-support.mjs';
 // Test-only three-worker composition. Provider transport is a local fake;
 // these exports must never be deployed or supplied production credentials.
 import {createRigSitesApp} from './rig-sites-app.mjs';
@@ -39,7 +40,7 @@ async function videoFactory(env,{trustedUserId}){
   return new Response(null,{status:404});
  };
 }
-const commerce=createProductionCommerceWorker({network:provider,videoFactory});
+const commerce=createProductionCommerceWorker({...testCheckoutFunding,network:provider,videoFactory});
 export const privateWorker={async fetch(req,env){
  const url=new URL(req.url);
  if(url.pathname==='/fixture/stats')return Response.json({active,videoEnabled,created,providerReads,videoCalls,dispatches,lastGeneration,lastPrivateHeaders,payments:[...payments.values()]});

@@ -4,6 +4,7 @@ import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} fr
 import {RECAST_QUALITY} from './recast-contract.mjs';
 import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
 import {isProviderBillingRejection} from './provider-response.mjs';
+import {prepareOwnerFundingAdmission} from './funding-coverage.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -20,7 +21,7 @@ const jobFrom=row=>row&&({id:row.id,userId:row.user_id,quoteId:row.quote_id,stat
 // Production-only adapter. TEST continues to use its original schema. Funding
 // belongs to the immutable quote, never to a request or the account's current
 // UI mode. The owner journal records an estimate, not a Fal wallet balance.
-export function createProductionD1GenerationStores(db,{productionContext}={}){
+export function createProductionD1GenerationStores(db,{productionContext,fundingNetwork=fetch}={}){
  if(!isProductionGenerationContext(productionContext,{db}))throw Error('Invalid production funding capability');
  const ownerFor=user=>productionFundingKind(productionContext,user)==='owner-provider'?user:'';
  const mode="EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')";
@@ -99,6 +100,7 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
    const id=crypto.randomUUID(),now=Date.now();
    const security=quote.fundingKind==='owner-provider'?await prepareOwnerMutation(db,{ownerId:userId,operation:'owner-generation',payload:verificationPayload??{quoteId,idempotencyKey},verification,now}):{ok:true,before:[],gate:{sql:'1',params:[]}};
    if(!security.ok)return {kind:'verification',response:security.response};
+   const ownerFunding=quote.fundingKind==='owner-provider'?await prepareOwnerFundingAdmission(productionContext.env,{userId,jobId:id,quoteId,providerEstimateUsdMicros:quote.providerEstimateUsdMicros,network:fundingNetwork,now}):{before:[],gate:{sql:'1',params:[]}};
    const eligible=`q.id=? AND q.user_id=? AND q.expires_at>? AND q.price_cents=? AND q.model=? AND q.pricing_version=? AND q.duration_seconds=? AND q.funding_kind=? AND q.input_json=?
     AND ${mode} AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=q.user_id)
     AND NOT EXISTS(SELECT 1 FROM rig_generation_jobs WHERE user_id=q.user_id AND state IN ('submitting','unknown','queued'))
@@ -110,13 +112,13 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
     WHERE ${eligible} AND q.funding_kind='credits' AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents`).bind(`reserve:${id}`,...args);
    const authorize=db.prepare(`INSERT INTO rig_owner_provider_usage(job_id,quote_id,user_id,estimated_usd_micros,state,created_at)
     SELECT ?,q.id,q.user_id,${estimate('q')},'authorized',? FROM rig_generation_quotes q WHERE ${eligible}
-     AND (${security.gate.sql}) AND q.funding_kind='owner-provider' AND q.user_id=? AND ${estimate('q')}=? AND ${estimate('q')}>0`).bind(id,now,...args,...security.gate.params,ownerFor(userId),positive(quote.providerEstimateUsdMicros)?quote.providerEstimateUsdMicros:0);
+     AND (${security.gate.sql}) AND (${ownerFunding.gate.sql}) AND q.funding_kind='owner-provider' AND q.user_id=? AND ${estimate('q')}=? AND ${estimate('q')}>0`).bind(id,now,...args,...security.gate.params,...ownerFunding.gate.params,ownerFor(userId),positive(quote.providerEstimateUsdMicros)?quote.providerEstimateUsdMicros:0);
    const create=db.prepare(`INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,created_at)
     SELECT ?,q.user_id,q.id,?,q.price_cents,'submitting',? FROM rig_generation_quotes q WHERE q.id=? AND q.user_id=?
      AND ((q.funding_kind='credits' AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id=? AND l.user_id=q.user_id AND l.order_id IS NULL AND l.delta=-q.price_cents))
       OR(q.funding_kind='owner-provider' AND EXISTS(SELECT 1 FROM rig_owner_provider_usage u WHERE u.job_id=? AND u.quote_id=q.id AND u.user_id=q.user_id AND u.estimated_usd_micros=${estimate('q')} AND u.state='authorized')))`)
     .bind(id,idempotencyKey,now,quoteId,userId,`reserve:${id}`,id);
-   const result=await db.batch([...security.before,reserve,authorize,create]),reserved=result.at(-3)?.meta?.changes,authorized=result.at(-2)?.meta?.changes,created=result.at(-1)?.meta?.changes;
+   const result=await db.batch([...security.before,...ownerFunding.before,reserve,authorize,create]),reserved=result.at(-3)?.meta?.changes,authorized=result.at(-2)?.meta?.changes,created=result.at(-1)?.meta?.changes;
    if(reserved+authorized===1&&created===1)return {kind:'created',job:jobFrom(await getJob(userId,id))};
    if(reserved!==0||authorized!==0||created!==0)throw Error('Funding outcome requires reconciliation');
    const existing=await getByKey(userId,idempotencyKey);if(existing)return {kind:existing.quote_id===quoteId?'existing':'conflict',job:jobFrom(existing)};

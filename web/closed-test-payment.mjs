@@ -3,6 +3,7 @@ import {isMollieCheckoutURL} from './mollie-checkout-url.mjs';
 // Derived test-only version of payment.mjs; adds only proven pre-dispatch failure handling.
 export function closedPaymentWithFetch(fetch, PreDispatchFailure, options = {}) {
 const allowLive = options.allowLive === true;
+if(options.orderAdmission!==undefined&&typeof options.orderAdmission!=='function')throw Error('Invalid order admission');
 // RIG Mollie foundation; import handlePaymentRoute from a Worker. Never run outside
 // an ingress that STRIPS client-supplied identity headers and adds trusted ones.
 const response = (status, data) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -64,6 +65,23 @@ async function mollie(path, key, options = {}) {
 }
 function sameOrigin(req, origin) { return req.headers.get('Origin') === origin; }
 
+// A funding refusal happens before any Mollie dispatch. Tombstone this exact
+// unused intent atomically, so a late concurrent retry cannot start it after
+// the browser has been told it is safe to discard the intent.
+async function fundingRefused(env,user,requestId){
+  try{
+    await env.DB.prepare(`INSERT OR IGNORE INTO rig_payment_cancelled_intents(user_id,request_id)
+      SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM rig_orders WHERE user_id=? AND request_id=?)`).bind(user,requestId,user,requestId).run();
+    const safe=await env.DB.prepare(`SELECT 1 FROM rig_payment_cancelled_intents c WHERE c.user_id=? AND c.request_id=?
+      AND NOT EXISTS(SELECT 1 FROM rig_orders o WHERE o.user_id=c.user_id AND o.request_id=c.request_id)`).bind(user,requestId).first();
+    if(safe)return response(503,{error:'Tegoed kopen is tijdelijk gepauzeerd. Je bestaande RIG-tegoed blijft beschikbaar.',code:'funding_unavailable',paymentCreated:false});
+  }catch{}
+  return response(503,{error:'Controleer eerst de betaalstatus voordat je opnieuw probeert.'});
+}
+const priorIntent=(env,user,requestId)=>env.DB.prepare(`SELECT 1 WHERE
+  EXISTS(SELECT 1 FROM rig_orders WHERE user_id=? AND (request_id=? OR state IN ('creating','open','unknown','credit_pending_review')))
+  OR EXISTS(SELECT 1 FROM rig_payment_cancelled_intents WHERE user_id=? AND request_id=?)`).bind(user,requestId,user,requestId).first();
+
 async function start(req, env, cfg, user) {
   if (!sameOrigin(req, cfg.origin) || !req.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) return response(403, { error: 'Request refused' });
   let data; try { data=JSON.parse(await boundedText(req,4096)); } catch { return response(400, { error: 'Invalid request' }); }
@@ -72,7 +90,25 @@ async function start(req, env, cfg, user) {
   const frozen = await env.DB.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(user).first();
   if (frozen) return response(403, { error: 'Account requires review' });
   const id = crypto.randomUUID();
-  const insert = await env.DB.prepare("INSERT OR IGNORE INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AND NOT EXISTS (SELECT 1 FROM rig_orders WHERE user_id=? AND state IN ('creating','open','unknown','credit_pending_review')) AND NOT EXISTS (SELECT 1 FROM rig_payment_cancelled_intents WHERE user_id=? AND request_id=?)").bind(id, user, data.requestId, pkg.id, pkg.amountCents, pkg.credits, user, user, user, data.requestId).run();
+  let admission;
+  if(options.orderAdmission){
+    const existing=await priorIntent(env,user,data.requestId);
+    if(existing)return response(409,{error:'Er is al een betaling gestart of deze aanvraag is al gebruikt. Controleer eerst de status.'});
+    try{
+      admission=await options.orderAdmission({env,userId:user,orderId:id,requestId:data.requestId,pkg});
+      if(!admission||!Array.isArray(admission.before)||admission.before.length>8||admission.before.some(statement=>typeof statement?.run!=='function')||typeof admission.gate?.sql!=='string'||admission.gate.sql.length<1||admission.gate.sql.length>16384||!Array.isArray(admission.gate.params)||admission.gate.params.length>128)throw Error('Invalid order admission');
+    }catch{return fundingRefused(env,user,data.requestId);}
+  }
+  const insertSQL="INSERT OR IGNORE INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AND NOT EXISTS (SELECT 1 FROM rig_orders WHERE user_id=? AND state IN ('creating','open','unknown','credit_pending_review')) AND NOT EXISTS (SELECT 1 FROM rig_payment_cancelled_intents WHERE user_id=? AND request_id=?)";
+  const statement=env.DB.prepare(insertSQL+(admission?' AND ('+admission.gate.sql+')':'')).bind(id,user,data.requestId,pkg.id,pkg.amountCents,pkg.credits,user,user,user,data.requestId,...(admission?.gate.params??[]));
+  let insert;
+  if(admission){
+    try{const results=await env.DB.batch([...admission.before,statement]);insert=results.at(-1);}catch{return fundingRefused(env,user,data.requestId);}
+    if(insert?.meta?.changes!==1){
+      const existing=await priorIntent(env,user,data.requestId);
+      if(!existing)return fundingRefused(env,user,data.requestId);
+    }
+  }else insert=await statement.run();
   if (insert.meta.changes !== 1) return response(409, { error: 'Er is al een betaling gestart of deze aanvraag is al gebruikt. Controleer eerst de status.' });
   let payment;
   try {
