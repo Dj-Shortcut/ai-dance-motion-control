@@ -17,13 +17,13 @@ async function main(){
   const endSession=()=>{if(ended)return;ended=true;invitationUi?.dispose();binding?.dispose();unsubscribe();status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';location.reload();};
   window.rigVideoEnabled=false;
   login.addEventListener('click',async()=>{try{await auth.beginGoogleSignIn()}catch{status.textContent='Aanmelden is niet gelukt. Probeer opnieuw.'}});
-  logout.addEventListener('click',async()=>{binding?.dispose();try{await auth.signOut();endSession()}catch{inlineStatus.textContent='Afmelden is niet gelukt.'}});
+  logout.addEventListener('click',async()=>{binding?.dispose({logout:true});try{await auth.signOut();endSession()}catch{inlineStatus.textContent='Afmelden is niet gelukt.'}});
   await auth.finishRedirect();
   if(!await auth.currentSession()){login.hidden=false;status.textContent='Meld je aan om verder te gaan.';}
   else{
    const guarded=await prepareGuardedBinding({auth,browser:window,onChanged:endSession});
    binding=guarded.binding;unsubscribe=guarded.stop;if(ended){binding.dispose();return;}
-   window.rigScopedStorage=binding.scopedStorage;window.rigRequest=binding.request;window.rigOpenVideo=binding.openVideo;window.rigSessionActive=binding.isActive;
+   window.rigScopedStorage=binding.scopedStorage;window.rigDraftStorage=binding.draftStorage;window.rigRequest=binding.request;window.rigOpenVideo=binding.openVideo;window.rigSessionActive=binding.isActive;
    window.rigCheckout=url=>{if(!binding.isActive())throw Error('Je aanmelding is beëindigd.');location.assign(url);};
    logout.hidden=false;gate.hidden=true;studio.hidden=false;
    status.textContent='Aangemeld. Mollie staat in testmodus.';

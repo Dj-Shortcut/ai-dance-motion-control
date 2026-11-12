@@ -4,7 +4,7 @@
  const el=id=>document.getElementById(id),primary=el('prepare'),screens=[...document.querySelectorAll('[data-flow-screen]')];
  if(!primary||screens.length!==4||!el('flowBack'))return;
  const binding={request:window.rigRequest,active:window.rigSessionActive},controller=new AbortController();
- let disposed=false,view='start',ready=!primary.disabled,inputsReady=false,continuation=false,lockedChoice=false,processing=false,plan='trial',fullReview=false,priceSequence=0,priceTimer=null,shareFile=null,shareSequence=0;
+ let disposed=false,view='start',ready=!primary.disabled,inputsReady=false,continuation=false,lockedChoice=false,processing=false,plan='trial',fullReview=false,fullIntent=false,continuationLabel='Volledige versie maken',priceSequence=0,priceTimer=null,shareFile=null,shareSequence=0;
  const current=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&binding.active?.()===true;
  const on=(target,type,handler,options={})=>target?.addEventListener(type,handler,{...options,signal:controller.signal});
  const source=()=>el('motionVideo'),seconds=()=>Number(el('duration').value),minimum=()=>Number(el('duration').min)||3;
@@ -66,7 +66,7 @@
    el('editModeButton').hidden=!qualities.some(value=>value==='edit-standard'||value==='human-recast');
    drawPreviews();
   }
-  else if(view==='result'){primary.textContent='Volledige versie maken';primary.disabled=!ready;}
+  else if(view==='result'){primary.textContent=continuationLabel;primary.disabled=!ready;}
   const footer=primary.closest('footer');if(footer)footer.hidden=view==='make';
   el('newVideo').hidden=view!=='result'||processing;
   if(view==='result'){
@@ -80,6 +80,7 @@
   if(typeof value.inputsReady==='boolean')inputsReady=value.inputsReady;
   if(typeof value.lockedChoice==='boolean')lockedChoice=value.lockedChoice;
   if(typeof value.continuation==='boolean')continuation=value.continuation;
+  if(['Volledige versie maken','Verder met deze video'].includes(value.continuationLabel))continuationLabel=value.continuationLabel;
   render();
  }
  function schedulePrices(){
@@ -111,7 +112,7 @@
    }catch{if(current()&&sequence===priceSequence)el(id).textContent='Na controle van je fragment';}
   }));
  }
- function openMake({full=false}={}){fullReview=full;plan=full||!trialAllowed()?'full':'trial';show('make',{focus:false});schedulePrices();}
+ function openMake({full=false}={}){fullReview=full||fullIntent;plan=fullReview||!trialAllowed()?'full':'trial';show('make',{focus:false});schedulePrices();}
  function showProcessing(){processing=true;shareSequence++;shareFile=null;el('shareResult').hidden=true;el('export').hidden=true;el('resultVideo').pause();el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('newVideo').hidden=true;show('result',{focus:false});el('quoteDialog').classList.add('flow-processing');}
  async function prepareShare(){
   const sequence=++shareSequence;shareFile=null;el('shareResult').hidden=true;
@@ -121,6 +122,7 @@
  }
  on(primary,'click',event=>{
   if(primary.disabled||!current())return;
+  if(view==='files'&&fullIntent&&continuation&&continuationLabel==='Volledige versie maken'){event.stopImmediatePropagation();void window.rigResumeFullDraft?.();return;}
   if(view==='start'||view==='files'){event.stopImmediatePropagation();show(view==='start'?'files':'where');return;}
   if(view==='where'){openMake();return;}
  },{capture:true});
@@ -157,7 +159,7 @@
  });
  for(const id of ['start','duration','cleanupEnabled'])on(el(id),'change',()=>{updateClip();if(view==='make')schedulePrices();});
  on(source(),'loadedmetadata',()=>queueMicrotask(updateClip));on(source(),'seeked',drawPreviews);
- on(el('newVideo'),'click',()=>{if(window.rigNewDraft?.()!==false){fullReview=false;shareSequence++;shareFile=null;show('start');}});
+ on(el('newVideo'),'click',()=>{if(window.rigNewDraft?.()!==false){fullReview=false;fullIntent=false;shareSequence++;shareFile=null;show('start');}});
  on(el('shareResult'),'click',async()=>{if(!current()||!shareFile)return;try{await navigator.share({files:[shareFile],title:'Mijn RIG-video'});}catch(error){if(error.name!=='AbortError')el('status').textContent='Delen lukte niet. Je kunt de video bewaren.';}});
  on(document,'rig-generation-mode-change',()=>{drawPreviews();if(view==='make')schedulePrices();});
  // Closing an unpaid preparation/price pop-out returns to the same make
@@ -177,6 +179,6 @@
  observer.observe(el('briefDialog'),{attributes:true,attributeFilter:['open']});
  observer.observe(el('checkGeneration'),{attributes:true,attributeFilter:['hidden']});
  function dispose(){if(disposed)return;disposed=true;controller.abort();observer.disconnect();clearTimeout(priceTimer);priceSequence++;shareSequence++;shareFile=null;if(window.rigFlow===api)delete window.rigFlow;if(window.rigFlowDispose===dispose)delete window.rigFlowDispose;}
- const api={refresh,openFullReview:()=>openMake({full:true}),revealFiles:({advanced=false}={})=>{show('files',{focus:false});el('flowAdvanced').open=advanced;},dispose};window.rigFlow=api;window.rigFlowDispose=dispose;
+ const api={refresh,openFullReview:()=>{fullIntent=false;openMake({full:true});},revealFiles:({advanced=false,full=false}={})=>{fullIntent=full;show('files',{focus:false});el('flowAdvanced').open=advanced;},dispose};window.rigFlow=api;window.rigFlowDispose=dispose;
  on(window,'pagehide',dispose);on(el('authLogout'),'click',dispose);render();
 })();

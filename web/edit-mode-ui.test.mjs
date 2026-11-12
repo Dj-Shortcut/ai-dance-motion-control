@@ -59,7 +59,7 @@ test('a deliberate mode choice survives a real account-scoped page reload withou
   reloaded=fixture({scopedStorage:alice.scopedStorage,qualities:[],videoEnabled:false});assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('editModeButton').getAttribute('aria-pressed'),'true');assert.equal(reloaded.el('duration').max,'15');assert.doesNotMatch(reloaded.el('editPrompt').value,/Private hond/);assert.match(reloaded.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);
   reloaded.load();assert.equal(reloaded.el('prepare').disabled,true);assert.match(reloaded.el('videoModeHint').textContent,/niet beschikbaar.*Kies zelf/);
   reloaded.w.rigVideoQualities=['standard','pro','edit-standard'];reloaded.w.rigVideoEnabled=true;reloaded.d.dispatchEvent(new reloaded.w.Event('rig-video-availability'));
-  assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('duration').value,'5');assert.equal(reloaded.el('prepare').disabled,false);
+  assert.equal(reloaded.w.rigVideoMode(),'edit');assert.equal(reloaded.w.rigGenerationQuality(),'edit-standard');assert.equal(reloaded.el('duration').value,'15');assert.equal(reloaded.el('prepare').disabled,false);
   other=fixture({scopedStorage:bob.scopedStorage});assert.equal(other.w.rigVideoMode(),'motion');assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),null);assert.match(other.el('motionModeButton').querySelector('strong').textContent,/^Op je foto/);assert.match(other.el('videoModeHint').textContent,/lichaam/);
   other.el('motionModeButton').click();assert.equal(bob.scopedStorage.getItem('rig-video-mode:v1'),'motion');assert.equal(alice.scopedStorage.getItem('rig-video-mode:v1'),'edit');assert.deepEqual([...backing.values()].sort(),['edit','motion']);
  }finally{first?.dom.window.close();reloaded?.dom.window.close();other?.dom.window.close();alice.dispose();bob.dispose();}
@@ -93,11 +93,11 @@ test('the shared pop-out remembers each mode description without adding a second
   f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Vervang de zanger door mijn hond.');assert.equal(f.d.querySelectorAll('textarea').length,1);
  }finally{f.dom.window.close();}
 });
-test('editing has a visible description, five-second first fragment and clear source labels',()=>{
+test('editing has a visible description, the full fragment within its model limit and clear source labels',()=>{
  const f=fixture();
  try{
   f.load();assert.equal(f.el('duration').value,'30');f.el('editModeButton').click();
-  assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'5');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
+  assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.equal(f.el('duration').value,'15');assert.equal(f.el('duration').max,'15');assert.equal(f.el('motionSeek').max,'60');
   assert.equal(f.el('editPromptPanel').hidden,false);assert.equal(f.el('editPrompt').required,true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('confirmBrief').disabled,false);assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('moreOptions').hidden,false);assert.equal(f.el('steadyOption').hidden,true);assert.equal(f.el('motionQualitySettings').hidden,true);
   assert.equal(f.el('personChooseText').textContent,'Kies een foto of video');assert.equal(f.el('personInput').accept,'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm');assert.equal(f.el('motionRole').textContent,'Video');assert.match(f.el('videoModeHint').textContent,/persoon of dier.*korte proef/);assert.equal(f.el('sound').checked,true);
   f.prompt('Vervang de zanger door mijn hond.');assert.equal(f.el('prepare').disabled,false);
@@ -167,7 +167,7 @@ test('editing warns when a crop differs from the fixed main snapshot, invalidate
 test('editing extracts a chosen cropped JPEG from a long reference video without uploading that source or changing the motion clip',async()=>{
  const f=fixture({withGeneration:true});
  try{
-  f.el('editModeButton').click();f.load();f.change('start','9.5');f.prompt('Vervang de zanger door mij op het gekozen referentiebeeld.');
+  f.el('editModeButton').click();f.load();f.change('duration','5');f.change('start','9.5');f.prompt('Vervang de zanger door mij op het gekozen referentiebeeld.');
   const motion=f.el('motionVideo'),motionSource=motion.src;
   f.file('personInput','my-reference-3min.mp4','video/mp4');
   const reference=f.el('personVideo'),referenceFile=f.el('personInput').files[0];reference.duration=180;reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));

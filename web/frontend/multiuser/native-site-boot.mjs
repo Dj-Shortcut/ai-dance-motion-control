@@ -16,13 +16,13 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
  let binding=null,unsubscribe=()=>{},invitationUi=null,ended=false;
  browser.rigNativeSite=true;browser.rigVideoEnabled=false;
  function endSession(){if(ended)return;ended=true;browser.rigGenerationDispose?.();browser.rigFlowDispose?.();browser.rigOwnerVerification?.dispose();browser.rigFinanceDispose?.();browser.rigOwnerAdministration?.dispose();browser.rigPaymentsDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
- logout.addEventListener('click',()=>{endSession();});
+ logout.addEventListener('click',()=>{binding?.dispose({logout:true});endSession();});
  const enable=async()=>{const ready=await enableVideoIfAvailable({binding,window:browser,document,loadScript});if(binding?.isActive())el('videoAvailabilityNote').textContent=browser.rigVideoUnavailableReason==='owner_test_limit'?'Je eenmalige eigenaarstest is gebruikt. Je bestaande video-opdracht blijft bereikbaar.':browser.rigVideoFunding==='owner-provider'?'Je gebruikt je eigen fal-account. Je ziet de Fal-raming vóór je bevestigt.':browser.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':browser.rigVideoFunding==='sponsored'?'Je video’s worden betaald uit je gratis testtegoed. Je ziet de prijs vóór je bevestigt.':ready?'Je ziet de prijs vóór je bevestigt. Een bevestigde video gebruikt echt fal-tegoed.':'Activeer je uitnodiging om een video te maken.';return ready;};
  try{
   if(!await auth.currentSession()){status.textContent='Meld je aan om RIG te gebruiken.';login.hidden=false;return {dispose:endSession};}
   const guarded=await prepareGuardedBinding({auth,browser,onChanged:endSession});binding=guarded.binding;unsubscribe=guarded.stop;
   if(ended){binding.dispose();unsubscribe();return {dispose:endSession};}
-  browser.rigScopedStorage=binding.scopedStorage;browser.rigRequest=binding.request;browser.rigOpenVideo=binding.openVideo;browser.rigSessionActive=binding.isActive;
+  browser.rigScopedStorage=binding.scopedStorage;browser.rigDraftStorage=binding.draftStorage;browser.rigRequest=binding.request;browser.rigOpenVideo=binding.openVideo;browser.rigSessionActive=binding.isActive;
   // Recheck the bound account immediately before leaving for Mollie. A late
   // checkout response from an ended session must never navigate this tab.
   browser.rigCheckout=async value=>{

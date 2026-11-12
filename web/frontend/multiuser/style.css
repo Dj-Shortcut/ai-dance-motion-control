@@ -158,5 +158,5 @@ body.guided-flow{--mint:#8fe3b8;--muted:#a9b3b0;background:#101416;color:#eef2f0
 .guided-flow .result>.under{display:none}
 .guided-flow main:has(.result:not([hidden])) footer{position:static;bottom:auto}
 .guided-flow main:has(.result:not([hidden])) footer .actions{display:flex;align-items:center;justify-content:space-between;width:100%;gap:16px}
-.guided-flow main:has(.result:not([hidden])) #prepare{flex:none}
+.guided-flow main:has(.result:not([hidden])) #prepare{flex:none;width:auto}
 .guided-flow main:has(.result:not([hidden])) #newVideo{flex:none;margin-left:auto;align-self:auto}

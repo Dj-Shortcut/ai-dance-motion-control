@@ -5,10 +5,11 @@ import {JSDOM} from 'jsdom';
 
 const source=name=>readFileSync(new URL(`./frontend/multiuser/${name}`,import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Guided RIG flow did not settle');};
-function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',statusResponse,shareRead,recentJob=null,storage:savedStorage=new Map()}={}){
+function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',statusResponse,shareRead,recentJob=null,reconcileJob=null,storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null}={}){
  const dom=new JSDOM(source('index.html'),{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],prepared=[],shared=[],storage=savedStorage;
  w.Blob=Blob;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding=funding;w.rigVideoMode='live';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
+ if(savedDraftStorage)w.rigDraftStorage={getItem:key=>savedDraftStorage.get(key)??null,setItem:(key,value)=>savedDraftStorage.set(key,value),removeItem:key=>savedDraftStorage.delete(key)};
  w.URL.createObjectURL=()=>`blob:rig-local-${Math.random()}`;w.URL.revokeObjectURL=()=>{};w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};w.HTMLElement.prototype.scrollIntoView=function(){};w.scrollTo=()=>{};w.HTMLCanvasElement.prototype.getContext=()=>({drawImage(){}});
  el('authGate').hidden=true;el('rigStudio').hidden=false;
  for(const dialog of d.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){if(!this.open)return;this.open=false;this.dispatchEvent(new w.Event('close'));};}
@@ -20,7 +21,8 @@ function fixture({withGeneration=false,canShare=false,qualities=['standard','pro
  let assets=0,quotes=0,generations=0;const durations=new Map();
  w.rigRequest=async(path,options={})=>{
   calls.push([path,options]);let data;
-  if(path==='/api/generations/recent')data={job:recentJob};
+  if(path.startsWith('/api/generation-intents/')&&path.endsWith('/reconcile')&&reconcileJob)data=reconcileJob;
+  else if(path==='/api/generations/recent')data={job:recentJob};
   else if(path==='/api/payments/balance')data={mode:'live',currency:'EUR',balance:5000};
   else if(path.startsWith('/api/estimate/fal?')){const query=new URL(path,w.location.origin).searchParams,seconds=Number(query.get('duration'));data={quality:query.get('quality'),durationSeconds:seconds,customerProposal:{currency:'EUR',priceCents:Math.ceil(seconds)*40,binding:false}};}
   else if(path==='/api/assets'){const id=`asset-${++assets}`,kind=options.headers['X-Rig-Asset-Kind'];if(kind==='video')durations.set(id,Number(options.headers['X-Rig-Duration-Seconds']));data={id,kind,status:'ready'};}
@@ -176,7 +178,7 @@ for(const mode of ['motion','edit'])test(`a reloaded ${mode} trial with missing 
  const f=fixture({withGeneration:true,storage:saved,recentJob:{id:'job-1',state:'completed'}});try{
   await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());f.el('prepare').click();await settle(()=>f.showing('files'));
   for(const [id,file] of [['personInput',person],['motionInput',motion]]){Object.defineProperty(f.el(id),'files',{configurable:true,value:[file]});f.el(id).dispatchEvent(new f.w.Event('change',{bubbles:true}));}
-  if(mode==='motion'){f.el('personVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('personVideo').dispatchEvent(new f.w.Event('loadeddata'));}f.el('motionVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('prepare').click();assert.equal(f.showing('where'),true);f.el('prepare').click();await settle(()=>f.el('status').textContent.includes('eerdere close-up en hoeken'));
+  if(mode==='motion'){f.el('personVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('personVideo').dispatchEvent(new f.w.Event('loadeddata'));}f.el('motionVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.el('prepare').click();await settle(()=>f.el('status').textContent.includes('eerdere close-up en hoeken'));assert.equal(f.showing('where'),false,'recovering the matching full draft goes directly to missing references, without a repeated placement step');
   assert.equal(f.showing('files'),true,'missing reference uploads must be reachable rather than hidden behind the make screen');
   assert.equal(f.el('flowAdvanced').open,true,'the advanced controls must be expanded');assert.equal(f.el('moreOptions').open,true);assert.equal(f.el('referencePanel').hidden,false);assert.equal(f.el('referenceFiles').hidden,false,'the reference upload controls must be shown');assert.equal(f.el('faceReference').hidden,true);assert.equal(f.el('angleReference0').hidden,true);assert.equal(f.el('briefDialog').open,false,'reference recovery must not be covered by another review dialog');assert.equal(f.el('personInput').files[0],person);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.el('duration').value,'12');assert.equal(f.el('start').value,'3');assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
@@ -244,5 +246,57 @@ test('a delayed share preparation for the old result cannot reappear while the n
  let releaseStatus,releaseOldShare,oldBodyRead=false;const f=fixture({withGeneration:true,canShare:true,shareRead:url=>String(url).endsWith('job-1')?new Promise(resolve=>{releaseOldShare=()=>resolve({blob:async()=>{oldBodyRead=true;return new Blob(['old-owned-video'],{type:'video/mp4'});}});}):Promise.resolve(new Response(new Blob(['new-owned-video'],{type:'video/mp4'}))),statusResponse:id=>id==='job-2'?new Promise(resolve=>{releaseStatus=()=>resolve({id,state:'completed',videoPath:`/api/generations/${id}/video`});}):undefined});try{
   await finishTrial(f);await settle(()=>releaseOldShare);await confirmFullVideo(f);await settle(()=>releaseStatus);assert.equal(f.el('shareResult').hidden,true);assert.equal(f.el('resultVideo').src,'blob:rig-private-job-1');releaseOldShare();await settle(()=>oldBodyRead);await new Promise(resolve=>setImmediate(resolve));assert.equal(f.el('shareResult').hidden,true,'late old share data must not present the old video as a ready result');assert.equal(f.shared.length,0);assert.equal(f.el('resultVideo').hidden,true);assert.equal(f.el('export').hidden,true);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,2);
   releaseStatus();await settle(()=>!f.w.rigGenerationBusy()&&!f.el('resultVideo').hidden&&!f.el('shareResult').hidden);assert.equal(f.el('resultVideo').src,'blob:rig-private-job-2');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,2);
+ }finally{f.close();}
+});
+
+test('choosing Recast after a longer phone clip keeps the full selection and exposes an explicit six-second trial',async()=>{
+ const f=fixture({qualities:['standard','pro','human-recast'],funding:'owner-provider'});try{
+  f.el('prepare').click();f.load();f.change('duration',18);f.change('start',2);f.el('prepare').click();f.el('editModeButton').click();assert.equal(f.el('duration').value,'15');assert.equal(f.el('start').value,'2');f.el('prepare').click();
+  assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('tryShortVideo').hidden,false);assert.equal(f.el('flowFullDuration').textContent,'15 sec · zoals gekozen');assert.equal(f.el('flowTrialDuration').textContent,'6 sec · kort proefje');assert.deepEqual(writePaths(f),[]);
+  f.change('editPrompt','Behoud de bronvideo en vervang alleen de hoofdpersoon.','input');f.el('tryShortVideo').click();f.el('confirmBrief').click();await settle(()=>f.w.rigPreparedMedia());assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.ok(f.w.rigPreparedMedia().trialToken);assert.equal(f.el('duration').value,'15');assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('a result opened in a new tab without a saved trial offers contextual recovery to files, then requires a chosen full selection and fresh price',async()=>{
+ const f=fixture({withGeneration:true,recentJob:{id:'job-1',state:'completed'}});try{
+  await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());
+  assert.equal(f.el('resultTitle').textContent,'Je video');assert.equal(f.el('prepare').hidden,false);assert.equal(f.el('prepare').textContent,'Verder met deze video');assert.equal(f.el('prepare').disabled,false);assert.equal(f.storage.has('rig-trial-continuation:v1'),false);assert.deepEqual(writePaths(f),[]);
+  f.el('prepare').click();assert.equal(f.showing('files'),true);assert.equal(f.showing('start'),false);assert.equal(f.el('briefDialog').open,false);assert.match(f.el('status').textContent,/oorspronkelijke foto en video/);assert.equal(f.el('personInput').files.length,0);assert.equal(f.el('motionInput').files.length,0);
+  const files=f.load();f.change('duration',18);f.change('start',4);f.el('prepare').click();assert.equal(f.showing('where'),true);f.el('motionModeButton').click();f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('chooseFullVideo').getAttribute('aria-pressed'),'true');assert.equal(f.el('tryShortVideo').hidden,true);assert.equal(f.el('duration').value,'18');assert.equal(f.el('start').value,'4');
+  f.change('editPrompt','Mijn opnieuw gekozen volledige dans, zonder verzonnen oude instellingen.','input');f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().selectedSeconds,18);assert.equal(f.w.rigPreparedMedia().trialToken,undefined);assert.equal(f.el('personInput').files[0],files.person);assert.equal(f.el('motionInput').files[0],files.motion);assert.deepEqual(writePaths(f),[]);
+  f.el('confirmUpload').click();await quoteReady(f);const quotes=f.calls.filter(([p])=>p==='/api/generation-quotes');assert.equal(quotes.length,1);assert.equal(JSON.parse(quotes[0][1].body).prompt,'Mijn opnieuw gekozen volledige dans, zonder verzonnen oude instellingen.');assert.equal(f.prepared[0].duration,18);assert.equal(f.calls.some(([p])=>p==='/api/generations'||p==='/api/payments/create'),false);
+ }finally{f.close();}
+});
+
+test('a durable matching trial survives a new tab and one Continue restores the original full review before any new charge',async()=>{
+ const drafts=new Map(),first=fixture({withGeneration:true,draftStorage:drafts});let files;
+ try{
+  first.make();files={person:first.el('personInput').files[0],motion:first.el('motionInput').files[0]};first.change('duration',18);first.change('start',3);first.change('editPrompt','Mijn bewaarde volledige dans.','input');first.el('tryShortVideo').click();first.el('confirmBrief').click();await settle(()=>first.el('uploadDialog').open);first.el('confirmUpload').click();await quoteReady(first);first.el('confirmGeneration').click();await settle(()=>first.showing('result')&&!first.w.rigGenerationBusy());
+  assert.equal(first.storage.has('rig-trial-continuation:v1'),false);const metadata=JSON.parse(drafts.get('rig-trial-continuation:v1'));assert.equal(metadata.draft.seconds,18);assert.equal(metadata.draft.start,3);assert.doesNotMatch(JSON.stringify(metadata),/blob:|approvalToken|device-confirmed/);assert.deepEqual([...drafts.keys()],['rig-trial-continuation:v1']);
+ }finally{first.close();}
+ const f=fixture({withGeneration:true,draftStorage:drafts,recentJob:{id:'job-1',state:'completed'}});try{
+  assert.equal(f.storage.size,0,'new tab has no session recovery handles');await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.w.rigGenerationBusy());assert.equal(f.el('resultTitle').textContent,'Je proefje');assert.equal(f.el('prepare').textContent,'Volledige versie maken');assert.equal(f.el('prepare').hidden,false);assert.deepEqual(writePaths(f),[]);
+  f.el('prepare').click();assert.equal(f.showing('files'),true);for(const [id,file] of [['personInput',files.person],['motionInput',files.motion]]){Object.defineProperty(f.el(id),'files',{configurable:true,value:[file]});f.el(id).dispatchEvent(new f.w.Event('change',{bubbles:true}));}f.el('motionVideo').dispatchEvent(new f.w.Event('loadedmetadata'));
+  f.el('prepare').click();await settle(()=>f.el('briefDialog').open);assert.equal(f.showing('where'),false);assert.equal(f.el('duration').value,'18');assert.equal(f.el('start').value,'3');assert.equal(f.el('editPrompt').value,'Mijn bewaarde volledige dans.');assert.equal(f.el('chooseFullVideo').getAttribute('aria-pressed'),'true');assert.equal(f.el('tryShortVideo').hidden,true);assert.deepEqual(writePaths(f),[]);
+  f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().selectedSeconds,18);assert.equal(f.w.rigPreparedMedia().trialToken,undefined);assert.deepEqual(writePaths(f),[]);f.el('confirmUpload').click();await quoteReady(f);assert.equal(f.calls.filter(([p])=>p==='/api/generation-quotes').length,1);assert.equal(f.calls.some(([p])=>p==='/api/generations'||p==='/api/payments/create'),false);assert.equal(f.prepared[0].duration,18);
+ }finally{f.close();}
+});
+
+test('My videos reconciles a matching uncertain trial intent before opening its completed result and preserves its full draft',async()=>{
+ const drafts=new Map(),first=fixture({withGeneration:true,draftStorage:drafts});try{await finishTrial(first);}finally{first.close();}
+ const pending=JSON.parse(drafts.get('rig-trial-continuation:v1'));pending.state='pending';pending.jobId=null;drafts.set('rig-trial-continuation:v1',JSON.stringify(pending));const storage=new Map([['rig-generation-pending',JSON.stringify({quoteId:pending.quoteId,idempotencyKey:'known-trial-intent'})]]);
+ const f=fixture({withGeneration:true,storage,draftStorage:drafts,recentJob:{id:'job-1',state:'completed'},reconcileJob:{id:'job-1',state:'completed'}});try{
+  await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());const reconciles=f.calls.filter(([p])=>p==='/api/generation-intents/known-trial-intent/reconcile');assert.equal(reconciles.length,1);assert.deepEqual(JSON.parse(reconciles[0][1].body),{quoteId:pending.quoteId});assert.equal(f.storage.has('rig-generation-pending'),false);assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.el('resultTitle').textContent,'Je proefje');assert.equal(f.el('prepare').textContent,'Volledige versie maken');assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('prepare').hidden,false);assert.equal(JSON.parse(drafts.get('rig-trial-continuation:v1')).jobId,'job-1');assert.equal(JSON.parse(drafts.get('rig-trial-continuation:v1')).draft.seconds,18);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('opening a pending trial from My videos cannot start cleanup or advance a ready workflow automatically',async()=>{
+ const drafts=new Map(),first=fixture({withGeneration:true,draftStorage:drafts});try{await finishTrial(first);}finally{first.close();}
+ const pending=JSON.parse(drafts.get('rig-trial-continuation:v1'));pending.state='pending';pending.jobId=null;drafts.set('rig-trial-continuation:v1',JSON.stringify(pending));const storage=new Map([['rig-generation-pending',JSON.stringify({quoteId:pending.quoteId,idempotencyKey:'pending-workflow-intent'})]]);
+ const f=fixture({withGeneration:true,storage,draftStorage:drafts,recentJob:{id:'job-1',state:'ready_to_advance'},reconcileJob:{id:'job-1',state:'ready_to_advance'},statusResponse:async()=>({id:'job-1',state:'ready_to_advance',workflowVersion:'rig-workflow-v2'})});let cleanupLoads=0;
+ try{
+  f.w.rigLoadCleanupModule=async()=>{cleanupLoads++;return {cleanupSupported:()=>true,resumeClientProcessing:async()=>{throw Error('History must not advance a workflow');}};};
+  await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>!f.w.rigGenerationBusy()&&f.el('quoteMessage').textContent.includes('lokale tussenstap'));
+  assert.equal(cleanupLoads,0);assert.equal(f.el('checkGeneration').hidden,false);assert.equal(f.storage.get('rig-generation-job'),'job-1');assert.equal(f.storage.has('rig-generation-pending'),false);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('resultVideo').hidden,true);assert.equal(f.calls.filter(([p])=>p==='/api/generation-intents/pending-workflow-intent/reconcile').length,1);assert.equal(f.calls.some(([p])=>p.includes('/advance')||p.includes('/client-processing')),false);assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
 });

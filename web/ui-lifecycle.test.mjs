@@ -15,6 +15,76 @@ function browser(){
  const elements={rigStudio:{hidden:false},resultVideo:{hidden:false,src:'old',pause(){},removeAttribute(k){delete this[k]}},export:{hidden:false,href:'old',removeAttribute(k){delete this[k]}}};
  return {created,revoked,elements,document:{getElementById:id=>elements[id]},sessionStorage:{getItem:k=>map.get(k)||null,setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)},URL:{createObjectURL(){const url=`blob:${created.length}`;created.push(url);return url},revokeObjectURL(url){revoked.push(url)}}};
 }
+const trialKey='rig-trial-continuation:v1',otherUser='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const memoryStorage=(map=new Map())=>({map,getItem:key=>map.get(key)??null,setItem:(key,value)=>map.set(key,String(value)),removeItem:key=>map.delete(key)});
+function trialRecord({createdAt=Date.now(),...changes}={}){
+ const crop={x:0,y:0,w:100,h:100};
+ return {version:1,token:'trial-marker',createdAt,state:'completed',quoteId:'quote-1',jobId:'job-1',draft:{person:{name:'portrait.jpg',type:'image/jpeg',size:5000000,lastModified:123456},motion:{name:'phone-4k.mp4',type:'video/mp4',size:600000000,lastModified:123456},mode:'motion',editQuality:null,quality:'pro',start:2.5,seconds:18,prompt:'Bewaar mijn hele gekozen scène.',sound:true,steady:false,cleanup:false,frameTime:0,crops:{person:{...crop},motion:{...crop}},mainSelection:null,faceRequired:true,angleCount:2},...changes};
+}
+const bind=async(b,id=user)=>prepareBoundUi({browser:b,auth:{api:async()=>Response.json({userId:id})}});
+
+test('only validated trial metadata persists across new tabs; pending requests and tokens stay in sessionStorage',async()=>{
+ const local=memoryStorage(),first=browser();first.localStorage=local;
+ const binding=await bind(first),raw=JSON.stringify(trialRecord());
+ binding.scopedStorage.setItem('rig-generation-pending','pending-session-only');binding.scopedStorage.setItem('approvalToken','token-session-only');
+ assert.equal(binding.draftStorage.setItem(trialKey,raw),true);
+ assert.deepEqual([...local.map.keys()],[`rig-user:${user}:${trialKey}`]);
+ assert.equal(local.map.get(`rig-user:${user}:${trialKey}`),raw);assert.equal(binding.scopedStorage.getItem(trialKey),null);
+ binding.dispose();assert.equal(local.map.size,1,'ending a page/session preserves only the bounded trial metadata');
+ const next=browser();next.localStorage=local;const restored=await bind(next);
+ assert.equal(restored.draftStorage.getItem(trialKey),raw);assert.equal(restored.scopedStorage.getItem('rig-generation-pending'),null);assert.equal(restored.scopedStorage.getItem('approvalToken'),null);
+ for(const key of ['rig-generation-job','rig-generation-pending','approvalToken','../other-user']){assert.throws(()=>restored.draftStorage.setItem(key,raw),/Alleen proefvervolgmetadata/);assert.throws(()=>restored.draftStorage.getItem(key),/Alleen proefvervolgmetadata/);}
+ assert.equal(local.map.size,1);restored.dispose();
+});
+
+test('trial storage uses strict account prefixes and stale bindings cannot touch another account or persisted metadata',async()=>{
+ const local=memoryStorage(),b=browser();b.localStorage=local;const alice=await bind(b),aliceRaw=JSON.stringify(trialRecord());
+ alice.draftStorage.setItem(trialKey,aliceRaw);alice.dispose();const bob=await bind(b,otherUser),bobRaw=JSON.stringify(trialRecord({token:'bob-trial'}));
+ assert.equal(bob.draftStorage.getItem(trialKey),null);bob.draftStorage.setItem(trialKey,bobRaw);
+ for(const operation of [()=>alice.draftStorage.getItem(trialKey),()=>alice.draftStorage.setItem(trialKey,bobRaw),()=>alice.draftStorage.removeItem(trialKey)])assert.throws(operation,/beëindigd/);
+ assert.equal(local.map.get(`rig-user:${user}:${trialKey}`),aliceRaw);assert.equal(local.map.get(`rig-user:${otherUser}:${trialKey}`),bobRaw);
+ for(const id of ['u-'+'-'.repeat(36),'u-'+('a'.repeat(35)+':'),user+':different'])await assert.rejects(bind(browser(),id),/gecontroleerd/);
+ bob.dispose();
+});
+
+test('expired, oversized, media-bearing or credential-field trial records cannot be persisted; full Unicode and free prompts remain valid',async()=>{
+ const local=memoryStorage(),b=browser();b.localStorage=local;const binding=await bind(b),key=`rig-user:${user}:${trialKey}`;
+ const invalid=[trialRecord({createdAt:Date.now()-86400000}),trialRecord({createdAt:Date.now()+120000}),{...trialRecord(),approvalToken:'never-persist'},'not-json'];
+ for(const mutate of [d=>d.draft.mediaBytes='base64',d=>d.draft.personFile={name:'file'},d=>d.draft.mediaUrl='blob:private-media',d=>d.draft.crops.person.w=101,d=>d.draft.angleCount=4]){const value=trialRecord();mutate(value);invalid.push(value);}
+ for(const value of invalid){const raw=typeof value==='string'?value:JSON.stringify(value);assert.equal(binding.draftStorage.setItem(trialKey,raw),false);assert.equal(local.map.has(key),false);local.setItem(key,raw);assert.equal(binding.draftStorage.getItem(trialKey),null);assert.equal(local.map.has(key),false);}
+ assert.equal(local.map.size,0);
+ const unicode=trialRecord();unicode.draft.prompt='界'.repeat(1900);for(const file of [unicode.draft.person,unicode.draft.motion]){file.name='界'.repeat(256);file.type='界'.repeat(100);}const unicodeRaw=JSON.stringify(unicode);assert.ok(unicodeRaw.length<8192&&new TextEncoder().encode(unicodeRaw).byteLength>8192);assert.equal(binding.draftStorage.setItem(trialKey,unicodeRaw),true);assert.equal(binding.draftStorage.getItem(trialKey),unicodeRaw);
+ const freePrompt=trialRecord();freePrompt.draft.prompt='Gebruik de stijl van https://example.test/film met een tekstbord Bearer of hope.';const promptRaw=JSON.stringify(freePrompt);assert.equal(binding.draftStorage.setItem(trialKey,promptRaw),true);assert.equal(binding.draftStorage.getItem(trialKey),promptRaw);binding.dispose();
+});
+
+test('localStorage denial or quota uses session fallback, while successful migration removes only the legacy trial slot',async()=>{
+ for(const failure of ['getter','get','set']){
+  const b=browser(),local=memoryStorage();
+  if(failure==='getter')Object.defineProperty(b,'localStorage',{get(){throw Error('Storage denied')}});
+  else{b.localStorage=local;local[failure==='get'?'getItem':'setItem']=()=>{throw Error('Storage unavailable')};}
+  const binding=await bind(b),raw=JSON.stringify(trialRecord());if(failure==='get')assert.equal(binding.draftStorage.getItem(trialKey),null);
+  assert.equal(binding.draftStorage.setItem(trialKey,raw),true);assert.equal(binding.draftStorage.getItem(trialKey),raw);assert.equal(binding.scopedStorage.getItem(trialKey),raw);
+  binding.dispose();assert.equal(b.sessionStorage.getItem(`rig-user:${user}:${trialKey}`),raw);
+ }
+ const b=browser();b.localStorage=memoryStorage();const binding=await bind(b),raw=JSON.stringify(trialRecord());
+ binding.scopedStorage.setItem(trialKey,raw);binding.scopedStorage.setItem('rig-generation-pending','keep-pending');
+ assert.equal(binding.draftStorage.getItem(trialKey),null,'the application deliberately migrates an existing session draft');
+ assert.equal(binding.draftStorage.setItem(trialKey,binding.scopedStorage.getItem(trialKey)),true);assert.equal(binding.scopedStorage.getItem(trialKey),null);assert.equal(binding.scopedStorage.getItem('rig-generation-pending'),'keep-pending');binding.dispose();
+});
+test('an expired local draft cannot erase a still-valid legacy session draft before migration',async()=>{
+ const b=browser();b.localStorage=memoryStorage();const binding=await bind(b),valid=JSON.stringify(trialRecord()),key=`rig-user:${user}:${trialKey}`;
+ b.localStorage.setItem(key,JSON.stringify(trialRecord({createdAt:Date.now()-86400000})));binding.scopedStorage.setItem(trialKey,valid);
+ assert.equal(binding.draftStorage.getItem(trialKey),null);assert.equal(b.localStorage.getItem(key),null);assert.equal(binding.scopedStorage.getItem(trialKey),valid);
+ assert.equal(binding.draftStorage.setItem(trialKey,binding.scopedStorage.getItem(trialKey)),true);assert.equal(binding.draftStorage.getItem(trialKey),valid);assert.equal(binding.scopedStorage.getItem(trialKey),null);binding.dispose();
+});
+
+test('explicit logout clears only this account trial metadata, while ordinary disposal preserves it',async()=>{
+ const b=browser(),local=memoryStorage();b.localStorage=local;const binding=await bind(b),raw=JSON.stringify(trialRecord());
+ binding.draftStorage.setItem(trialKey,raw);b.sessionStorage.setItem(`rig-user:${user}:${trialKey}`,raw);
+ local.setItem(`rig-user:${otherUser}:${trialKey}`,raw);local.setItem('unrelated-application-setting','keep');binding.scopedStorage.setItem('rig-generation-job','keep-session-job');
+ binding.dispose({logout:true});assert.equal(local.getItem(`rig-user:${user}:${trialKey}`),null);assert.equal(b.sessionStorage.getItem(`rig-user:${user}:${trialKey}`),null);assert.equal(local.getItem(`rig-user:${otherUser}:${trialKey}`),raw);assert.equal(local.getItem('unrelated-application-setting'),'keep');assert.equal(b.sessionStorage.getItem(`rig-user:${user}:rig-generation-job`),'keep-session-job');
+ const same=await bind(b);same.draftStorage.setItem(trialKey,raw);same.dispose();assert.equal(local.getItem(`rig-user:${user}:${trialKey}`),raw);
+});
 
 test('disposing during response wait aborts and never exposes old video',async()=>{
  const gate=deferred(),reached=deferred(),b=browser();let receivedSignal;

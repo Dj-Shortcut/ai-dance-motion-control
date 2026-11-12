@@ -69,12 +69,22 @@ selectie en doorloopt opnieuw voorbereiding, prijs en expliciete bevestiging.
 Het proefje en de volledige video zijn afzonderlijk betaald. Bekijken,
 bewaren, delen of een plan kiezen start geen nieuwe betaalde generatie.
 
-Alleen een bij het resultaat passend bewaard proefconcept mag dit vervolg
-aanbieden. Een onbekende eerdere video wordt niet als proefje voorgesteld.
+Alleen een bij het resultaat passend bewaard proefconcept mag dit volledige
+proefvervolg aanbieden. Een onbekende eerdere video wordt niet als proefje
+voorgesteld. Die krijgt via dezelfde hoofdactie `Verder met deze video`: vraag
+gericht de oorspronkelijke bestanden en de gewenste lengte, sla het
+startscherm over en toon daarna de volledige keuze met een nieuwe prijs.
+Verzin daarbij geen oorspronkelijke duur, prompt of referenties.
 Een nieuwe selectie blijft leidend; een oud resultaat mag die niet vervangen.
 Na verversen moeten ontbrekende oorspronkelijke bestanden bewust opnieuw
 gekozen worden. `Nog eentje` begint bewust een nieuw concept en mag een
 lopende of onzekere opdracht niet laten verdwijnen.
+
+Bewaar alleen de begrensde proefinstellingen per aangemeld account, maximaal
+24 uur, zodat een nieuw tabblad hetzelfde proefje kan vervolgen. Foto-, video-
+en referentiebytes, bestandstoegangslinks en aanmeldgegevens horen niet in die
+opslag. Afmelden wist het eigen bewaarde proefconcept. Geschiedenis bekijken
+controleert uitsluitend bestaande opdrachten en start geen betaalde vervolgstap.
 
 ## Controle voor publicatie
 
