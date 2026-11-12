@@ -6,7 +6,7 @@ const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.ur
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Recast UI did not settle');};
-function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94,outputResolution='1080P',omitResolution=false,estimateLimit=false,estimateFailureCode='provider_limit_exceeded',storage:savedStorage=new Map(),jobState='failed',recentJob=null}={}){
+function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5.94,outputResolution='1080P',omitResolution=false,estimateLimit=false,estimateFailureCode='provider_limit_exceeded',storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,jobState='failed',recentJob=null}={}){
  const dom=new JSDOM(html,{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],images=[],videos=[],storage=savedStorage,verifications=[],created=[],revoked=[];
  w.Blob=Blob;el('rigStudio').hidden=false;el('authGate').hidden=true;w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding='owner-provider';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
  w.URL.createObjectURL=blob=>{const url=`blob:fixture-${created.length}`;created.push({url,blob});return url;};w.URL.revokeObjectURL=url=>revoked.push(url);w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};
@@ -15,6 +15,7 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
  w.Image=class{constructor(){this.naturalWidth=1280;this.naturalHeight=720;}set src(value){this.onload?.();}};
  w.rigMedia={bounds:crop=>crop,dimensions:()=>({width:1280,height:720}),paint(){},prepareImage:async(source,crop)=>{const image={blob:new Blob(['image-'+images.length],{type:'image/jpeg'}),width:1280,height:720};images.push({source,crop:{...crop},image});return image;},prepareImageFile:async file=>({blob:new Blob(['prepared '+file.name],{type:'image/jpeg'}),width:1280,height:720}),prepareVideo:async(...args)=>{videos.push(args);return {blob:new Blob(['prepared-video'],{type:'video/mp4'}),duration:args[3],width:1280,height:720};}};
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
+ if(savedDraftStorage)w.rigDraftStorage={getItem:key=>savedDraftStorage.get(key)??null,setItem:(key,value)=>savedDraftStorage.set(key,value),removeItem:key=>savedDraftStorage.delete(key)};
  w.rigOpenVideo=async()=>`blob:fixture-result`;
  w.rigOwnerVerification={prepare:async(operation,payload)=>{verifications.push({operation,payload});return null;}};
  let assets=0,quotes=0;const uploadedDurations=new Map();
@@ -45,11 +46,11 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
 test('the video-mode choice uses the advertised Recast capability and never falls back to an absent edit route',()=>{
  const f=fixture({qualities:['standard','pro','edit-standard','human-recast']});
  try{
-  f.load();f.el('editModeButton').click();assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.el('duration').value,'6');assert.equal(f.el('duration').min,'6');assert.equal(f.el('duration').max,'15');assert.match(f.el('personTip').textContent,/portretfoto van een persoon/);assert.match(f.el('tryShortVideo').textContent,/6 s/);
+  f.load();f.el('editModeButton').click();assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.el('duration').value,'15');assert.equal(f.el('duration').min,'6');assert.equal(f.el('duration').max,'15');assert.match(f.el('personTip').textContent,/portretfoto van een persoon/);assert.match(f.el('tryShortVideo').textContent,/6 s/);
   f.el('motionModeButton').click();assert.equal(f.w.rigGenerationQuality(),'pro');f.el('editModeButton').click();assert.equal(f.w.rigGenerationQuality(),'human-recast');assert.equal(f.d.querySelector('.ideas-panel'),null);assert.equal(f.d.querySelector('[data-idea-mode]'),null);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
  }finally{f.dom.window.close();}
- const humanOnly=fixture();try{humanOnly.load();humanOnly.el('editModeButton').click();assert.equal(humanOnly.w.rigGenerationQuality(),'human-recast');assert.equal(humanOnly.el('duration').value,'6');assert.equal(humanOnly.el('editModeButton').disabled,false);assert.equal(humanOnly.calls.some(([p])=>p==='/api/generations'),false);}finally{humanOnly.dom.window.close();}
- const old=fixture({qualities:['standard','pro','edit-standard']});try{old.el('editModeButton').click();assert.equal(old.w.rigGenerationQuality(),'edit-standard');assert.equal(old.el('duration').value,'5');}finally{old.dom.window.close();}
+ const humanOnly=fixture();try{humanOnly.load();humanOnly.el('editModeButton').click();assert.equal(humanOnly.w.rigGenerationQuality(),'human-recast');assert.equal(humanOnly.el('duration').value,'15');assert.equal(humanOnly.el('editModeButton').disabled,false);assert.equal(humanOnly.calls.some(([p])=>p==='/api/generations'),false);}finally{humanOnly.dom.window.close();}
+ const old=fixture({qualities:['standard','pro','edit-standard']});try{const selected=Number(old.el('duration').value);old.el('editModeButton').click();assert.equal(old.w.rigGenerationQuality(),'edit-standard');assert.equal(Number(old.el('duration').value),Math.max(3,Math.min(15,selected)));}finally{old.dom.window.close();}
 });
 test('recast retains selected files and unused references, uses one fixed portrait, and preserves the real price and device-confirmation flow',async()=>{
  const f=fixture();
@@ -107,15 +108,15 @@ test('the recast quote previews the exact fixed main portrait and revokes that l
 
 
 test('a reference video requires an explicit recast main frame before preparation and guides to the existing controls without losing the draft',async()=>{
- const f=fixture();
+ const f=fixture({verifiedDuration:null});
  try{
   f.load();f.el('editModeButton').click();const portraitFile=f.file('personInput','ik.mp4','video/mp4'),reference=f.el('personVideo'),motionFile=f.el('motionInput').files[0],motionURL=f.el('motionVideo').src;reference.duration=56.85;reference.dispatchEvent(new f.w.Event('loadedmetadata'));reference.dispatchEvent(new f.w.Event('loadeddata'));
   assert.equal(f.el('moreOptions').open,true);assert.equal(f.el('referenceCapture').hidden,false);assert.match(f.el('status').textContent,/Kies een beeld van jezelf.*hoofdbeeld/);
   f.el('personCropButton').click();f.el('cropX').value='10';f.el('cropW').value='90';f.el('applyCrop').click();f.change('start',9.5);f.prompt('Vervang de persoon door mij.');f.prepare();
   assert.equal(f.el('briefDialog').open,false);assert.equal(f.el('moreOptions').open,true);assert.equal(f.el('captureMain').disabled,false);assert.equal(f.d.activeElement,f.el('frameTime'));assert.match(f.el('status').textContent,/Kies een beeld van jezelf.*hoofdbeeld/);assert.equal(f.images.length,0);assert.equal(f.videos.length,0);assert.equal(f.calls.some(([p])=>['/api/assets','/api/generation-quotes','/api/generations'].includes(p)),false);
-  assert.equal(f.el('personInput').files[0],portraitFile);assert.equal(f.el('motionInput').files[0],motionFile);assert.equal(f.el('motionVideo').src,motionURL);assert.equal(f.el('start').value,'9.5');assert.equal(f.el('duration').value,'6');assert.equal(f.el('editPrompt').value,'Vervang de persoon door mij.');
+  assert.equal(f.el('personInput').files[0],portraitFile);assert.equal(f.el('motionInput').files[0],motionFile);assert.equal(f.el('motionVideo').src,motionURL);assert.equal(f.el('start').value,'9.5');assert.equal(f.el('duration').value,'15');assert.equal(f.el('editPrompt').value,'Vervang de persoon door mij.');
   f.el('frameTime').value='37.5';f.el('frameTime').dispatchEvent(new f.w.Event('input'));reference.dispatchEvent(new f.w.Event('seeked'));f.el('captureMain').click();await settle(()=>!f.el('mainReference').hidden);const main=f.images[0];assert.equal(main.source,reference);assert.equal(main.crop.x,10);assert.equal(main.crop.w,90);
-  f.prepare();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden);const uploads=f.calls.filter(([p])=>p==='/api/assets');assert.equal(uploads.length,2);assert.equal(uploads[0][1].body,main.image.blob);assert.equal(uploads[1][1].headers['X-Rig-Duration-Seconds'],'6');assert.equal(f.el('quotePortraitPreview').hidden,false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  f.prepare();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden);const uploads=f.calls.filter(([p])=>p==='/api/assets');assert.equal(uploads.length,2);assert.equal(uploads[0][1].body,main.image.blob);assert.equal(uploads[1][1].headers['X-Rig-Duration-Seconds'],'15');assert.equal(f.el('quotePortraitPreview').hidden,false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
  }finally{f.dom.window.close();}
 });
 
@@ -234,7 +235,7 @@ test('a trial recovered after reload cannot replace a new draft chosen before it
 test('an unknown old result is not called a trial and uses the normal new-video flow without inventing an original duration',async()=>{
  const f=fixture({recentJob:{id:'legacy-completed',state:'completed'}});
  try{
-  await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Maak video');assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('resultTitle').textContent,'Je video');assert.doesNotMatch(f.el('status').textContent,/proefje|volledige selectie/);assertSingleMainAction(f);
+  await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Verder met deze video');assert.equal(f.el('prepare').disabled,false);assert.equal(f.el('resultTitle').textContent,'Je video');assert.doesNotMatch(f.el('status').textContent,/proefje|volledige selectie/);assertSingleMainAction(f);f.el('prepare').click();assert.equal(f.el('briefDialog').open,false);assert.match(f.el('status').textContent,/oorspronkelijke foto en video/);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'),false);
   f.file('personInput','current.jpg','image/jpeg');const motion=f.file('motionInput','current.mp4','video/mp4');f.el('motionVideo').dispatchEvent(new f.w.Event('loadedmetadata'));f.change('duration',12);f.change('start',2.5);f.prompt('Mijn huidige keuze.');
   assert.equal(f.el('prepare').textContent,'Maak video');assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();assert.equal(f.el('briefDialog').open,true);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.el('editPrompt').value,'Mijn huidige keuze.');assert.equal(f.el('duration').value,'12');assert.equal(f.el('start').value,'2.5');assert.equal(f.el('briefError').hidden,true);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'),false);
  }finally{f.dom.window.close();}
@@ -246,7 +247,7 @@ test('an older completed result cannot restore a draft while a newer job, intent
   try{f.load();f.prompt('Blijf bij deze nieuwe keuze.');await openRecentResult(f);assert.equal(f.el('prepare').disabled,true);assert.notEqual(f.el('prepare').textContent,'Maak volledige video');assert.equal(f.storage.get(key),key.endsWith('job')?'new-job':JSON.stringify({quoteId:'new-quote',idempotencyKey:'new-intent'}),'opening an older video keeps the newer recovery handle');assert.equal(f.el('checkGeneration').hidden,false,'the newer job or intent remains reachable for status recovery');f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('editPrompt').value,'Blijf bij deze nieuwe keuze.');assert.equal(f.el('briefDialog').open,false);assert.equal(f.calls.some(([p])=>p==='/api/assets'),false);}finally{f.dom.window.close();}
  }
  const f=fixture({recentJob:{id:'older-result',state:'completed'}});
- try{f.load();await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Maak video');let release;const original=f.w.rigRequest;f.w.rigRequest=async(path,options)=>path==='/api/generations/older-result'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/older-result/video'})});}):original(path,options);f.el('recentVideo').click();await settle(()=>release);assert.equal(f.el('prepare').disabled,true);f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('briefDialog').open,false);release();await settle(()=>!f.el('prepare').disabled);assert.equal(f.w.rigGenerationBusy(),false,'recent-result polling releases the continuation controls');}finally{f.dom.window.close();}
+ try{f.load();await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Verder met deze video');let release;const original=f.w.rigRequest;f.w.rigRequest=async(path,options)=>path==='/api/generations/older-result'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/older-result/video'})});}):original(path,options);f.el('recentVideo').click();await settle(()=>release);assert.equal(f.el('prepare').disabled,true);f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('briefDialog').open,false);release();await settle(()=>!f.el('prepare').disabled);assert.equal(f.w.rigGenerationBusy(),false,'recent-result polling releases the continuation controls');}finally{f.dom.window.close();}
 });
 
 test('a reloaded completed trial retains settings but requires original files; asynchronous frame restoration cannot overwrite a new choice or session',async()=>{
@@ -350,5 +351,20 @@ test('angle chooser requires a close-up and removing it preserves angles while b
   f.file('faceInput','face.jpg','image/jpeg');await settle(()=>!f.el('faceReference').hidden);assert.equal(f.el('anglesInput').disabled,false);
   f.file('anglesInput','angle.jpg','image/jpeg');await settle(()=>!f.el('angleReference0').hidden);f.el('removeFace').click();assert.equal(f.el('angleReference0').hidden,false);assert.equal(f.el('anglesInput').disabled,true);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('tryShortVideo').disabled,true);
   f.file('faceInput','new-face.jpg','image/jpeg');await settle(()=>!f.el('faceReference').hidden);assert.equal(f.el('angleReference0').hidden,false);assert.equal(f.el('prepare').disabled,false);
+ }finally{f.dom.window.close();}
+});
+
+for(const selected of [13,18])test(`Recast preserves a ${selected}-second full selection up to its 15-second model cap and makes six seconds only on explicit trial choice`,async()=>{
+ const f=fixture({verifiedDuration:null});try{
+  f.load();const person=f.el('personInput').files[0],motion=f.el('motionInput').files[0];f.change('duration',selected);f.change('start',2.5);f.el('editModeButton').click();
+  const full=Math.min(15,selected);assert.equal(Number(f.el('duration').value),full);assert.equal(f.el('start').value,'2.5');assert.equal(f.images.length,0);assert.equal(f.videos.length,0);
+  f.prompt('Vervang alleen de persoon en behoud deze volledige scène.');f.el('prepare').click();f.el('tryShortVideo').click();await settle(()=>f.el('uploadDialog').open);
+  assert.equal(f.w.rigPreparedMedia().selectedSeconds,6);assert.ok(f.w.rigPreparedMedia().trialToken);assert.equal(Number(f.el('duration').value),full);assert.equal(f.videos[0][3],6);assert.equal(f.el('personInput').files[0],person);assert.equal(f.el('motionInput').files[0],motion);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'||p==='/api/payments/create'),false);
+ }finally{f.dom.window.close();}
+});
+
+test('a new source loaded while Recast is selected starts with its actual capped full selection rather than six seconds',()=>{
+ const f=fixture({storage:new Map([['rig-video-mode:v1','edit']])});try{
+  assert.equal(f.w.rigGenerationQuality(),'human-recast');f.load();assert.equal(f.el('motionVideo').duration,60);assert.equal(f.el('duration').value,'15');assert.equal(f.images.length,0);assert.equal(f.videos.length,0);assert.equal(f.calls.some(([p])=>p==='/api/assets'||p==='/api/generations'),false);
  }finally{f.dom.window.close();}
 });

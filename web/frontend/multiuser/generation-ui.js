@@ -144,7 +144,7 @@
     } catch(error) { quote=null;clearQuotePortrait();note(error.message || 'De prijs kon niet worden berekend.'); }
     finally { setActive(false);el('confirmUpload').disabled=false; }
   }
-  async function recoverGeneration() {
+  async function recoverGeneration({resumeWorkflow=true,fromHistory=false}={}) {
     if(active)return;const intent=beginWorkflowIntent();setActive(true);el('checkGeneration').disabled=true;
     try {
       let id=window.rigScopedStorage.getItem('rig-generation-job');
@@ -153,7 +153,7 @@
         const data=await call(`/api/generation-intents/${encodeURIComponent(entry.idempotencyKey)}/reconcile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:entry.quoteId})});
         if(data.state==='canceled'){window.rigScopedStorage.removeItem('rig-generation-pending');el('checkGeneration').hidden=true;note('De opdracht is niet gestart. Je kunt opnieuw een prijs berekenen.');return;}
         if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');id=data.id;window.rigScopedStorage.setItem('rig-generation-job',id);window.rigScopedStorage.removeItem('rig-generation-pending');document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id,trialToken:window.rigTrialTokenForQuote?.(entry.quoteId)??null}}));}
-      if(intent.current())await follow(id,intent);
+      if(intent.current())await follow(id,intent,{resumeWorkflow,fromHistory});
     }catch(error){if(intent.current())note(`${error.message || 'De opdrachtstatus is onbekend.'} Start geen nieuwe opdracht voordat dit is opgelost.`)}finally{refreshBalance();setActive(false);el('checkGeneration').disabled=false;}
   }
   async function confirm() {
@@ -199,7 +199,7 @@
     }
     finally{ownerVerifying=false;setActive(false);if(!ownFal||sessionCurrent()){refreshBalance();el('confirmGeneration').disabled=false;}}
   }
-  async function follow(id,intent=null,{resumeWorkflow=true}={}) {
+  async function follow(id,intent=null,{resumeWorkflow=true,fromHistory=false}={}) {
     for(let i=0;i<180;i++) {
       if(intent&&!intent.current())return;
       const data=await call(`/api/generations/${encodeURIComponent(id)}`,intent?{signal:intent.abort.signal}:{});
@@ -216,7 +216,7 @@
       }
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery}}));return;
+        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery,fromHistory}}));return;
       }
       if(data.state==='failed'){
         document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));
@@ -243,9 +243,11 @@
   }
   el('recentVideo').addEventListener('click',async()=>{
     if(!recentId||active)return;el('quoteDialog').showModal();
+    let pendingTrial=false;try{const entry=JSON.parse(window.rigScopedStorage.getItem('rig-generation-pending')||'null');pendingTrial=!!entry&&!!window.rigTrialTokenForQuote?.(entry.quoteId);}catch{}
+    if(pendingTrial&&!window.rigScopedStorage.getItem('rig-generation-job')){await recoverGeneration({resumeWorkflow:false,fromHistory:true});return;}
     if(recentState!=='completed'&&!bindRecovery(recentId)){note('Er staat al een andere aanvraag open. Controleer eerst de status van die aanvraag.');el('checkGeneration').hidden=false;return;}
     const intent=beginWorkflowIntent();setActive(true);
-    try{await follow(recentId,intent,{resumeWorkflow:false});}catch{if(intent.current())note('Je video is momenteel niet beschikbaar.');}finally{if(bindingCurrent(intent.binding))setActive(false);else active=false;}
+    try{await follow(recentId,intent,{resumeWorkflow:false,fromHistory:true});}catch{if(intent.current())note('Je video is momenteel niet beschikbaar.');}finally{if(bindingCurrent(intent.binding))setActive(false);else active=false;}
   });
   // The Mac app shows a non-binding fal USD estimate before submission.
   // This preliminary preview uses only browser metadata and the fixed dated

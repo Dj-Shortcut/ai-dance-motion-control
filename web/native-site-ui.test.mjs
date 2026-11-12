@@ -48,9 +48,21 @@ test('native boot reuses the studio, keeps native sign-in anchors and mounts the
  const started=await startNativeSiteApp({window:w,auth,loadScript:async name=>{loaded.push(name);}});
  try{
   assert.deepEqual(loaded,['media.js','app.js','flow.js','owner-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);assert.equal(w.rigNativeSite,true);assert.equal(w.rigVideoFunding,'sponsored');assert.equal(d.getElementById('rigStudio').hidden,false);
+  assert.equal(w.rigDraftStorage,started.binding.draftStorage);assert.equal(w.rigScopedStorage,started.binding.scopedStorage);assert.notEqual(w.rigDraftStorage,w.rigScopedStorage);
   assert.equal(d.getElementById('authLogin').tagName,'A');assert.match(d.getElementById('authLogin').href,/\/signin-with-chatgpt\?return_to=%2F$/);assert.equal(d.getElementById('authLogin').target,'_top');assert.match(d.getElementById('authLogout').href,/\/signout-with-chatgpt$/);
   assert.equal(w.location.hash,'');assert.match(d.querySelector('.sponsor-invitation').textContent,/Activeer gratis €5/);assert.equal(calls.some(path=>path.includes('redeem')),false);
   listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(generationDisposed,1);started.dispose();assert.equal(generationDisposed,1);
+ }finally{started.dispose();dom.window.close();}
+});
+test('native explicit logout clears only the current account persisted trial slot before ending its binding',async()=>{
+ const {dom,w,d}=page();
+ const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:()=>()=>{},dispose(){},api:async path=>Response.json(path==='/api/session'?{userId:alice}:{enabled:false})};
+ const started=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}}),key=id=>`rig-user:${id}:rig-trial-continuation:v1`;
+ try{
+  w.localStorage.setItem(key(alice),'old-current-account-metadata');w.localStorage.setItem(key(bob),'other-account-metadata');
+  w.sessionStorage.setItem(key(alice),'legacy-current-account-metadata');started.binding.scopedStorage.setItem('rig-generation-job','existing-owned-job');
+  const logout=d.getElementById('authLogout');logout.addEventListener('click',event=>event.preventDefault());logout.dispatchEvent(new w.MouseEvent('click',{bubbles:true,cancelable:true}));
+  assert.equal(w.localStorage.getItem(key(alice)),null);assert.equal(w.sessionStorage.getItem(key(alice)),null);assert.equal(w.localStorage.getItem(key(bob)),'other-account-metadata');assert.equal(w.sessionStorage.getItem(`rig-user:${alice}:rig-generation-job`),'existing-owned-job');assert.equal(started.binding.isActive(),false);assert.throws(()=>w.rigDraftStorage.getItem('rig-trial-continuation:v1'),/beëindigd/);
  }finally{started.dispose();dom.window.close();}
 });
 test('native visitor can sign in without loading the studio or requiring Google',async()=>{
