@@ -204,7 +204,7 @@
       }
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');el('checkGeneration').hidden=true;note('Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id}}));return;
+        const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery}}));return;
       }
       if(data.state==='failed'){
         document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));
@@ -218,7 +218,7 @@
     }
     note('Je opdracht loopt nog. Je kunt de status later opnieuw bekijken.');
   }
-  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id:data.job.id,popup:false}}));}}catch{}}
+  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');}}catch{}}
   el('recentVideo').addEventListener('click',async()=>{if(!recentId||active)return;el('quoteDialog').showModal();setActive(true);try{await follow(recentId)}catch{note('Je video is momenteel niet beschikbaar.')}finally{setActive(false)}});
   // The Mac app shows a non-binding fal USD estimate before submission.
   // This preliminary preview uses only browser metadata and the fixed dated

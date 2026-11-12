@@ -1,8 +1,9 @@
 # Video processing contracts
 
-An idea tile is a draft description, not evidence that its result is supported.
 Availability must come from the server's enabled workflow and a verified input
 contract. A successful HTTP response proves completion, not visual acceptance.
+The interface follows [the RIG interface contract](interface-contract.md);
+written example tiles are deliberately absent.
 
 ## Existing routes
 
@@ -12,9 +13,8 @@ contract. A successful HTTP response proves completion, not visual acceptance.
 | Creative changes to an existing video, including an animal character | Kling O3 Standard Edit | Video, identity references, description, original sound | Public editing remains disabled; the owner identity-only experiment failed scene/framing acceptance |
 | Replace a person while keeping the source scene, camera and performance | H3 Max Recast, owner candidate only | Source video, one explicitly chosen portrait, fixed 1080P, realism and safety enabled | Not visually validated; owner validation only; no O3 fallback |
 
-The current dance/grandma ideas select Motion and a description. The band/film
-ideas originally selected the same O3 Edit route with different descriptions.
-They were not four independently implemented provider workflows.
+The earlier example tiles only selected modes and descriptions. They were not
+separate provider workflows and have been removed at the user's request.
 
 ## Human Recast candidate
 
@@ -69,13 +69,15 @@ user's selected full duration. Keep the full draft while preparing a separate
 five-second Motion/Edit working clip or six-second Recast working clip. Upload
 and price the actual working clip, never the full-duration input by mistake.
 
-After completion, offer `Maak volledige video` in the result and confirmation
-popup. It restores the chosen files, start, duration, crop, portrait/references,
-description, audio and model, then returns to the ordinary preparation, fresh
-quote and explicit confirmation. The trial is billed separately; continuing
-never automatically purchases or submits the full generation. A completed
-older job without a saved full draft must ask the user to choose a longer
-duration rather than inventing their previous selection.
+After completion, show the playable trial at the existing result position and
+reuse the single sticky primary action for `Maak volledige video`. Do not add
+continuation buttons below the result or in the completion popup. The action
+restores the chosen files, start, duration, crop, portrait/references,
+description, audio and model in the existing description popup, then uses the
+ordinary preparation, fresh quote and explicit confirmation. The trial is
+billed separately; continuing never automatically purchases or submits the
+full generation. Only a matching saved trial draft can offer this continuation;
+an unknown older completed video is not relabelled or sold as a trial.
 
 The same tab can retain references to the original local File objects. A real
 reload retains only bounded account-scoped continuation metadata; it does not

@@ -58,12 +58,6 @@ footer{position:sticky;bottom:0;z-index:2;padding:12px 0;background:#111416;bord
 .primary{min-height:48px;border-radius:12px;font-size:16px;padding:12px 26px}
 @media(max-width:700px){main{gap:22px;padding-top:18px}.inputs{gap:22px}.slot .display{height:240px}.result-display{height:280px}.video-mode-tabs{grid-template-columns:1fr}.video-mode-tabs button{padding:14px 16px}footer{flex-direction:column;align-items:stretch;gap:10px}.actions{justify-content:space-between}.actions .primary{flex:1}.status small{max-width:none}}
 
-/* Idea tiles: one tap picks the video type and fills in the description. */
-.ideas-panel{display:flex;flex-direction:column;gap:10px;margin-top:-6px}.ideas-title{margin:0;font-size:14px;font-weight:600;color:#aab4b2}
-.ideas{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.idea{display:flex;align-items:center;gap:12px;min-height:64px;padding:12px 14px;border:2px solid #2e3a37;border-radius:14px;background:#171e1c;color:#eef3f1;text-align:left;font-size:14px;font-weight:500;line-height:1.3}.idea:hover{border-color:#4a5e57}.idea[aria-pressed="true"]{border-color:var(--mint);background:#1b2a24}.idea-icon{flex-shrink:0;color:var(--mint)}
-@media(max-width:900px){.ideas{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.idea{flex-direction:column;align-items:flex-start;gap:8px;padding:12px}}
-
 .brief-actions{display:flex;gap:10px;flex-wrap:wrap}.brief-actions button{flex:1 1 190px;padding:12px 14px}#briefDialog .brief-actions .primary{width:auto;margin:0}#tryShortVideo:disabled{opacity:.45;cursor:not-allowed}#shortTrialHint{color:var(--muted,#aebcb8)}
 
 #briefDialog .brief-feedback{margin:14px 0;line-height:1.5}#briefDialog .brief-correction{margin:0 0 14px}#briefDialog[aria-busy="true"] .brief-feedback{color:var(--mint,#88d6ba)}

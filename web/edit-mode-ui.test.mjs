@@ -364,18 +364,23 @@ test('capabilities default to motion only and reject malformed or invented quali
   try{const valid=qualities===undefined||Array.isArray(qualities)&&qualities.length===3;const enabled=await enableVideoIfAvailable({binding:{isActive:()=>true,request:async()=>Response.json({enabled:true,qualities})},window:w,document:w.document,loadScript:async()=>{}});assert.equal(enabled,valid);if(enabled)assert.deepEqual(w.rigVideoQualities,qualities??['standard','pro']);}finally{dom.window.close();}
  }
 });
-test('idea tiles preset only the video type and description, and hide types the server does not offer',()=>{
+test('the main flow has no idea tiles and manual video types retain their own descriptions',()=>{
  const f=fixture();
  try{
-  const band=f.el('idea-band'),dance=f.el('idea-dans');
-  assert.equal(band.hidden,false);assert.equal(band.getAttribute('aria-pressed'),'false');
-  band.click();assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.el('editPrompt').value,band.dataset.ideaPrompt);assert.equal(band.getAttribute('aria-pressed'),'true');assert.equal(f.el('status').textContent,'Idee gekozen. Kies nu een foto.');assert.equal(f.calls.length,0);
-  dance.click();assert.equal(f.w.rigVideoMode(),'motion');assert.equal(f.el('editPrompt').value,dance.dataset.ideaPrompt);assert.equal(dance.getAttribute('aria-pressed'),'true');assert.equal(band.getAttribute('aria-pressed'),'false');
-  f.prompt('Mijn eigen idee.');assert.equal(dance.getAttribute('aria-pressed'),'false');
+  assert.equal(f.d.querySelector('.ideas-panel, .idea-card, [data-idea-mode], [data-idea-prompt]'),null);
+  assert.doesNotMatch(f.d.querySelector('main').textContent,/Begin met een idee/);
+  assert.equal(f.w.rigVideoMode(),'motion');assert.match(f.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);
+  f.el('editModeButton').click();assert.equal(f.w.rigVideoMode(),'edit');assert.equal(f.w.rigGenerationQuality(),'edit-standard');assert.match(f.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);
+  f.prompt('Vervang alleen de zanger door mijn foto.');
+  f.el('motionModeButton').click();assert.equal(f.w.rigVideoMode(),'motion');assert.match(f.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);
+  f.prompt('Laat mij de volledige dans nadoen.');
+  f.el('editModeButton').click();assert.equal(f.el('editPrompt').value,'Vervang alleen de zanger door mijn foto.');
+  f.el('motionModeButton').click();assert.equal(f.el('editPrompt').value,'Laat mij de volledige dans nadoen.');
+  assert.equal(f.el('briefDialog').open,false);assert.equal(f.calls.length,0);assert.equal(f.prepared.length,0);
  }finally{f.dom.window.close();}
  const motionOnly=fixture({qualities:['standard','pro']});
  try{
-  assert.equal(motionOnly.el('idea-band').hidden,true);assert.equal(motionOnly.el('idea-film').hidden,true);assert.equal(motionOnly.el('idea-dans').hidden,false);
-  motionOnly.el('idea-band').click();assert.equal(motionOnly.w.rigVideoMode(),'motion');assert.doesNotMatch(motionOnly.el('editPrompt').value,/muzikant/);
+  assert.equal(motionOnly.d.querySelector('.ideas-panel, .idea-card, [data-idea-mode], [data-idea-prompt]'),null);
+  motionOnly.el('editModeButton').click();assert.equal(motionOnly.w.rigVideoMode(),'motion');assert.match(motionOnly.el('editPrompt').value,/bewegingen uit de video natuurlijk nadoen/);assert.equal(motionOnly.calls.length,0);
  }finally{motionOnly.dom.window.close();}
 });
