@@ -13,7 +13,7 @@ if(values['project-id']&&!/^appgprj_[A-Za-z0-9]{20,80}$/.test(values['project-id
 const browser=await build({entryPoints:[join(root,'frontend/multiuser/native-site-boot.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const security=await build({entryPoints:[join(root,'frontend/multiuser/owner-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const cleanup=await build({entryPoints:[join(root,'frontend/multiuser/cleanup-client.mjs')],bundle:true,format:'esm',platform:'browser',target:'es2022',write:false,logLevel:'silent',legalComments:'eof'});
-const names=['index.html','style.css','media.js','app.js','payments.js','generation-ui.js','owner-administration.js','finance.js','screen-recording-crop.mjs','cleanup-contract.mjs','cleanup-status.css','cleanup-overlay-editor.css'];
+const names=['index.html','style.css','media.js','app.js','flow.js','payments.js','generation-ui.js','owner-administration.js','finance.js','screen-recording-crop.mjs','cleanup-contract.mjs','cleanup-status.css','cleanup-overlay-editor.css'];
 const files=Object.fromEntries(await Promise.all(names.map(async name=>[`/multiuser/${name}`,await readFile(join(root,'frontend/multiuser',name),'utf8')])));
 const branding={'/favicon.ico':'favicon.ico','/favicon.svg':'favicon.svg','/apple-touch-icon.png':'apple-touch-icon.png','/social/rig-share-v1.png':'rig-share-v1.png'};
 for(const [path,name]of Object.entries(branding))files[path]={kind:'public-brand-asset',base64:(await readFile(join(root,'branding',name))).toString('base64')};
@@ -41,8 +41,8 @@ notice+='English recognition data: https://tessdata.projectnaptha.com/4.0.0_best
 ocr['NOTICE.txt']=Buffer.from(notice);
 for(const [name,bytes]of Object.entries(ocr))files['/multiuser/ocr/v7/'+name]={kind:'public-cleanup-asset',base64:bytes.toString('base64')};
 files['/multiuser/index.html']=files['/multiuser/index.html']
- .replace('<button id="authLogin" class="auth-login" type="button" hidden>Inloggen met Google</button>','<a id="authLogin" class="auth-login" href="/signin-with-chatgpt?return_to=%2F" target="_top" hidden>Inloggen met ChatGPT</a>')
- .replace('<button id="authLogout" class="account auth-logout" type="button" hidden>Afmelden</button>','<a id="authLogout" class="account auth-logout" href="/signout-with-chatgpt?return_to=%2F" target="_top" hidden>Afmelden</a>');
+ .replace(/<button\b(?=[^>]*\bid="authLogin")[^>]*>\s*Inloggen met Google\s*<\/button>/,'<a id="authLogin" class="auth-login" href="/signin-with-chatgpt?return_to=%2F" target="_top" hidden>Inloggen met ChatGPT</a>')
+ .replace(/<button\b(?=[^>]*\bid="authLogout")[^>]*>\s*Afmelden\s*<\/button>/,'<a id="authLogout" class="account auth-logout" href="/signout-with-chatgpt?return_to=%2F" target="_top" hidden>Afmelden</a>');
 if(files['/multiuser/index.html'].includes('Inloggen met Google'))throw Error('Native sign-in replacement failed.');
 files['/multiuser/auth-bundle.js']=browser.outputFiles[0].text;
 files['/multiuser/owner-security.js']=security.outputFiles[0].text;

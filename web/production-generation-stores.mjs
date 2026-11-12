@@ -3,6 +3,7 @@ import {prepareOwnerMutation} from './owner-security.mjs';
 import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} from './profit-policy.mjs';
 import {RECAST_QUALITY} from './recast-contract.mjs';
 import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
+import {isProviderBillingRejection} from './provider-response.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -173,6 +174,19 @@ export function createProductionD1GenerationStores(db,{productionContext}={}){
     WHERE j.id=? AND j.user_id=? AND j.state='failed' AND j.failure_code='preparation_failed' AND j.fal_request_id IS NULL AND ${mode} AND ${creditActive('j')}`).bind(`release:${id}`,id,user);
    await db.batch([update,release,finalOwner(user,id,'failed')]);
    return checkedFinal(user,id,'failed',{falRequestId:null,reason:'preparation_failed'});
+  },
+  async markSubmissionRejected(user,id,proof){
+   if(!isProviderBillingRejection(proof,{userId:user,jobId:id}))throw Error('Verified queue rejection required');
+   // Only the exact dispatch that received a definitive billing rejection may
+   // finish without a provider ID. Never release a queued/unknown attempt or
+   // infer a refusal from elapsed time. Retain its conservative budget journal.
+   const update=db.prepare(`UPDATE rig_generation_jobs SET state='failed',failure_code='provider_billing_locked',finalized_at=?,poll_token=NULL,poll_lease_until=NULL
+    WHERE id=? AND user_id=? AND state='submitting' AND fal_request_id IS NULL AND poll_token='dispatch-authorized' AND ${mode} AND ${active('rig_generation_jobs')}
+    AND EXISTS(SELECT 1 FROM rig_generation_costs c WHERE c.job_id=rig_generation_jobs.id AND c.quote_id=rig_generation_jobs.quote_id AND c.user_id=rig_generation_jobs.user_id)`).bind(Date.now(),id,user);
+   const release=db.prepare(`INSERT OR IGNORE INTO rig_ledger(event_id,user_id,order_id,delta) SELECT ?,j.user_id,NULL,j.price_cents FROM rig_generation_jobs j
+    WHERE j.id=? AND j.user_id=? AND j.state='failed' AND j.failure_code='provider_billing_locked' AND j.fal_request_id IS NULL AND ${mode} AND ${creditActive('j')}`).bind(`release:${id}`,id,user);
+   await db.batch([update,release,finalOwner(user,id,'failed')]);
+   return checkedFinal(user,id,'failed',{falRequestId:null,reason:'provider_billing_locked'});
   },
   async claimPoll(user,id){
    const token=crypto.randomUUID(),now=Date.now();const result=await db.prepare(`UPDATE rig_generation_jobs SET poll_token=?,poll_lease_until=?

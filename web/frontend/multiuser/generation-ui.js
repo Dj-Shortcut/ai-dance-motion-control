@@ -10,12 +10,19 @@
   const falTransferPolicy = 'fal-temporary-links-v1';
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je gekozen foto’s, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   const falRecastNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
-  let quote = null, active = false, recentId=null,ownerVerifying=false;
+  let quote = null, active = false, recentId=null,recentState=null,ownerVerifying=false;
   let workflowIntent=null,cleanupModule=null;
   const loadCleanupModule=()=>cleanupModule??=(typeof window.rigLoadCleanupModule==='function'?window.rigLoadCleanupModule():import('/multiuser/cleanup-client.js')).catch(error=>{cleanupModule=null;throw error;});
   const getBinding=()=>({request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage});
+  const bindingCurrent=binding=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&binding.active?.()===true;
   function stopWorkflowIntent(){workflowIntent?.abort.abort();workflowIntent=null;}
-  function beginWorkflowIntent(){stopWorkflowIntent();const binding=getBinding(),intent={abort:new AbortController(),binding};intent.current=()=>workflowIntent===intent&&!intent.abort.signal.aborted&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&binding.active?.()===true;workflowIntent=intent;return intent;}
+  function beginWorkflowIntent(){stopWorkflowIntent();const binding=getBinding(),intent={abort:new AbortController(),binding};intent.current=()=>workflowIntent===intent&&!intent.abort.signal.aborted&&bindingCurrent(binding);workflowIntent=intent;return intent;}
+  function bindRecovery(id){
+    const storage=window.rigScopedStorage,stored=storage.getItem('rig-generation-job');
+    if(storage.getItem('rig-generation-pending')||stored&&stored!==id)return false;
+    if(!stored)storage.setItem('rig-generation-job',id);
+    el('checkGeneration').hidden=false;return true;
+  }
 
   const setActive=value=>{active=value;el('recentVideo').disabled=value;el('checkGeneration').disabled=value;el('checkGeneration').textContent=value?'Status wordt gecontroleerd…':'Controleer opdracht';document.dispatchEvent(new Event('rig-generation-busy-change'));};
   window.rigGenerationBusy=()=>active||ownerVerifying;
@@ -38,6 +45,10 @@
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
   function providerFailureMessage(data){
     if(data.state!=='failed')return null;
+    if(data.failureCode==='provider_billing_locked'){
+      if(ownerProvider(data))return 'Je Fal-account heeft onvoldoende tegoed. Controleer je saldo op fal.ai.'+(failureFinalized(data)?' De opdracht is afgesloten.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
+      return 'De videodienst is tijdelijk niet beschikbaar.'+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.');
+    }
     const reason=data.failureCode==='provider_input_unavailable'?'Fal kon je foto of video niet openen.':data.failureCode==='provider_subject_not_detected'?'Fal herkende geen duidelijk menselijk bovenlichaam op je foto.':null;
     if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
@@ -172,7 +183,7 @@
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
       if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
-      document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
+      document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');recentId=data.id;el('recentVideo').hidden=false;el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       if(intent.current())await follow(data.id,intent);
     } catch(error) {
       if(ownFal&&!sessionCurrent()||!intent.current())return;
@@ -188,13 +199,14 @@
     }
     finally{ownerVerifying=false;setActive(false);if(!ownFal||sessionCurrent()){refreshBalance();el('confirmGeneration').disabled=false;}}
   }
-  async function follow(id,intent=null) {
+  async function follow(id,intent=null,{resumeWorkflow=true}={}) {
     for(let i=0;i<180;i++) {
       if(intent&&!intent.current())return;
       const data=await call(`/api/generations/${encodeURIComponent(id)}`,intent?{signal:intent.abort.signal}:{});
       if(intent&&!intent.current())return;
+      if(id===recentId)recentState=data.state;
       if(data.workflowVersion==='rig-workflow-v2'&&['awaiting_client_processing','ready_to_advance'].includes(data.state)){
-        if(!intent){note('De lokale tussenstap staat klaar. Klik op Controleer opdracht om je bestaande video verder te verwerken.');el('checkGeneration').hidden=false;return;}
+        if(!intent||!resumeWorkflow){note('De lokale tussenstap staat klaar. Klik op Controleer opdracht om je bestaande video verder te verwerken.');el('checkGeneration').hidden=false;return;}
         const module=await loadCleanupModule();if(!intent.current())return;
         if(!module.cleanupSupported(window)){note('Deze browser kan de lokale tussenstap niet uitvoeren. Open je bestaande opdracht in een ondersteunde browser.');el('checkGeneration').hidden=false;return;}
         note('Je video wordt lokaal gecombineerd; het oorspronkelijke beeld en geluid blijven buiten het masker behouden. Houd RIG open.');
@@ -204,13 +216,13 @@
       }
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;window.rigScopedStorage.removeItem('rig-generation-job');el('checkGeneration').hidden=true;note('Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id}}));return;
+        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery}}));return;
       }
       if(data.state==='failed'){
         document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));
         const providerMessage=providerFailureMessage(data),finalized=failureFinalized(data);
-        if(finalized)window.rigScopedStorage.removeItem('rig-generation-job');
-        el('checkGeneration').hidden=finalized;
+        if(finalized&&window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');
+        el('checkGeneration').hidden=finalized&&!window.rigScopedStorage.getItem('rig-generation-job')&&!window.rigScopedStorage.getItem('rig-generation-pending');
         note(providerMessage||(finalized?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
       }
       if(['unknown','needs_review'].includes(data.state)){note('De opdracht wordt gecontroleerd. Start niet opnieuw.');return;}
@@ -218,8 +230,23 @@
     }
     note('Je opdracht loopt nog. Je kunt de status later opnieuw bekijken.');
   }
-  async function discoverRecent(){try{const data=await call('/api/generations/recent');if(data.job?.state==='completed' && /^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){recentId=data.job.id;el('recentVideo').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===data.job.id)window.rigScopedStorage.removeItem('rig-generation-job');document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id:data.job.id,popup:false}}));}}catch{}}
-  el('recentVideo').addEventListener('click',async()=>{if(!recentId||active)return;el('quoteDialog').showModal();setActive(true);try{await follow(recentId)}catch{note('Je video is momenteel niet beschikbaar.')}finally{setActive(false)}});
+  async function discoverRecent(){
+    const binding=getBinding();
+    try{
+      const data=await call('/api/generations/recent');if(!bindingCurrent(binding))return;
+      if(data.job&&['completed','submitting','queued','processing','awaiting_client_processing','ready_to_advance','unknown','needs_review','failed'].includes(data.job.state)&&/^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){
+        recentId=data.job.id;recentState=data.job.state;el('recentVideo').hidden=false;
+        if(recentState==='completed'){if(binding.storage.getItem('rig-generation-job')===recentId)binding.storage.removeItem('rig-generation-job');}
+        else bindRecovery(recentId);
+      }
+    }catch{}
+  }
+  el('recentVideo').addEventListener('click',async()=>{
+    if(!recentId||active)return;el('quoteDialog').showModal();
+    if(recentState!=='completed'&&!bindRecovery(recentId)){note('Er staat al een andere aanvraag open. Controleer eerst de status van die aanvraag.');el('checkGeneration').hidden=false;return;}
+    const intent=beginWorkflowIntent();setActive(true);
+    try{await follow(recentId,intent,{resumeWorkflow:false});}catch{if(intent.current())note('Je video is momenteel niet beschikbaar.');}finally{if(bindingCurrent(intent.binding))setActive(false);else active=false;}
+  });
   // The Mac app shows a non-binding fal USD estimate before submission.
   // This preliminary preview uses only browser metadata and the fixed dated
   // reference rate from the test backend; it never authorizes a charge.

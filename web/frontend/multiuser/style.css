@@ -58,12 +58,105 @@ footer{position:sticky;bottom:0;z-index:2;padding:12px 0;background:#111416;bord
 .primary{min-height:48px;border-radius:12px;font-size:16px;padding:12px 26px}
 @media(max-width:700px){main{gap:22px;padding-top:18px}.inputs{gap:22px}.slot .display{height:240px}.result-display{height:280px}.video-mode-tabs{grid-template-columns:1fr}.video-mode-tabs button{padding:14px 16px}footer{flex-direction:column;align-items:stretch;gap:10px}.actions{justify-content:space-between}.actions .primary{flex:1}.status small{max-width:none}}
 
-/* Idea tiles: one tap picks the video type and fills in the description. */
-.ideas-panel{display:flex;flex-direction:column;gap:10px;margin-top:-6px}.ideas-title{margin:0;font-size:14px;font-weight:600;color:#aab4b2}
-.ideas{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.idea{display:flex;align-items:center;gap:12px;min-height:64px;padding:12px 14px;border:2px solid #2e3a37;border-radius:14px;background:#171e1c;color:#eef3f1;text-align:left;font-size:14px;font-weight:500;line-height:1.3}.idea:hover{border-color:#4a5e57}.idea[aria-pressed="true"]{border-color:var(--mint);background:#1b2a24}.idea-icon{flex-shrink:0;color:var(--mint)}
-@media(max-width:900px){.ideas{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.idea{flex-direction:column;align-items:flex-start;gap:8px;padding:12px}}
-
 .brief-actions{display:flex;gap:10px;flex-wrap:wrap}.brief-actions button{flex:1 1 190px;padding:12px 14px}#briefDialog .brief-actions .primary{width:auto;margin:0}#tryShortVideo:disabled{opacity:.45;cursor:not-allowed}#shortTrialHint{color:var(--muted,#aebcb8)}
 
 #briefDialog .brief-feedback{margin:14px 0;line-height:1.5}#briefDialog .brief-correction{margin:0 0 14px}#briefDialog[aria-busy="true"] .brief-feedback{color:var(--mint,#88d6ba)}
+
+/* RIG gsm-schetsen: one real step at a time, using the existing controls. */
+body.guided-flow{--mint:#8fe3b8;--muted:#a9b3b0;background:#101416;color:#eef2f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.guided-flow .shell{max-width:1080px;min-height:100dvh;padding:0 28px 20px}
+.guided-flow header{height:auto;min-height:76px;gap:16px;padding:16px 0;border:0;flex-wrap:wrap}
+.guided-flow header .brand{font-size:23px;letter-spacing:.02em;font-weight:750}
+.guided-flow header .preview-tag{display:none}
+.guided-flow header .account{min-height:36px;font-size:13px}
+.guided-flow #recentVideo{color:#eef2f0;font-weight:600}
+.guided-flow main{max-width:900px;min-height:calc(100dvh - 96px);gap:22px;padding:12px 0 0}
+.guided-flow .flow-screen{min-width:0}
+.guided-flow .flow-start{width:min(100%,640px);margin:40px auto 0;display:flex;flex-direction:column;gap:30px}
+.guided-flow .intro h1{font-size:clamp(36px,6vw,54px);line-height:1.05;letter-spacing:-.035em;font-weight:750}
+.guided-flow .intro p{font-size:16px;line-height:1.5;color:var(--muted);max-width:410px;margin:14px 0 0}
+.flow-illustration{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.flow-illustration figure{margin:0;display:flex;flex-direction:column;gap:9px;min-width:0}
+.flow-illustration-card{height:clamp(132px,22vw,200px);display:grid;place-items:center;border-radius:17px}
+.flow-illustration-card svg{width:38px;height:38px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.flow-photo-color{background:#2b3a46;color:#c9d6df}.flow-video-color{background:#3a2f46;color:#d9cfe3}.flow-result-color{background:#2c4238;color:var(--mint);border:2px solid var(--mint)}
+.flow-illustration figcaption{text-align:center;color:var(--muted);font-size:13px}.flow-illustration figure:last-child figcaption{color:#eef2f0;font-weight:600}
+.flow-navigation{display:flex;flex-direction:column;gap:20px}
+.flow-step-bar{display:flex;align-items:center;justify-content:space-between;min-height:44px;color:var(--muted);font-size:13px}
+.flow-back{display:grid;place-items:center;width:44px;height:44px;padding:10px;border:0;border-radius:10px;background:transparent;color:#eef2f0;flex:none}
+.flow-back:hover{background:#ffffff08}.flow-back svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.flow-nav-balance{width:44px}
+.flow-progress{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.flow-progress span{height:4px;border-radius:3px;background:#2e383c}.flow-progress .is-current,.flow-progress [aria-current="step"],.flow-progress [data-complete="true"]{background:var(--mint)}
+.guided-flow #flowTitle,.guided-flow .flow-make-title{font-size:30px;line-height:1.12;letter-spacing:-.025em;margin:2px 0 0;font-weight:750;outline:none}
+.guided-flow .inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}
+.guided-flow .slot{gap:10px}.guided-flow .slot>.step{font-size:14px;font-weight:600;min-height:22px}
+.flow-person-card{display:flex;align-items:center;gap:12px;padding:10px;border:1px solid #2e383c;border-radius:16px;background:#1a2023;min-width:0}
+.guided-flow .flow-person-slot #personDisplay{width:84px;height:104px;min-height:104px;flex:none;border-radius:12px;background:#2b3a46}
+.guided-flow .flow-person-slot .empty{font-size:11px;line-height:1.3;gap:8px;padding:6px;color:#c9d6df}
+.flow-person-meta{flex:1;min-width:0}.flow-person-meta .under{gap:6px;align-items:flex-start;flex-direction:column}
+.flow-person-meta .file-label{max-width:100%;font-size:14px;line-height:1.4;min-height:30px;color:#c9d6df;white-space:normal;overflow-wrap:anywhere}
+.guided-flow .slot-tip{font-size:13px;line-height:1.45;color:var(--muted)}
+.guided-flow #frameControl{gap:8px;min-height:44px;white-space:normal;flex-wrap:wrap}.guided-flow #frameControl input{flex:1;min-width:90px}.guided-flow #frameControl output{font-variant-numeric:tabular-nums}
+.guided-flow .flow-motion-slot #motionDisplay{height:170px;min-height:170px;border-radius:14px;background:#3a2f46}
+.guided-flow .flow-motion-slot .under{font-size:13px;gap:8px}.guided-flow .flow-motion-slot .file-label{max-width:calc(100% - 55px)}
+.flow-clip{display:flex;flex-direction:column;gap:4px;border:1px solid #2e383c;border-radius:14px;padding:12px 14px;background:#1a2023}
+.flow-clip-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px;font-size:13px;color:var(--muted)}
+.flow-clip-heading output{color:#eef2f0;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.flow-clip>label{font-size:12px;color:var(--muted)}.flow-clip>input{width:100%;margin:0;min-height:32px;accent-color:var(--mint);cursor:ew-resize}
+.flow-clip>input:disabled{cursor:default;opacity:.4}
+.flow-advanced{grid-column:1/-1;border:0;min-width:0}.flow-advanced>summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;min-height:44px;color:var(--muted);font-size:14px;padding:4px 2px}.flow-advanced>summary::-webkit-details-marker{display:none}.flow-advanced>summary:after{content:'⌄';font-size:20px}.flow-advanced[open]>summary:after{transform:rotate(180deg)}
+.flow-advanced-content{display:flex;flex-direction:column;gap:16px;border:1px solid #2e383c;border-radius:14px;padding:14px;background:#171d20}
+.flow-crop-actions{display:flex;gap:10px;flex-wrap:wrap}.guided-flow .flow-crop-actions button{min-height:44px;border:1px solid #40534c;border-radius:10px;padding:10px 14px;text-align:left}
+.guided-flow #trim{flex-wrap:wrap;gap:10px;white-space:normal;font-size:13px}.guided-flow #trim label{display:flex;align-items:center;gap:6px}.guided-flow #trim input{width:65px;min-height:38px;border:1px solid #40534c;border-radius:8px;padding:6px;text-align:left;background:#101416}.guided-flow #useCurrentStart{min-height:38px}
+.guided-flow #moreOptions{border:0;background:transparent}.guided-flow #moreOptions>summary{padding:8px 0;font-size:13px}.guided-flow #moreOptions .references{border:0;padding:8px 0 0;background:transparent}
+.guided-flow #videoModePanel{border:0;background:transparent;padding:0;gap:14px}.guided-flow #modeStepTitle{display:none}
+.guided-flow .video-mode-tabs{gap:16px}.guided-flow .video-mode-tabs button{position:relative;gap:12px;min-width:0;padding:12px;border:2px solid #2e383c;border-radius:18px;background:#1a2023}
+.guided-flow .video-mode-tabs button[aria-pressed="true"]{border-color:var(--mint);background:#1a2023}
+.guided-flow .video-mode-tabs button:after{content:'';position:absolute;width:24px;height:24px;right:15px;bottom:24px;border:2px solid #5c686c;border-radius:50%;box-sizing:border-box}
+.guided-flow .video-mode-tabs button[aria-pressed="true"]:after{border:7px solid var(--mint);background:#101416}
+.guided-flow .video-mode-tabs button>.flow-mode-thumb{display:block;position:relative;width:100%;height:170px;border-radius:12px;overflow:hidden;background:#2b3a46;padding:0}
+.guided-flow #editModeButton>.flow-mode-thumb{background:#3a2f46}.flow-mode-thumb canvas{display:block;width:100%;height:100%;object-fit:cover}
+.guided-flow .video-mode-tabs .flow-thumb-label{position:absolute;left:10px;bottom:10px;background:#101416c9;border-radius:8px;padding:4px 8px;font-size:12px;line-height:1.3;color:#eef2f0}
+.guided-flow .video-mode-tabs .flow-mode-copy{display:flex;flex-direction:column;gap:4px;padding:0 38px 2px 0;width:100%}.guided-flow .video-mode-tabs .flow-mode-copy strong{font-size:18px;font-weight:650}.guided-flow .video-mode-tabs .flow-mode-copy>span{font-size:14px;line-height:1.4;color:var(--muted)}
+.guided-flow #videoModeHint{margin:0;font-size:13px;line-height:1.45;color:var(--muted)}
+.guided-flow footer{margin-top:auto;background:#101416;padding:14px 0 max(14px,env(safe-area-inset-bottom));gap:16px;border-top:0;z-index:3}
+.guided-flow footer .actions{gap:12px}.guided-flow footer .primary{min-height:56px;border-radius:16px;min-width:220px;font-size:17px;font-weight:650}.guided-flow .status{font-size:13px;line-height:1.4;gap:5px}.guided-flow #providerEstimate:empty{display:none}
+.guided-flow main:has(.flow-start:not([hidden])) footer{max-width:640px;width:100%;align-self:center;flex-direction:column;align-items:stretch}.guided-flow main:has(.flow-start:not([hidden])) footer .actions{display:flex}.guided-flow main:has(.flow-start:not([hidden])) #prepare{width:100%}.guided-flow main:has(.flow-start:not([hidden])) #settingsToggle{display:none}
+.guided-flow #briefDialog{position:fixed;inset:0;margin:0;width:100%;max-width:none;height:100dvh;max-height:none;padding:20px max(24px,calc((100vw - 560px)/2)) max(20px,env(safe-area-inset-bottom));border:0;border-radius:0;background:#101416;box-shadow:none;overflow-y:auto}
+.guided-flow #briefDialog[open]{display:flex;flex-direction:column;gap:18px}.guided-flow #briefDialog::backdrop{background:#101416}
+.guided-flow #briefDialog .flow-brief-nav{flex:none}.guided-flow #briefDialog .flow-progress{flex:none;margin-top:-8px}.guided-flow #briefDialog .flow-make-title{font-size:30px;margin:2px 0 0}.flow-brief-context{font-size:14px;font-weight:600;color:var(--muted)}
+.guided-flow #briefDialog .brief-prompt{margin:0;gap:8px;color:#eef2f0;font-size:14px;font-weight:600}.guided-flow #editPrompt{border:1px solid #2e383c;border-radius:12px;background:#1a2023;padding:12px;font-size:15px;line-height:1.5;min-height:100px;font-weight:400;resize:vertical}
+.guided-flow #briefDialog .brief-camera{font-size:13px;line-height:1.45;margin:0;color:var(--muted)}.guided-flow #briefDialog .brief-tools{margin:0}.guided-flow #briefDialog .brief-feedback:empty{display:none}
+.flow-plans{display:flex;flex-direction:column;gap:10px}.guided-flow .flow-plan{display:flex;align-items:center;gap:12px;min-height:82px;width:100%;padding:14px;border:2px solid #2e383c;border-radius:14px;background:#1a2023;color:#eef2f0;text-align:left;font:inherit}
+.guided-flow .flow-plan[aria-pressed="true"]{border-color:var(--mint)}.flow-plan-radio{width:22px;height:22px;border:2px solid #5c686c;border-radius:50%;flex:none}.flow-plan[aria-pressed="true"] .flow-plan-radio{border:7px solid var(--mint);background:#101416}
+.flow-plan-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}.flow-plan-copy strong{font-size:16px;font-weight:600}.flow-plan-copy>span{font-size:13px;line-height:1.4;color:var(--muted)}.flow-plan-price{font-size:15px;font-weight:600;white-space:nowrap}.flow-plan:disabled{opacity:.45;cursor:not-allowed}
+.guided-flow #briefDialog .brief-actions{display:flex;margin-top:auto;position:sticky;bottom:0;padding:16px 0 2px;background:#101416;flex:none}.guided-flow #briefDialog .brief-actions #confirmBrief{flex:1;width:100%;min-height:56px;border-radius:16px;font-size:17px;padding:14px}.guided-flow #recastTrialNote{font-size:12px}
+.guided-flow .result{width:min(100%,640px);align-self:center;gap:16px}.guided-flow #resultTitle{font-size:30px;letter-spacing:-.025em}.guided-flow .result-display{height:min(57dvh,500px);min-height:260px;border:1px solid #2e383c;border-radius:20px;background:#1a2023}.guided-flow .empty-placeholder{padding:24px;text-align:center;line-height:1.5}
+.flow-result-actions{display:flex;gap:10px}.guided-flow .flow-save,.flow-share{display:flex;align-items:center;justify-content:center;flex:1;min-height:56px;border-radius:16px;font-size:16px;font-weight:600;padding:12px 16px;text-decoration:none}.guided-flow .flow-save{background:var(--mint);color:#0d1f17}.flow-share{border:1px solid #2e383c;background:#1a2023;color:#eef2f0}.flow-new-video{align-self:flex-end;min-height:44px;border:0;background:transparent;color:var(--mint);padding:8px 0;font-size:15px}
+.guided-flow main:has(.result:not([hidden])) footer{width:min(100%,640px);align-self:center;align-items:flex-start;flex-direction:column}.guided-flow main:has(.result:not([hidden])) #prepare{min-width:0;min-height:44px;padding:8px 0;border:0;background:transparent;color:var(--mint);font-size:15px;text-align:left;font-weight:500}.guided-flow main:has(.result:not([hidden])) #settingsToggle{display:none}
+@media(max-width:700px){.guided-flow .shell{padding:0 20px 12px}.guided-flow header{min-height:64px;gap:10px;padding:10px 0}.guided-flow header .brand{font-size:22px}.guided-flow header .account{font-size:12px;padding-left:0;padding-right:0}.guided-flow #authInlineStatus{flex-basis:100%;order:3}.guided-flow main{min-height:calc(100dvh - 88px);gap:18px;padding-top:4px}.guided-flow .flow-start{margin-top:22px;gap:26px}.guided-flow .intro h1{font-size:36px}.guided-flow .intro p{margin-top:12px}.flow-illustration{gap:8px}.flow-illustration-card{height:132px;border-radius:14px}.flow-illustration-card svg{width:34px;height:34px}.flow-navigation{gap:18px}.guided-flow #flowTitle,.guided-flow .flow-make-title{font-size:28px}.guided-flow .inputs{grid-template-columns:1fr;gap:18px}.guided-flow .flow-person-slot #personDisplay{height:104px}.guided-flow .flow-motion-slot #motionDisplay{height:170px}.guided-flow .video-mode-tabs{grid-template-columns:1fr;gap:14px}.guided-flow .video-mode-tabs button>.flow-mode-thumb{height:150px}.guided-flow footer{gap:10px;align-items:stretch;flex-direction:column;padding-top:12px}.guided-flow footer .actions{width:100%}.guided-flow footer .primary{width:100%;min-width:0;flex:1}.guided-flow .status small{max-width:none}.guided-flow #briefDialog{padding:16px 20px max(20px,env(safe-area-inset-bottom))}.guided-flow #briefDialog[open]{gap:16px}.guided-flow #briefDialog .flow-make-title{font-size:28px}.guided-flow .result-display{height:min(55dvh,440px)}.guided-flow #resultTitle{font-size:28px}.guided-flow .legal-links{font-size:11px;gap:12px;padding:0 14px}.guided-flow .flow-clip>input{min-height:28px}}
+@media(prefers-reduced-motion:no-preference){.flow-back,.flow-plan,.guided-flow .video-mode-tabs button{transition:border-color .15s,background-color .15s}}
+
+.guided-flow footer #providerEstimate,.guided-flow footer #videoAvailabilityNote{display:none!important}
+
+/* The mobile sketch uses one trim rail, with two real, keyboard-accessible handles. */
+.guided-flow .flow-clip{position:relative;padding-bottom:58px;min-height:94px}
+.guided-flow .flow-clip>label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.guided-flow .flow-clip::before{content:"";position:absolute;left:12px;right:12px;bottom:12px;height:34px;border-radius:8px;background:linear-gradient(to right,#232b2f 0 var(--clip-start,0%),#304a3e var(--clip-start,0%) var(--clip-end,100%),#232b2f var(--clip-end,100%) 100%)}
+.guided-flow .flow-clip>input[type=range]{position:absolute;left:12px;bottom:12px;width:calc(100% - 24px);height:34px;min-height:0;margin:0;padding:0;appearance:none;-webkit-appearance:none;background:transparent;pointer-events:none;accent-color:#8fe3b8}
+.guided-flow .flow-clip>input::-webkit-slider-runnable-track{height:34px;background:transparent}
+.guided-flow .flow-clip>input::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:18px;height:34px;border:3px solid #8fe3b8;border-radius:7px;background:#233c30;pointer-events:auto;cursor:ew-resize}
+.guided-flow .flow-clip>input::-moz-range-track{height:34px;background:transparent}
+.guided-flow .flow-clip>input::-moz-range-thumb{width:14px;height:28px;border:3px solid #8fe3b8;border-radius:7px;background:#233c30;pointer-events:auto;cursor:ew-resize}
+.guided-flow #flowClipStart{z-index:2}.guided-flow #flowClipEnd{z-index:1}
+.guided-flow[data-flow-view=files] header,.guided-flow[data-flow-view=where] header,.guided-flow[data-flow-view=make] header{display:none}
+.guided-flow #flowAdvanced .flow-settings-button{display:flex;align-items:center;justify-content:space-between;align-self:stretch;min-height:44px;border:0;border-top:1px solid #2e383c;border-radius:0;background:transparent;color:var(--muted);font-size:14px;text-align:left;padding:12px 0 0}
+.guided-flow #flowAdvanced .flow-settings-button:after{content:'›';font-size:22px;line-height:1}
+.guided-flow #flowAdvanced .flow-settings-button:hover{color:#eef2f0}
+
+/* Result actions follow the video in normal flow, without covering Save. */
+.guided-flow .result>.under{display:none}
+.guided-flow main:has(.result:not([hidden])) footer{position:static;bottom:auto}
+.guided-flow main:has(.result:not([hidden])) footer .actions{display:flex;align-items:center;justify-content:space-between;width:100%;gap:16px}
+.guided-flow main:has(.result:not([hidden])) #prepare{flex:none}
+.guided-flow main:has(.result:not([hidden])) #newVideo{flex:none;margin-left:auto;align-self:auto}

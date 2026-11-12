@@ -38,9 +38,16 @@ De oorspronkelijke CLI-handleiding staat in [docs/legacy-cli.md](docs/legacy-cli
 ## Review en release
 
 [De launchreview](docs/launch-review.md) beschrijft de gevonden fouten, reeds
-aangepaste onderdelen en nog open releaseblokkades. De website draait in
-testmodus. Groene CI is geen bewijs van live betalingen of een geslaagde
-Fal-generatie. Deze workflows deployen niets en hebben geen productiegeheimen.
+aangepaste onderdelen en historische releaseblokkades. De website ondersteunt
+een afzonderlijke productieomgeving voor Mollie-aankopen en RIG-tegoed; de code
+of CI activeert die omgeving niet. Groene CI bewijst geen echte Wero-betaling,
+Accountable-aflevering of visueel geslaagde Fal-generatie.
+Deze workflows deployen niets en hebben geen productiegeheimen.
+
+Persoonsvervanging met Recast 1080P en de betaalde tekst-/overlaybewerking zijn
+uitsluitend voor validatie door de eigenaar geïmplementeerd, achter servercontroles.
+De volledige keten is lokaal getest met providerfixtures; de visuele acceptatie
+van een nieuw volledig resultaat blijft open. Zie [de videocontracten](docs/video-workflows.md).
 
 [Herkomst van de broncode](docs/source-provenance.md) ·
 [Eenvoudige testerflow en hondenbandprompt](docs/tester-flow.md)

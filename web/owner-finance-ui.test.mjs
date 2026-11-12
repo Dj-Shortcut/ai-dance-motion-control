@@ -215,3 +215,77 @@ test('an HTML authorization denial on refresh removes previously shown private f
   denied=true;f.d.getElementById('financeButton').click();await waitFor(()=>f.d.getElementById('financeDialog')===null);assert.equal(f.d.getElementById('financeButton').hidden,true);assert.doesNotMatch(f.d.body.textContent,/Ontvangen betalingen|23,25/);
  }finally{f.close();}
 });
+
+const salesReads=f=>f.calls.filter(([path])=>path==='/api/payments/readiness');
+const refreshFinance=f=>Array.from(f.d.querySelectorAll('#financeDialog button')).find(button=>button.textContent==='Vernieuwen').click();
+async function openSales(f){
+ f.d.getElementById('financeButton').click();
+ f.d.getElementById('financeSales').open=true;
+ await waitFor(()=>salesReads(f).length>0);
+}
+
+test('owner explicitly checks current Mollie methods without creating a checkout or security challenge',async()=>{
+ const f=await ready(fixture({handler:path=>Response.json(path==='/api/payments/readiness'?{ready:true,methods:['wero','ideal','bancontact']}:summary())}));
+ try{
+  await new Promise(r=>setTimeout(r,10));assert.equal(salesReads(f).length,0);
+  f.d.getElementById('financeButton').click();await new Promise(r=>setTimeout(r,10));assert.equal(salesReads(f).length,0);
+  f.d.getElementById('financeSales').open=true;await waitFor(()=>f.d.getElementById('financeSalesMethods').textContent.includes('Wero'));
+  assert.equal(salesReads(f).length,1);assert.match(f.d.getElementById('financeSalesMethods').textContent,/Wero, iDEAL, Bancontact/);
+  assert.match(f.d.getElementById('financeSalesStatus').textContent,/5,00/);assert.match(f.d.getElementById('financeSalesChecked').textContent,/Gecontroleerd om/);
+  assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.equal(f.verifications.length,0);
+  assert.equal(salesReads(f)[0][1].cache,'no-store');
+ }finally{f.close();}
+});
+
+test('a pending Mollie check shows progress and repeated refresh cannot duplicate it',async()=>{
+ const pending=deferred(),f=await ready(fixture({handler:path=>path==='/api/payments/readiness'?pending.promise:Response.json(summary())}));
+ try{
+  await openSales(f);assert.match(f.d.getElementById('financeSalesStatus').textContent,/controleren/);
+  refreshFinance(f);await waitFor(()=>!f.d.querySelector('.finance-toolbar button').disabled);
+  f.d.getElementById('financeSales').dispatchEvent(new f.win.Event('toggle'));
+  assert.equal(salesReads(f).length,1);assert.match(f.d.getElementById('financeCash').textContent,/25,00/);
+  pending.resolve(Response.json({ready:false,methods:[],reason:'no_enabled_methods'}));await waitFor(()=>f.d.getElementById('financeSalesStatus').textContent.includes('geen betaalmethode'));
+  assert.equal(f.d.getElementById('financeSalesMethods').textContent,'');assert.equal(f.d.getElementById('financeSalesStatus').dataset.error,'true');
+ }finally{f.close();}
+});
+
+test('a failed refresh clears old available methods and a later retry restores current status',async()=>{
+ let reads=0;const responses=[()=>Response.json({ready:true,methods:['wero']}),()=>new Response('unavailable',{status:503}),()=>Response.json({ready:true,methods:['bancontact']})];
+ const f=await ready(fixture({handler:path=>path==='/api/payments/readiness'?responses[reads++]():Response.json(summary())}));
+ try{
+  await openSales(f);await waitFor(()=>f.d.getElementById('financeSalesMethods').textContent.includes('Wero'));
+  refreshFinance(f);await waitFor(()=>f.d.getElementById('financeSalesStatus').textContent.includes('tijdelijk niet beschikbaar'));
+  assert.equal(f.d.getElementById('financeSalesMethods').textContent,'');await waitFor(()=>!f.d.querySelector('.finance-toolbar button').disabled);
+  refreshFinance(f);await waitFor(()=>f.d.getElementById('financeSalesMethods').textContent.includes('Bancontact'));
+  assert.doesNotMatch(f.d.getElementById('financeSalesMethods').textContent,/Wero/);assert.equal(salesReads(f).length,3);
+ }finally{f.close();}
+});
+
+test('invalid provider status never claims payments are available or renders provider markup',async()=>{
+ for(const value of [{ready:true,methods:[]},{ready:true,methods:['wero','wero']},{ready:true,methods:['wero'],reason:'provider_unavailable'},{ready:true,methods:['<img src=x onerror=alert(1)>']},{ready:false,methods:[],reason:{error:'blocked'}}]){
+  const f=await ready(fixture({handler:path=>Response.json(path==='/api/payments/readiness'?value:summary())}));
+  try{
+   await openSales(f);await waitFor(()=>f.d.getElementById('financeSalesStatus').dataset.error==='true');
+   assert.match(f.d.getElementById('financeSalesStatus').textContent,/tijdelijk niet beschikbaar/);assert.equal(f.d.getElementById('financeSalesMethods').textContent,'');assert.equal(f.d.getElementById('financeSales').querySelector('img'),null);
+  }finally{f.close();}
+ }
+ for(const value of [{ready:true,methods:['constructor']},{ready:false,methods:[],reason:'constructor'}]){
+  const f=await ready(fixture({handler:path=>Response.json(path==='/api/payments/readiness'?value:summary())}));
+  try{
+   await openSales(f);await waitFor(()=>f.d.getElementById('financeSalesChecked').textContent.startsWith('Gecontroleerd'));
+   assert.doesNotMatch(f.d.getElementById('financeSales').textContent,/function Object|\[native code\]/);
+   assert.match(f.d.getElementById('financeSales').textContent,value.ready?/Andere betaalmethode/:/momenteel niet beschikbaar/);
+  }finally{f.close();}
+ }
+});
+
+test('logout or account replacement while Mollie responds cannot restore the owner sales panel',async()=>{
+ for(const logout of [true,false]){
+  const pending=deferred(),f=await ready(fixture({handler:path=>path==='/api/payments/readiness'?pending.promise:Response.json(summary())}));
+  try{
+   await openSales(f);if(logout){f.d.getElementById('authLogout').click();f.stop();}else f.win.rigRequest=async()=>Response.json(summary());
+   pending.resolve(Response.json({ready:true,methods:['wero']}));await waitFor(()=>f.d.getElementById('financeDialog')===null);
+   assert.equal(f.d.getElementById('financeButton').hidden,true);assert.doesNotMatch(f.d.body.textContent,/Betaalmethoden: Wero/);
+  }finally{f.close();}
+ }
+});

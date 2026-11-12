@@ -116,7 +116,12 @@ function previewBlob(file){
 }
 function setURL(key,file){const blob=previewBlob(file),url=URL.createObjectURL(blob);if(urls[key]) URL.revokeObjectURL(urls[key]);urls[key]=url;return url}
 function showError(text){$('status').textContent=text}
-function invalidate(){cancelAutoCrop();disposeCleanup();draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton()}
+function invalidate(options){
+ cancelAutoCrop();disposeCleanup();const retainingOriginals=options?.reselecting===true&&reselectingOriginals();
+ if(!busy&&continuationAvailable()&&!retainingOriginals)continuationOffer=false;
+ if(!busy&&retainingOriginals&&trialContinuation?.revision===draftRevision)trialContinuation.revision++;
+ draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton();
+}
 // Server capability controls the interface; the server enforces authorization.
 function localPreparationCapability(){
  if(typeof window.rigMedia?.preparationCapability!=='function')return {supported:true};
@@ -126,18 +131,31 @@ function localPreparationCapability(){
  if(result?.code==='source-audio')message+=recasting()?' Deze bewerking houdt het originele geluid verplicht aan.':' Je kunt ook zelf in Instellingen het geluid uitzetten.';
  return {supported:false,message};
 }
-function refreshButton(){const capability=localPreparationCapability(),enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality()),ready=enabled&&capability.supported;let note=$('preparationBrowserNote');if(!note){note=document.createElement('small');note.id='preparationBrowserNote';note.setAttribute('role','status');$('videoAvailabilityNote').after(note);}note.hidden=capability.supported||window.rigSessionActive?.()!==true;note.textContent=capability.supported?'':capability.message;const promptReady=$('editPrompt').value.trim().length>0;$('prepare').disabled=!ready||busy||referencesBusy()||missingAngleCloseup()||!imageSource||!motionFile;$('prepare').textContent=enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';$('confirmBrief').disabled=!ready||busy||cleanupWork||referencesBusy()||missingAngleCloseup()||!promptReady;$('confirmBrief').textContent=cleanupReview?(cleanupReview.mask?'Gebruik masker en bekijk prijs':'Zoek tekst en toon masker'):cleanupAvailable()&&$('cleanupEnabled').checked?'Controleer tekst en overlays':prepared?'Verder':'Bekijk de prijs';$('cleanupOption').hidden=!cleanupAvailable();$('cleanupEnabled').disabled=busy||cleanupWork||!cleanupAvailable();$('briefCrop').disabled=busy||cleanupWork||!motionFile;const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=trialSeconds()-1e-7;$('tryShortVideo').disabled=!ready||busy||cleanupWork||!!cleanupReview||referencesBusy()||missingAngleCloseup()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=!motionFile||hasTrial;$('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();}
+function refreshButton(){
+ const capability=localPreparationCapability(),enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality()),ready=enabled&&capability.supported;
+ let note=$('preparationBrowserNote');if(!note){note=document.createElement('small');note.id='preparationBrowserNote';note.setAttribute('role','status');$('videoAvailabilityNote').after(note);}note.hidden=capability.supported||window.rigSessionActive?.()!==true;note.textContent=capability.supported?'':capability.message;
+ const promptReady=$('editPrompt').value.trim().length>0,continuing=continuationAvailable();
+ $('prepare').disabled=continuing?continuationBlocked():!ready||continuationBlocked()||missingAngleCloseup()||!imageSource||!motionFile;
+ $('prepare').textContent=continuing?'Maak volledige video':enabled?(prepared?'Verder':'Maak video'):'Nog niet beschikbaar';
+ $('confirmBrief').disabled=!ready||busy||cleanupWork||referencesBusy()||missingAngleCloseup()||!promptReady;
+ $('confirmBrief').textContent=cleanupReview?(cleanupReview.mask?'Gebruik masker en bekijk prijs':'Zoek tekst en toon masker'):cleanupAvailable()&&$('cleanupEnabled').checked?'Controleer tekst en overlays':prepared?'Verder':'Bekijk de prijs';
+ $('cleanupOption').hidden=!cleanupAvailable();$('cleanupEnabled').disabled=busy||cleanupWork||!cleanupAvailable();$('briefCrop').disabled=busy||cleanupWork||!motionFile;
+ const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=trialSeconds()-1e-7;
+ $('tryShortVideo').hidden=reviewingFull;$('tryShortVideo').disabled=!ready||busy||cleanupWork||!!cleanupReview||referencesBusy()||missingAngleCloseup()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=reviewingFull||!motionFile||hasTrial;$('recastTrialNote').hidden=reviewingFull||!recasting();
+ $('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();
+ window.rigFlow?.refresh({ready:!$('prepare').disabled,inputsReady:!continuationBlocked()&&!!imageSource&&!!motionFile,lockedChoice:!!cleanupReview||cleanupWork,continuation:continuationAvailable()});
+}
 function updateModeUi(){
  const edit=editing(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'In de video':'Op je foto';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
  $('videoModeHint').textContent=edit?(availableQualities().includes(selectedQuality())?(recasting()?'Vervang een persoon met één portret. Begin met een korte proef.':'Vervang een persoon of dier met je foto. Controleer het resultaat met een korte proef.'):editUnavailableMessage):'Werkt het best met een duidelijk zichtbaar lichaam.';
  $('editPromptPanel').hidden=false;$('editPrompt').required=true;$('promptLabel').textContent=edit?'Wat wil je veranderen?':'Wat wil je maken?';$('editPrompt').placeholder=edit?'Vervang de zanger door het personage op mijn foto.':'Beschrijf het resultaat dat je wilt.';$('motionQualitySettings').hidden=edit;$('steadyOption').hidden=edit;$('backgroundOption').hidden=true;$('settingsNote').hidden=true;
  $('personChooseText').textContent='Kies een foto of video';$('personRole').textContent='Foto';$('motionChooseText').textContent='Kies een video';$('motionRole').textContent='Video';$('soundLabel').textContent=edit?'Geluid van de bronvideo behouden':'Geluid van de bewegingsvideo behouden';
  $('personInput').accept='image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm';$('duration').min=String(durationMinimum());$('trialDurationNote').textContent=recasting()?'(6–15 s · proefje: 6 s)':edit?'(3–15 s · begin met 5 s)':'(3–30 s)';
- $('tryShortVideo').textContent=`Eerst een proefje · ${trialSeconds()} s`;$('shortTrialHint').textContent=`Kies een start met nog minstens ${trialSeconds()} seconden video.`;$('recastTrialNote').hidden=!recasting();$('personTip').textContent=recasting()?'Kies één duidelijke portretfoto van een persoon.':'Tip: een duidelijke foto, liefst met het hele lichaam.';$('sourceCameraNote').textContent=recasting()?'Gebruikt je video en één portret.':'Camera: uit de bronvideo';
+ if($('flowTrialDuration'))$('flowTrialDuration').textContent=`${trialSeconds()} s · kort proefje`;else $('tryShortVideo').textContent=`Eerst een proefje · ${trialSeconds()} s`;$('shortTrialHint').textContent=`Kies een start met nog minstens ${trialSeconds()} seconden video.`;$('recastTrialNote').hidden=!recasting();$('personTip').textContent=recasting()?'Kies één duidelijke portretfoto van een persoon.':'Tip: een duidelijke foto, liefst met het hele lichaam.';$('sourceCameraNote').textContent=recasting()?'Gebruikt je video en één portret.':'Camera: uit de bronvideo';
  $('sound').disabled=busy||recasting();$('recastSoundNote').hidden=!recasting();if(recasting()){$('sound').checked=true;$('soundLabel').textContent='Origineel geluid blijft behouden';}
  $('settingsNote').textContent=edit?'Gebruik een duidelijke referentiefoto. Beoordeel eerst een korte proef.':'Referenties worden pas na je bevestiging naar fal.ai gestuurd. Achtergrond vervangen is nog niet beschikbaar in de webversie.';
  if($('status').textContent===editUnavailableMessage&&(!edit||editAvailable()))showError('Kies een foto en een video.');
- renderReferences();refreshButton();renderIdeas();
+ renderReferences();refreshButton();
 }
 function setMode(next,{quality}={}){
  const nextQuality=next==='edit'?(quality??preferredEditQuality()):selectedEditQuality;
@@ -157,17 +175,12 @@ function updateCapabilities(){
  const selected=document.querySelector('input[name=quality]:checked');
  // Keep an explicit quality choice through availability changes. A missing
  // default Pro capability must not silently downgrade a new draft.
- if(!editing()&&selected?.disabled&&availableQualities().some(q=>q==='standard'||q==='pro'))showError(qualityUnavailableMessage);else if($('status').textContent===qualityUnavailableMessage)showError(personFile&&motionFile?'Klaar? Druk op Maak video.':'Kies een foto en een video.');
+ if(!editing()&&selected?.disabled&&availableQualities().some(q=>q==='standard'||q==='pro'))showError(qualityUnavailableMessage);else if($('status').textContent===qualityUnavailableMessage)showError(personFile&&motionFile?'Klaar om verder te gaan.':'Kies een foto en een video.');
  if(editing()&&!availableQualities().includes(selectedQuality())){invalidate();showError(editUnavailableMessage);}
  updateModeUi();
 }
 $('motionModeButton').addEventListener('click',()=>setMode('motion'));$('editModeButton').addEventListener('click',()=>setMode('edit'));
-// Idea tiles only preset the video type and description; files stay the user's own choice.
-function ideaEditQuality(tile){return tile.dataset.ideaSubject==='animal'?'edit-standard':preferredEditQuality();}
-function renderIdeas(){const prompt=$('editPrompt').value;let visible=0;for(const tile of document.querySelectorAll('[data-idea-mode]')){const mode=tile.dataset.ideaMode,available=mode==='edit'?availableQualities().includes(ideaEditQuality(tile)):availableQualities().some(q=>q==='standard'||q==='pro');tile.hidden=!available;tile.disabled=busy;if(available)visible++;tile.setAttribute('aria-pressed',String(available&&mode===videoMode&&(mode!=='edit'||selectedQuality()===ideaEditQuality(tile))&&tile.dataset.ideaPrompt===prompt));}const panel=document.querySelector('.ideas-panel');if(panel)panel.hidden=visible===0;}
-function chooseIdea(tile){if(busy)return;const mode=tile.dataset.ideaMode,quality=mode==='edit'?ideaEditQuality(tile):undefined;if(mode==='edit'&&!availableQualities().includes(quality))return;setMode(mode,{quality});if(videoMode!==mode||mode==='edit'&&selectedQuality()!==quality)return;$('editPrompt').value=tile.dataset.ideaPrompt;modePrompts[modeKey()]=tile.dataset.ideaPrompt;invalidate();renderIdeas();showError(!personFile?'Idee gekozen. Kies nu een foto.':!motionFile?'Idee gekozen. Kies nu een video.':'Idee gekozen. Druk op Maak video.');if(!personFile)$('personStepTitle').scrollIntoView?.({behavior:'smooth',block:'start'});}
-for(const tile of document.querySelectorAll('[data-idea-mode]'))tile.addEventListener('click',()=>chooseIdea(tile));
-const promptChanged=()=>{clearBriefFeedback();modePrompts[modeKey()]=$('editPrompt').value;invalidate();renderIdeas();};
+const promptChanged=()=>{clearBriefFeedback();modePrompts[modeKey()]=$('editPrompt').value;invalidate();};
 $('editPrompt').addEventListener('input',promptChanged);$('editPrompt').addEventListener('change',promptChanged);
 document.addEventListener('rig-video-availability',updateCapabilities);
 for(const [button,input] of [['personChoose','personInput'],['personName','personInput'],['motionChoose','motionInput'],['motionName','motionInput'],['resultName','resultInput']]) $(button).addEventListener('click',()=>$(input).click());
@@ -176,10 +189,10 @@ $('preparedDialog').addEventListener('close',()=>$('preparedVideo').pause());
 $('settingsToggle').addEventListener('click',()=>{$('settings').showModal();$('settingsToggle').setAttribute('aria-expanded','true')});
 $('settings').addEventListener('close',()=>$('settingsToggle').setAttribute('aria-expanded','false'));
 function drawImage(source){const c=$('personFrame'); const w=source.videoWidth||source.naturalWidth; const h=source.videoHeight||source.naturalHeight;if(!w||!h)return;imageSource=source;window.rigMedia.paint(c,source,crops.person,1280,1280);c.hidden=false;$('personChoose').hidden=true;$('personCropButton').hidden=false;refreshButton();renderReferences()}
-function usePersonFile(file,isCurrent=()=>true){personFile=file;imageSource=null;crops.person=fullCrop();clearReferences();invalidate();$('referencePanel').hidden=false;$('referenceCapture').hidden=!file.type.startsWith('video/');const url=setURL('person',file);$('personName').textContent=file.name;$('personName').title=file.name;$('frameControl').hidden=true;$('personFrame').hidden=true;$('personCropButton').hidden=true;if(file.type.startsWith('video/')){const video=$('personVideo');video.src=url;video.onloadedmetadata=()=>{if(personFile!==file||!isCurrent())return;if(!Number.isFinite(video.duration)||video.duration<=0){showError('Deze video kon niet worden gelezen.');return}$('frameTime').max=Math.max(0,video.duration-0.01);$('frameTime').value=0;$('frameOutput').textContent='0.0 s';$('frameControl').hidden=false;video.currentTime=Math.min(0.01,video.duration)};video.onseeked=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onloadeddata=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze video kan niet worden geopend in je browser.')}}else{let image=new Image();image.onload=()=>{if(personFile===file&&isCurrent())drawImage(image)};image.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze afbeelding kan niet worden geopend.')};image.src=url}if(needsRecastFrame()){$('moreOptions').open=true;showError(recastFrameHint);}else showError(motionFile?'Klaar? Druk op Maak video.':'Kies nu een video.')}
+function usePersonFile(file,isCurrent=()=>true){personFile=file;imageSource=null;crops.person=fullCrop();clearReferences();invalidate({reselecting:true});$('referencePanel').hidden=false;$('referenceCapture').hidden=!file.type.startsWith('video/');const url=setURL('person',file);$('personName').textContent=file.name;$('personName').title=file.name;$('frameControl').hidden=true;$('personFrame').hidden=true;$('personCropButton').hidden=true;if(file.type.startsWith('video/')){const video=$('personVideo');video.src=url;video.onloadedmetadata=()=>{if(personFile!==file||!isCurrent())return;if(!Number.isFinite(video.duration)||video.duration<=0){showError('Deze video kon niet worden gelezen.');return}$('frameTime').max=Math.max(0,video.duration-0.01);$('frameTime').value=0;$('frameOutput').textContent='0.0 s';$('frameControl').hidden=false;video.currentTime=Math.min(0.01,video.duration)};video.onseeked=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onloadeddata=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze video kan niet worden geopend in je browser.')}}else{let image=new Image();image.onload=()=>{if(personFile===file&&isCurrent())drawImage(image)};image.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze afbeelding kan niet worden geopend.')};image.src=url}if(needsRecastFrame()){$('moreOptions').open=true;showError(recastFrameHint);}else showError(motionFile?'Klaar om verder te gaan.':'Kies nu een video.')}
 $('personInput').addEventListener('change',event=>{const file=event.target.files[0];if(file&&!rejectMedia(event.target,file,'media'))usePersonFile(file);});
 $('frameTime').addEventListener('input',event=>{const time=Number(event.target.value);$('frameOutput').textContent=`${time.toFixed(1)} s`;imageSource=null;invalidate();$('personVideo').currentTime=time;if(!$('personVideo').seeking)drawImage($('personVideo'))});
-function useMotionFile(file,isCurrent=()=>true){motionLoadingFile=file;motionFile=null;crops.motion=fullCrop();invalidate();$('motionCropped').hidden=true;$('motionCropControls').hidden=true;const video=$('motionVideo');video.pause();video.src=setURL('motion',file);video.hidden=false;$('motionChoose').hidden=true;$('motionName').textContent=file.name;$('motionName').title=file.name;video.onloadedmetadata=()=>{if(motionLoadingFile!==file||motionFile===file||!isCurrent())return;if(!Number.isFinite(video.duration)||video.duration<3){showError('Kies een video van minstens 3 seconden.');return}motionFile=file;$('trim').hidden=false;$('start').value=0;$('start').max=Math.max(0,Math.floor((video.duration-3)*10+1e-7)/10);$('duration').setCustomValidity('');modeDurations.motion=null;modeDurations.edit=5;modeDurations['human-recast']=6;$('duration').max=Math.min(durationLimit(),Math.floor(video.duration));$('duration').value=editing()?String(Math.max(durationMinimum(),Math.min(trialSeconds(),Number($('duration').max)))):$('duration').max;updateStartMax();$('motionSeek').max=video.duration;updateMotionPreview();$('motionCropButton').hidden=false;refreshButton()};video.onerror=()=>{if(motionLoadingFile===file&&isCurrent())showError('Deze video kan niet worden geopend in je browser.')};showError(personFile?'Klaar? Druk op Maak video.':'Kies nu een foto.')}
+function useMotionFile(file,isCurrent=()=>true){motionLoadingFile=file;motionFile=null;crops.motion=fullCrop();invalidate({reselecting:true});$('motionCropped').hidden=true;$('motionCropControls').hidden=true;const video=$('motionVideo');video.pause();video.src=setURL('motion',file);video.hidden=false;$('motionChoose').hidden=true;$('motionName').textContent=file.name;$('motionName').title=file.name;video.onloadedmetadata=()=>{if(motionLoadingFile!==file||motionFile===file||!isCurrent())return;if(!Number.isFinite(video.duration)||video.duration<3){showError('Kies een video van minstens 3 seconden.');return}motionFile=file;$('trim').hidden=false;$('start').value=0;$('start').max=Math.max(0,Math.floor((video.duration-3)*10+1e-7)/10);$('duration').setCustomValidity('');modeDurations.motion=null;modeDurations.edit=5;modeDurations['human-recast']=6;$('duration').max=Math.min(durationLimit(),Math.floor(video.duration));$('duration').value=editing()?String(Math.max(durationMinimum(),Math.min(trialSeconds(),Number($('duration').max)))):$('duration').max;updateStartMax();$('motionSeek').max=video.duration;updateMotionPreview();$('motionCropButton').hidden=false;refreshButton()};video.onerror=()=>{if(motionLoadingFile===file&&isCurrent())showError('Deze video kan niet worden geopend in je browser.')};showError(personFile?'Klaar om verder te gaan.':'Kies nu een foto.')}
 $('motionInput').addEventListener('change',event=>{const file=event.target.files[0];if(file&&!rejectMedia(event.target,file,'video'))useMotionFile(file);});
 for(const id of ['start','duration'])$(id).addEventListener('focus',e=>e.target.select());function updateStartMax(){const v=$('motionVideo'),duration=Number($('duration').value);if(!Number.isFinite(v.duration)||!Number.isInteger(duration)||duration<durationMinimum()||duration>durationLimit())return null;const max=Math.max(0,Math.floor((v.duration-duration)*10+1e-7)/10);$('start').max=String(max);return max}function applyStart(value){const v=$('motionVideo'),max=updateStartMax();if(max===null||!Number.isFinite(value))return;const start=Math.min(max,Math.max(0,value));$('start').value=String(start);v.currentTime=start} $('start').addEventListener('change',()=>{if($('start').value!=='')applyStart(Number($('start').value));invalidate()});$('useCurrentStart').addEventListener('click',()=>{const v=$('motionVideo');if(!Number.isFinite(v.currentTime)||!Number.isFinite(v.duration))return;$('start').value=String(Math.floor(v.currentTime*10)/10);$('start').dispatchEvent(new Event('change',{bubbles:true}));});$('duration').addEventListener('change',()=>{const input=$('duration'),value=Number(input.value),max=Number(input.max);if(!Number.isInteger(value)||value<durationMinimum()||value>durationLimit()||value>max){const msg=`Kies een duur van ${durationMinimum()} tot ${Math.min(durationLimit(),max)} seconden.`;showError(msg);input.setCustomValidity(msg)}else{input.setCustomValidity('');const startMax=updateStartMax();if(startMax!==null&&Number($('start').value)>startMax)applyStart(startMax)}invalidate()});$('sound').addEventListener('change',()=>{modeSound[modeKey()]=$('sound').checked;invalidate();});$('steady').addEventListener('change',invalidate);for(const r of document.querySelectorAll('input[name=quality]'))r.addEventListener('change',invalidate);
 $('resultInput').addEventListener('change',event=>{const file=event.target.files[0];if(!file||rejectMedia(event.target,file,'video'))return;const url=setURL('result',file);$('resultVideo').src=url;$('resultVideo').hidden=false;$('resultEmpty').hidden=true;$('resultName').textContent=file.name;$('export').href=url;$('export').download=file.name;$('export').hidden=false});
@@ -289,7 +302,7 @@ async function prepareWithPrompt({trial=false}={}){
  if(recasting()&&!$('sound').checked){briefFeedback('Deze bewerking behoudt het originele geluid. Kies de bewerking opnieuw.');return;}
  if(!prompt){briefFeedback(edit?'Beschrijf wat je in de video wilt veranderen.':'Beschrijf wat je wilt maken.');$('editPrompt').reportValidity?.();$('editPrompt').focus();return;}
  if(prompt.length>1900){briefFeedback('Houd je beschrijving korter dan 1900 tekens.');return;}
- if(needsRecastFrame()){$('briefDialog').close();$('moreOptions').open=true;showError(recastFrameHint);$('frameControl').scrollIntoView?.({behavior:'smooth',block:'center'});$('frameTime').focus();return;}
+ if(needsRecastFrame()){$('briefDialog').close();window.rigFlow?.revealFiles({advanced:true});$('moreOptions').open=true;showError(recastFrameHint);$('frameControl').scrollIntoView?.({behavior:'smooth',block:'center'});$('frameTime').focus();return;}
  if(!Number.isFinite(start)||start<0||max<durationMinimum()){briefFeedback(`Kies een startpunt met nog minstens ${durationMinimum()} seconden video.`);return;}
  if(!Number.isInteger(duration)||duration<durationMinimum()||duration>max){
   briefFeedback(`Kies vanaf dit startpunt een duur van ${durationMinimum()} tot ${max} seconden.`);
@@ -303,7 +316,7 @@ async function prepareWithPrompt({trial=false}={}){
  if(prepared&&prepared.prompt===prompt&&prepared.quality===quality&&prepared.selectedSeconds===duration&&Boolean(prepared.trialToken)===trial&&Boolean(prepared.cleanup)===useCleanup){$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));return;}
  const trialToken=trial?startTrialContinuation():null;
  busy=true;$('briefDialog').setAttribute('aria-busy','true');const disabledBefore=new Map();for(const el of document.querySelectorAll('button,input,textarea')){disabledBefore.set(el,el.disabled);el.disabled=true;}
- refreshButton();invalidate();const revision=draftRevision;let complete=false;
+ refreshButton();invalidate();const revision=draftRevision;if(trialToken&&trialContinuation?.token===trialToken)trialContinuation.revision=revision;let complete=false;
  try{
   briefFeedback('Beeld voorbereiden…');const image=mainReferenceBlob?{blob:mainReferenceBlob}:await window.rigMedia.prepareImage(imageSource,crops.person);
   briefFeedback('Video voorbereiden… Houd RIG in beeld.');
@@ -317,7 +330,7 @@ async function prepareWithPrompt({trial=false}={}){
  finally{for(const [el,wasDisabled] of disabledBefore)el.disabled=wasDisabled;busy=false;$('briefDialog').setAttribute('aria-busy','false');updateCapabilities();}
  if(complete){clearBriefFeedback();$('briefDialog').close();document.dispatchEvent(new Event('rig-prepared-ready'));}
 }
-$('prepare').addEventListener('click',()=>{if($('prepare').disabled||busy)return;clearBriefFeedback();refreshButton();$('briefDialog').showModal();$('editPrompt').focus();});
+$('prepare').addEventListener('click',()=>{if($('prepare').disabled||busy)return;if(continuationAvailable()){void continueFullVideo();return;}reviewingFull=false;clearBriefFeedback();refreshButton();$('briefDialog').showModal();$('editPrompt').focus();});
 $('correctBriefDuration').addEventListener('click',()=>{
  if(busy||$('correctBriefDuration').hidden)return;
  const duration=availableBriefDuration();if(duration<durationMinimum())return;
@@ -344,11 +357,11 @@ window.addEventListener('pagehide',disposeCleanup);
 // Trial continuation metadata is account-scoped and bounded. Source files,
 // image bytes and private URLs stay in memory and are never persisted here.
 const trialStorageKey='rig-trial-continuation:v1';
-let trialContinuation=null,lastCompletedResult=null,legacyDurationReviewed=false,legacyWaitingForDuration=false,restoreOperation=null,completionPopup=false;
+let trialContinuation=null,lastCompletedResult=null,restoreOperation=null,continuationOffer=false,reviewingFull=false;
 const nonTrialJobs=new Set();
-const continuationPriceNote='Het proefje is apart afgerekend; voor de volledige video bekijk en bevestig je een nieuwe prijs.';
+const continuationPriceNote='Je proefje is apart afgerekend. Je ziet en bevestigt eerst de nieuwe prijs.';
 const copyMainSelection=value=>value?{time:value.time,crop:{...value.crop}}:null;
-const continuationIds=['makeFullVideo','makeFullFromResult'];
+
 const draftFile=file=>file?{name:file.name,type:file.type,size:file.size,lastModified:file.lastModified}:null;
 const sameFile=(file,meta)=>!!file&&!!meta&&file.name===meta.name&&file.type===meta.type&&file.size===meta.size&&file.lastModified===meta.lastModified;
 function continuationSnapshot(){return {personFile,motionFile,person:draftFile(personFile),motion:draftFile(motionFile),mode:videoMode,editQuality:selectedEditQuality,quality:selectedQuality(),start:Number($('start').value),seconds:Number($('duration').value),prompt:$('editPrompt').value,sound:$('sound').checked,steady:$('steady').checked,cleanup:$('cleanupEnabled').checked,frameTime:Number($('frameTime').value),crops:{person:{...crops.person},motion:{...crops.motion}},mainReferenceBlob,mainSelection:mainReferenceSelection?copyMainSelection(mainReferenceSelection):null,faceReferenceBlob,angleReferenceBlobs:[...angleReferenceBlobs],faceRequired:!!faceReferenceBlob,angleCount:angleReferenceBlobs.length};}
@@ -358,24 +371,26 @@ function persistTrialContinuation(){
 function readTrialContinuation(){
  try{const raw=window.rigScopedStorage?.getItem(trialStorageKey);if(!raw||raw.length>8192)return;const value=JSON.parse(raw),d=value?.draft,validCrop=c=>c&&['x','y','w','h'].every(k=>Number.isFinite(c[k]))&&c.x>=0&&c.y>=0&&c.w>0&&c.h>0&&c.x+c.w<=100&&c.y+c.h<=100,validFile=f=>f&&typeof f.name==='string'&&f.name.length<=256&&typeof f.type==='string'&&f.type.length<=100&&Number.isSafeInteger(f.size)&&f.size>0&&Number.isFinite(f.lastModified),id=x=>typeof x==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(x);
  if(value.version!==1||!id(value.token)||!id(value.quoteId)||value.jobId!==null&&!id(value.jobId)||!['pending','accepted','completed'].includes(value.state)||!Number.isFinite(value.createdAt)||Date.now()-value.createdAt>86400000||value.createdAt>Date.now()+60000||!d||!validFile(d.person)||!validFile(d.motion)||!['motion','edit'].includes(d.mode)||!['standard','pro','edit-standard','human-recast'].includes(d.quality)||d.editQuality!==null&&!['edit-standard','human-recast'].includes(d.editQuality)||d.mode==='motion'&&!['standard','pro'].includes(d.quality)||d.mode==='edit'&&!['edit-standard','human-recast'].includes(d.quality)||!Number.isFinite(d.start)||d.start<0||d.start>604800||!Number.isInteger(d.seconds)||d.seconds<1||d.seconds>604800||typeof d.prompt!=='string'||d.prompt.length>1900||typeof d.sound!=='boolean'||typeof d.steady!=='boolean'||!Number.isFinite(d.frameTime)||d.frameTime<0||d.frameTime>604800||!validCrop(d.crops?.person)||!validCrop(d.crops?.motion)||typeof d.faceRequired!=='boolean'||!Number.isInteger(d.angleCount)||d.angleCount<0||d.angleCount>3||d.mainSelection!==null&&(!validCrop(d.mainSelection?.crop)||d.mainSelection.time!==null&&(!Number.isFinite(d.mainSelection.time)||d.mainSelection.time<0||d.mainSelection.time>604800)))return;
- trialContinuation={...value,draft:{...d,personFile:null,motionFile:null,mainReferenceBlob:null,faceReferenceBlob:null,angleReferenceBlobs:[]}};
+ trialContinuation={...value,revision:draftRevision,draft:{...d,personFile:null,motionFile:null,mainReferenceBlob:null,faceReferenceBlob:null,angleReferenceBlobs:[]}};
  }catch{}
 }
 function continuationBlocked(){try{return busy||referencesBusy()||window.rigSessionActive?.()!==true||window.rigGenerationBusy?.()===true||!!window.rigScopedStorage?.getItem('rig-generation-pending')||!!window.rigScopedStorage?.getItem('rig-generation-job');}catch{return true;}}
-function renderContinuation(){for(const id of continuationIds){$(id).hidden=!lastCompletedResult||nonTrialJobs.has(lastCompletedResult)||id==='makeFullFromResult'&&!completionPopup;$(id).disabled=continuationBlocked();$(id).title=trialContinuation?.state==='completed'?'Herstel de selectie van vóór dit proefje en bekijk de actuele prijs.':'Kies zelf de gewenste volledige duur en bekijk eerst de prijs.';}}
-function startTrialContinuation(){trialContinuation={token:crypto.randomUUID(),createdAt:Date.now(),state:'prepared',draft:continuationSnapshot()};return trialContinuation.token;}
+function continuationAvailable(){return continuationOffer&&!!lastCompletedResult&&trialContinuation?.jobId===lastCompletedResult&&trialContinuation.state==='completed'&&!nonTrialJobs.has(lastCompletedResult);}
+function reselectingOriginals(){const d=trialContinuation?.draft;return !!d&&!d.personFile&&!d.motionFile&&(!personFile||sameFile(personFile,d.person))&&(!motionLoadingFile||sameFile(motionLoadingFile,d.motion))&&(!motionFile||sameFile(motionFile,d.motion));}
+function renderContinuation(){refreshButton();$('resultTitle').textContent=lastCompletedResult&&trialContinuation?.jobId===lastCompletedResult?'Je proefje':'Je video';}
+function startTrialContinuation(){continuationOffer=false;trialContinuation={token:crypto.randomUUID(),createdAt:Date.now(),state:'prepared',draft:continuationSnapshot()};return trialContinuation.token;}
 const delayForDraft=()=>new Promise(resolve=>setTimeout(resolve,50));
 async function waitForSources(d,assertCurrent){for(let i=0;i<600;i++){assertCurrent();if(personFile===d.personFile&&motionFile===d.motionFile&&imageSource&&$('motionVideo').readyState>=2)return;await delayForDraft();}throw Error('Je oorspronkelijke bestanden konden niet worden geopend. Kies ze opnieuw.');}
 async function seekPortrait(time,assertCurrent){const video=$('personVideo');assertCurrent();if(!Number.isFinite(time)||time<0||time>video.duration)throw Error('Het gekozen hoofdbeeld valt buiten deze video.');video.currentTime=time;for(let i=0;i<200;i++){assertCurrent();if(!video.seeking&&video.readyState>=2)return;await delayForDraft();}throw Error('Het gekozen hoofdbeeld kon niet worden teruggezet.');}
 function putInputFile(id,file){try{if(typeof DataTransfer==='function'){const transfer=new DataTransfer();transfer.items.add(file);$(id).files=transfer.files;}}catch{}}
-function guideToFiles(message,{person=false,motion=false}={}){showError(message);$('quoteDialog').close();const target=person?'personName':motion?'motionName':null;if(target){$(person?'personStepTitle':'motionStepTitle').scrollIntoView?.({behavior:'smooth',block:'start'});$(target).focus();}}
-function guideToDuration(message){legacyWaitingForDuration=true;showError(message);$('duration').scrollIntoView?.({behavior:'smooth',block:'center'});$('duration').focus();}
+function guideToFiles(message,{person=false,motion=false}={}){showError(message);$('quoteDialog').close();window.rigFlow?.revealFiles({advanced:false});const target=person?'personName':motion?'motionName':null;if(target){$(person?'personStepTitle':'motionStepTitle').scrollIntoView?.({behavior:'smooth',block:'start'});$(target).focus();}}
+function guideToDuration(message){window.rigFlow?.revealFiles({advanced:true});showError(message);$('duration').scrollIntoView?.({behavior:'smooth',block:'center'});$('duration').focus();}
 async function restoreFullDraft(d){
  if(!availableQualities().includes(d.quality))throw Error('Het eerder gekozen videotype of de kwaliteit is nu niet beschikbaar. Er wordt geen ander model gekozen.');
  // A real reload drops File objects. Only explicitly reselected originals can
  // recreate the draft; filenames alone are never used to read local files.
  const originalPerson=d.personFile??(sameFile(personFile,d.person)?personFile:null),originalMotion=d.motionFile??(sameFile(motionFile,d.motion)?motionFile:null);
- if(!originalPerson||!originalMotion){guideToFiles('Kies je oorspronkelijke foto of referentievideo en bewegingsvideo opnieuw. Je eerdere instellingen zijn bewaard; klik daarna opnieuw op Maak volledige video.',{person:!originalPerson,motion:!originalMotion});return false;}
+ if(!originalPerson||!originalMotion){guideToFiles('Kies je oorspronkelijke foto of referentievideo en bewegingsvideo opnieuw. Je eerdere instellingen zijn bewaard; ga daarna verder met je volledige video.',{person:!originalPerson,motion:!originalMotion});return false;}
  const binding={request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage},operation={},oldDisabled=new Map();let revision=draftRevision;
  const sessionCurrent=()=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&binding.active?.()===true;
  const current=()=>restoreOperation===operation&&!operation.canceled&&sessionCurrent()&&revision===draftRevision;
@@ -399,41 +414,44 @@ async function restoreFullDraft(d){
   if(originalPerson.type.startsWith('video/')){$('frameTime').value=String(d.frameTime);$('frameOutput').textContent=`${d.frameTime.toFixed(1)} s`;}
   faceReferenceBlob=d.personFile?d.faceReferenceBlob:d.faceRequired?faceReferenceBlob:null;angleReferenceBlobs=d.personFile?[...d.angleReferenceBlobs]:d.angleCount?angleReferenceBlobs:[];
   invalidate();revision=draftRevision;drawImage(imageSource);updateMotionPreview();renderReferences();
-  if(!recasting()&&(d.faceRequired&&!faceReferenceBlob||angleReferenceBlobs.length!==d.angleCount)){showError('Kies je eerdere close-up en hoeken opnieuw. Ze zijn niet in de browser opgeslagen. Klik daarna opnieuw op Maak volledige video.');$('moreOptions').open=true;return false;}
+  if(!recasting()&&(d.faceRequired&&!faceReferenceBlob||angleReferenceBlobs.length!==d.angleCount)){showError('Kies je eerdere close-up en hoeken opnieuw. Ze zijn niet in de browser opgeslagen. Ga daarna verder met je volledige video.');window.rigFlow?.revealFiles({advanced:true});$('moreOptions').open=true;return false;}
   return true;
  }finally{if(restoreOperation===operation){restoreOperation=null;busy=false;for(const [element,disabled] of oldDisabled)element.disabled=disabled;if(sessionCurrent())updateCapabilities();renderContinuation();}}
 }
 async function continueFullVideo(){
- if(!lastCompletedResult)return;
+ if(!continuationAvailable())return;
  if(continuationBlocked())return;
  $('quoteDialog').close();
- if(trialContinuation?.state!=='completed'){
-  const measured=$('resultVideo').duration,seconds=Number($('duration').value),known=Number.isFinite(measured)&&measured>0;
-  if(!personFile||!imageSource||!motionFile||$('motionVideo').readyState<2){guideToFiles('Kies je bestanden opnieuw om de volledige video te maken. Je oorspronkelijke volledige duur is niet bewaard.',{person:!personFile||!imageSource,motion:!motionFile||$('motionVideo').readyState<2});return;}
-  if(known&&seconds<=Math.ceil(measured)||!known&&!legacyDurationReviewed){guideToDuration('Je oorspronkelijke volledige duur is niet bewaard. Behoud je selectie en kies zelf een langere duur onder je video. Bekijk daarna opnieuw de prijs.');return;}
-  clearBriefFeedback();$('briefDialog').showModal();briefFeedback(`Volledige video: ${seconds} seconden vanaf ${Number($('start').value).toFixed(1)} s. Controleer je huidige keuze. ${continuationPriceNote}`);$('editPrompt').focus();return;
- }
  const continuation=trialContinuation;
  try{if(!await restoreFullDraft(continuation.draft)||trialContinuation!==continuation||window.rigSessionActive?.()!==true)return;
-  if(continuation.draft.seconds<=trialSeconds()){trialContinuation=null;persistTrialContinuation();guideToDuration('Je oorspronkelijke keuze was even kort als het proefje. Kies zelf een langere duur onder je video en bekijk daarna de prijs.');return;}
-  clearBriefFeedback();$('briefDialog').showModal();briefFeedback(`Volledige video: ${continuation.draft.seconds} seconden vanaf ${continuation.draft.start.toFixed(1)} s. ${continuationPriceNote}`);$('editPrompt').focus();
+  if(continuation.draft.seconds<=trialSeconds()){trialContinuation=null;continuationOffer=false;renderContinuation();persistTrialContinuation();guideToDuration('Je oorspronkelijke keuze was even kort als het proefje. Kies zelf een langere duur onder je video en bekijk daarna de prijs.');return;}
+  reviewingFull=true;clearBriefFeedback();refreshButton();window.rigFlow?.openFullReview();$('briefDialog').showModal();briefFeedback(`Volledige video: ${continuation.draft.seconds} seconden vanaf ${continuation.draft.start.toFixed(1)} s. ${continuationPriceNote}`);$('editPrompt').focus();
  }catch(error){if(window.rigSessionActive?.()===true)showError(error.message||'Je eerdere selectie kon niet worden hersteld.');}
 }
-for(const id of continuationIds)$(id).addEventListener('click',continueFullVideo);
+
 document.addEventListener('rig-generation-busy-change',renderContinuation);
-document.addEventListener('rig-prepared-ready',()=>{completionPopup=false;renderContinuation();});
-$('resultInput').addEventListener('change',event=>{if(event.target.files[0]&&acceptsMedia(event.target.files[0],'video')){lastCompletedResult=null;completionPopup=false;renderContinuation();}});
-$('duration').addEventListener('change',()=>{if(legacyWaitingForDuration)legacyDurationReviewed=true;});
+document.addEventListener('rig-prepared-ready',()=>{continuationOffer=false;renderContinuation();});
+$('resultInput').addEventListener('change',event=>{if(event.target.files[0]&&acceptsMedia(event.target.files[0],'video')){lastCompletedResult=null;continuationOffer=false;renderContinuation();}});
 window.rigTrialTokenForQuote=quoteId=>trialContinuation?.quoteId===quoteId?trialContinuation.token:null;
-window.rigTrialDispose=()=>{cancelAutoCrop();if(restoreOperation)restoreOperation.canceled=true;trialContinuation=null;lastCompletedResult=null;nonTrialJobs.clear();renderContinuation();};
+window.rigTrialDispose=()=>{cancelAutoCrop();if(restoreOperation)restoreOperation.canceled=true;trialContinuation=null;lastCompletedResult=null;continuationOffer=false;reviewingFull=false;nonTrialJobs.clear();renderContinuation();};
 window.rigMotionSelected=()=>Boolean(motionFile);
 document.addEventListener('rig-generation-intent',event=>{const info=event.detail;if(info?.trialToken&&trialContinuation?.token===info.trialToken){trialContinuation.quoteId=info.quoteId;trialContinuation.state='pending';persistTrialContinuation();}});
-document.addEventListener('rig-generation-accepted',event=>{const info=event.detail;if(info?.trialToken&&trialContinuation?.token===info.trialToken){trialContinuation.jobId=info.id;trialContinuation.state='accepted';persistTrialContinuation();}else if(!info?.trialToken){if(info?.fromCurrent)nonTrialJobs.add(info.id);trialContinuation=null;try{window.rigScopedStorage?.removeItem(trialStorageKey);}catch{}}lastCompletedResult=null;renderContinuation();});
-document.addEventListener('rig-generation-completed',event=>{const id=event.detail?.id;if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(id))return;lastCompletedResult=id;completionPopup=event.detail?.popup!==false;legacyDurationReviewed=false;legacyWaitingForDuration=false;if(trialContinuation?.jobId===id){trialContinuation.state='completed';persistTrialContinuation();$('quoteMessage').textContent=`Je proefje is klaar. Maak volledige video herstelt je eerdere selectie. ${continuationPriceNote}`;}renderContinuation();});
+document.addEventListener('rig-generation-accepted',event=>{const info=event.detail;if(info?.trialToken&&trialContinuation?.token===info.trialToken){trialContinuation.jobId=info.id;trialContinuation.state='accepted';persistTrialContinuation();}else if(!info?.trialToken){if(info?.fromCurrent)nonTrialJobs.add(info.id);trialContinuation=null;try{window.rigScopedStorage?.removeItem(trialStorageKey);}catch{}}lastCompletedResult=null;continuationOffer=false;renderContinuation();});
+document.addEventListener('rig-generation-completed',event=>{
+ const id=event.detail?.id;if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(id))return;
+ lastCompletedResult=id;
+ const trial=trialContinuation?.jobId===id,changed=trial&&Number.isInteger(trialContinuation.revision)&&trialContinuation.revision!==draftRevision;
+ continuationOffer=trial&&!changed&&!nonTrialJobs.has(id);
+ if(trial){trialContinuation.state='completed';persistTrialContinuation();$('resultName').textContent='Jouw proefje';$('quoteMessage').textContent=`Je proefje is klaar. ${continuationPriceNote}`;}
+ if(event.detail?.popup!==false&&$('quoteDialog').open){$('quoteDialog').close();if(!changed){$('resultDisplay').scrollIntoView?.({behavior:'smooth',block:'center'});$('resultVideo').focus();}}
+ showError(trial?changed?'Je proefje is klaar. Je nieuwe selectie blijft behouden.':'Je proefje is klaar. Je volledige selectie staat klaar.':'Je video is klaar.');renderContinuation();
+});
 document.addEventListener('rig-generation-failed',event=>{if(trialContinuation?.jobId===event.detail?.id){trialContinuation.state='failed';lastCompletedResult=null;renderContinuation();}});
 readTrialContinuation();renderContinuation();
 // Stable handoff for the future authenticated uploader; no automatic uploads.
 window.rigPreparedMedia = () => prepared;
+window.rigPrepareChoice = trial => prepareWithPrompt({trial:trial===true});
+window.rigNewDraft = () => {if(continuationBlocked())return false;trialContinuation=null;lastCompletedResult=null;continuationOffer=false;reviewingFull=false;persistTrialContinuation();invalidate();renderContinuation();return true;};
 window.addEventListener('pagehide',()=>Object.values(urls).forEach(URL.revokeObjectURL));
 
 $('editPrompt').value=modePrompts[modeKey()];$('duration').max=String(durationLimit());if(editing())$('duration').value='5';

@@ -1,8 +1,8 @@
-# RIG website and private test services
+# RIG website and private services
 
-This is the source import of the current RIG consumer test. The root CLI and
-native Mac application have separate entry points. Live billing is not enabled
-by this source import or by CI.
+This repository contains the RIG website and separate test/production service
+compositions. The root CLI and native Mac application have separate entry
+points. Live billing is not enabled by a source import or by CI.
 
 ## Reproducible local checks
 
@@ -86,8 +86,11 @@ and [PPRO Bancontact redirects](https://developerhub.ppro.com/global-api/docs/be
 
 ## Private five-second input transport
 
-The website's **Video bewerken** flow now offers the ordinary Mac/Fal transfer
-after the price is known. Its confirmation explains that Fal's temporary
+When its server capability is enabled, **Video bewerken** uses the ordinary
+Mac/Fal transfer after the price is known. Public O3 editing remains disabled;
+1080P Recast and the optional source-cleanup chain are owner-only validation
+paths. See [video contracts](../docs/video-workflows.md) for their open visual
+acceptance gates. The transfer confirmation explains that Fal's temporary
 photo, source-video and result links can be opened by anyone holding the link.
 The persisted O3 quote selects `fal-temporary-links-v1`; the final generation
 request must explicitly confirm that same policy. The backend checks consent
