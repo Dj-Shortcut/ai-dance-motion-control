@@ -428,3 +428,17 @@ test('automatic availability changes in an empty restored edit-mode browser do n
   assert.equal(f.el('duration').value,'18');assert.equal(f.w.rigGenerationQuality(),'pro');assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
 });
+
+for(const edited of [false,true])test(`automatic startup checks ${edited?'preserve a real changed selection for':'do not dirty'} a matching locally remembered server trial`,async()=>{
+ const server=privateDraftStore(),first=fixture({withGeneration:true,persistDrafts:true,serverStore:server});let storage;
+ try{await finishTrial(first);storage=new Map(first.storage);}finally{first.close();}
+ assert.ok(storage.has('rig-trial-continuation:v1'));storage.set('rig-video-mode:v1','edit');
+ const f=fixture({withGeneration:true,persistDrafts:true,serverStore:server,storage,qualities:['standard','pro'],recentJob:{id:'job-1',state:'completed'}});try{
+  if(edited){f.el('prepare').click();f.change('editPrompt','Mijn echte nieuwe keuze blijft behouden.','input');f.d.dispatchEvent(new f.w.Event('rig-video-availability'));}
+  f.w.rigVideoQualities=['standard','pro','edit-standard'];f.d.dispatchEvent(new f.w.Event('rig-video-availability'));
+  await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>!f.w.rigGenerationBusy()&&f.el('status').textContent.includes('proefje is klaar'));
+  if(edited){assert.match(f.el('status').textContent,/nieuwe selectie.*behouden/);assert.notEqual(f.el('prepare').textContent,'Volledige versie maken');assert.equal(f.showing('files'),true);assert.equal(f.el('editPrompt').value,'Mijn echte nieuwe keuze blijft behouden.');assert.equal(f.calls.some(([path])=>path.startsWith('/api/video-drafts/')),false);}
+  else {assert.equal(f.showing('result'),true);assert.equal(f.el('prepare').textContent,'Volledige versie maken');assert.equal(f.el('prepare').disabled,false);f.el('prepare').click();await settle(()=>f.el('briefDialog').open);assert.equal(f.el('duration').value,'18');assert.equal(f.w.rigGenerationQuality(),'pro');}
+  assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});

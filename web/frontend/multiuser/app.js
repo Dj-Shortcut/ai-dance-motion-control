@@ -122,7 +122,7 @@ function invalidate(options){
  if(!busy&&options?.automatic!==true)draftHasChoices=true;
  if(!busy&&continuationAvailable()&&!retainingOriginals)continuationOffer=false;
  if(!busy)resultRecovery=false;
- if(!busy&&retainingOriginals&&trialContinuation?.revision===draftRevision)trialContinuation.revision++;
+ if(!busy&&(retainingOriginals||options?.automatic===true)&&trialContinuation?.revision===draftRevision)trialContinuation.revision++;
  draftRevision++;document.dispatchEvent(new Event('rig-prepared-change'));prepared=null;$('previewPrepared').hidden=true;if(urls.prepared){URL.revokeObjectURL(urls.prepared);delete urls.prepared}refreshButton();
 }
 // Server capability controls the interface; the server enforces authorization.
