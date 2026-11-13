@@ -159,7 +159,10 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
   if(!draft&&(p!=='/api/assets'||req.method!=='POST')){try{return await router(req,env)}catch{return unavailable()}}
   let claim;try{claim=await lease.acquire(trustedUserId)}catch{return unavailable()}
   if(claim?.state!=='acquired'||typeof claim.token!=='string')return unavailable();
-  let response,outcome='uncertain';
+  // Drafts only read prepared bytes or store bounded metadata. A failed draft
+  // cannot leave a remote transform running; successful streams still retain
+  // shared admission until their body finishes or is cancelled below.
+  let response,outcome=draft?'settled':'uncertain';
   try{
    response=await router(req,env);if(!(response instanceof Response))throw Error('No result');
    const uncertain=response.headers.get('x-rig-media-uncertain')==='1';
