@@ -13,7 +13,7 @@ const groups={
   'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay','production-ingress'
  ],
  workerd:[
-  'video-drafts-workerd',
+  'video-drafts-workerd','router-rate-limit-workerd',
   'production-workflow-stores-workerd','production-workflow-client-workerd','workflow-runner-workerd','workflow-budget-workerd','workflow-http-workerd','funding-admission-workerd','funding-coverage-workerd','owner-funding-coverage-workerd','funding-production-boundary-workerd','funding-compression-workerd',
   'invoice-store-workerd','invoice-payment-workerd','invoice-delivery-workerd','purchase-billing-workerd','commercial-checkout-workerd','customer-support-workerd','accounting-export-workerd','owner-recovery-workerd','preparation-budget-workerd','owner-security-workerd','profit-guard-workerd','owner-finance-workerd','sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
   'durable-media-lease','sponsored-invitation','closed-fresh-d1','sponsored-video-workerd','production-payment-workerd','production-private-workerd','production-commerce-workerd','production-readiness-workerd','production-invitation-workerd','production-video-workerd','owner-provider-funding-workerd','production-collector-workerd','billing-refusal-workerd','gateway-relay-workerd'

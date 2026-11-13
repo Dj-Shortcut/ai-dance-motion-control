@@ -61,9 +61,8 @@ test('optional reference images have a separate owner-only retry quota and do no
  for(let i=0;i<4;i++)assert.equal((await stage.fetch(await image('image'),e)).status,201);
  assert.equal((await stage.fetch(await image('image'),e)).status,429);
  for(let i=0;i<2;i++)assert.equal((await stage.fetch(await image(i===0?'face':'angle'),e)).status,201);
- // The separate, unchanged short-window limiter allows six preparations per
- // minute because each request traverses both router and asset checks.
- await e.DB.prepare('UPDATE rig_rate_limits SET window_start=? WHERE bucket=?').bind(0,'asset:alice').run();
+ // Each preparation counts once. All twelve allowed image/reference uploads
+ // fit the unchanged write burst; the separate daily reference quota still wins.
  for(let i=2;i<8;i++)assert.equal((await stage.fetch(await image(i%4===0?'face':'angle'),e)).status,201);
  assert.equal((await stage.fetch(await image('angle'),e)).status,429);
  assert.equal(mediaCalls,12);

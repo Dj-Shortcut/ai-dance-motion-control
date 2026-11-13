@@ -2,6 +2,7 @@ import {videoDraftPath} from './video-drafts.mjs';
 import {isProductionGenerationContext} from './production-generation-context.mjs';
 import { handlePaymentRoute } from './payment.mjs';
 import { createGenerationHandler } from './generation.mjs';
+import {hasAssetWriteLimit} from './assets.mjs';
 
 const hdr = {
   'Cache-Control': 'no-store',
@@ -71,10 +72,17 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
       if (!validUser(user)) return json(401,{error:'Aanmelden vereist.'});
     }
     if (typeof limit !== 'function') return json(503,{error:'Dienst niet beschikbaar.'});
+    let assets,assetHandle;
+    if(kind==='asset'){
+      if(typeof makeAssets!=='function')return json(503,{error:'Bestanden niet beschikbaar.'});
+      try{assets=await makeAssets(env,user);assetHandle=assets?.handle}catch{return json(503,{error:'Bestanden niet beschikbaar.'})}
+    }
     try {
       // Webhooks are independently verified against Mollie by payment.mjs.
       // This is a coarse global bucket; use an edge/WAF limit in production.
-      const allowed = await limit({env, category:kind, userId:user, path:url.pathname, method:req.method});
+      // The authentic asset POST handler applies the same durable limit itself.
+      // Count one preparation once; generic/replaced adapters stay guarded here.
+      const allowed = kind==='asset'&&write&&hasAssetWriteLimit(assetHandle) ? true : await limit({env, category:kind, userId:user, path:url.pathname, method:req.method});
       if (allowed !== true) return json(429,{error:'Te veel aanvragen. Probeer later opnieuw.'});
     } catch { return json(503,{error:'Dienst niet beschikbaar.'}); }
     try {
@@ -83,9 +91,7 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
         return res instanceof Response ? secured(res) : json(404,{error:'Niet gevonden.'});
       }
       if (kind === 'asset') {
-        if (typeof makeAssets !== 'function') return json(503,{error:'Bestanden niet beschikbaar.'});
-        const assets=await makeAssets(env,user);
-        const response=await assets.handle(req);
+        const response=await assetHandle.call(assets,req);
         return response instanceof Response ? secured(response) : json(404,{error:'Niet gevonden.'});
       }
       if (typeof makeGenerationServices !== 'function') return json(503,{error:'Videogeneratie is nog niet beschikbaar.'});
@@ -105,12 +111,21 @@ export async function d1Limit({env,category,userId,method}) {
   if (!env.DB || !['payment','generation','webhook','asset','session','readiness','finance','owner-security'].includes(category)) throw Error('Missing limiter');
   const now = Math.floor(Date.now()/1000);
   const limit = category==='readiness'?20:category==='session'?360:category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
-  const bucket = `${category}:${userId || 'global'}${['finance','owner-security'].includes(category)?':'+method:''}`;
-  const row = await env.DB.prepare(`INSERT INTO rig_rate_limits(bucket,window_start,requests)
+  const shared=['payment','generation','asset'].includes(category);
+  const base=`${category}:${userId || 'global'}`;
+  async function count(bucket){
+   const row = await env.DB.prepare(`INSERT INTO rig_rate_limits(bucket,window_start,requests)
     VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET
     requests = CASE WHEN rig_rate_limits.window_start <= ? THEN 1 ELSE rig_rate_limits.requests + 1 END,
     window_start = CASE WHEN rig_rate_limits.window_start <= ? THEN excluded.window_start ELSE rig_rate_limits.window_start END
     RETURNING requests`).bind(bucket,now,now-60,now-60).first();
-  if (!row || !Number.isInteger(row.requests)) throw Error('Invalid limiter result');
-  return row.requests <= limit;
+   if (!row || !Number.isSafeInteger(row.requests)||row.requests<1) throw Error('Invalid limiter result');
+   return row.requests;
+  }
+  // Preserve the old shared bucket as the aggregate guard: separating reads and
+  // writes must not increase the overall sixty-request allowance. Each UPSERT
+  // is atomic and both checks must succeed; failures only consume capacity.
+  if(shared&&await count(base)>60)return false;
+  const bucket=base+(shared||['finance','owner-security'].includes(category)?':'+method:'');
+  return await count(bucket)<=limit;
 }

@@ -32,7 +32,7 @@ test('one authenticated invitee is bounded by 500 cents through the actual priva
   const image=await readFile('test/fixtures/input.jpg'),video=await readFile('test/fixtures/silent.mp4');
   async function upload(kind,data){const response=await send('/api/assets','d.e.f',{method:'POST',headers:{'content-type':kind==='image'?'image/jpeg':'video/mp4','x-rig-asset-kind':kind,...(kind==='video'?{'x-rig-duration-seconds':'4','x-rig-keep-sound':'false'}:{})},body:data});assert.equal(response.status,201,await response.clone().text());return (await response.json()).id}
   let imageId=await upload('image',image);const videoId=await upload('video',video);
-  async function quote(quality='standard'){await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket=?').bind(`generation:${tester}`).run();const r=await json('/api/generation-quotes',{imageId,videoId,quality,keepSound:false,steadyCamera:false});assert.equal(r.status,201,await r.clone().text());return r.json()}
+  async function quote(quality='standard'){await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket IN (?,?,?)').bind(`generation:${tester}`,`generation:${tester}:GET`,`generation:${tester}:POST`).run();const r=await json('/api/generation-quotes',{imageId,videoId,quality,keepSound:false,steadyCamera:false});assert.equal(r.status,201,await r.clone().text());return r.json()}
   // A job with ledger funds alone cannot authorize sponsored dispatch.
   const q=await quote(),jobs=createD1GenerationStores(db,{mode:'test',dispatchMode:'sponsored'}).jobs;
   const raw=await jobs.begin({userId:tester,quoteId:q.id,idempotencyKey:'raw-no-reservation',quote:q});assert.equal(raw.kind,'created');assert.equal(await jobs.authorizeDispatch(tester,raw.job.id),false);await jobs.markPreparationFailed(tester,raw.job.id);
@@ -54,9 +54,9 @@ test('one authenticated invitee is bounded by 500 cents through the actual priva
   assert.deepEqual(await store.eligibility(tester),{state:'eligible',remainingCents:500});
   // The exact rejected photo is blocked before any fresh paid request. The
   // remaining sponsor-budget scenarios use a different verified image hash.
-  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket=?').bind(`generation:${tester}`).run();
+  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket IN (?,?,?)').bind(`generation:${tester}`,`generation:${tester}:GET`,`generation:${tester}:POST`).run();
   const blocked=await json('/api/generation-quotes',{imageId,videoId,quality:'pro',keepSound:false,steadyCamera:false});assert.equal(blocked.status,400);assert.match((await blocked.json()).error,/menselijk bovenlichaam/);
-  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket=?').bind(`asset:${tester}`).run();
+  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket IN (?,?,?)').bind(`asset:${tester}`,`asset:${tester}:GET`,`asset:${tester}:POST`).run();
   const changedImage=Buffer.concat([image.subarray(0,2),Buffer.from([255,254,0,3,0]),image.subarray(2)]);imageId=await upload('image',changedImage);
   await db.prepare("UPDATE rig_fixture_fal_mode SET mode='ok' WHERE id=1").run();
   const over=await quote('pro');
@@ -69,6 +69,8 @@ test('one authenticated invitee is bounded by 500 cents through the actual priva
    assert.equal((await send(`/api/generations/${job.id}/video`,'g.h.i')).status,503);
   }
   assert.equal((await db.prepare('SELECT SUM(amount_cents) n FROM rig_sponsored_reservations WHERE released_at IS NULL').first()).n,400);
+  // Exercise the durable sponsor budget independently of the short burst window.
+  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket IN (?,?,?)').bind(`generation:${tester}`,`generation:${tester}:GET`,`generation:${tester}:POST`).run();
   // Extra purchased/fake balance cannot exceed the sponsor's separate limit.
   const beforeUploads=(await db.prepare("SELECT COUNT(*) n FROM rig_fixture_trace WHERE event='POST https://rest.fal.ai/storage/upload/initiate'").first()).n;
   const denied=await json('/api/generations',{quoteId:over.id,idempotencyKey:'over-budget'});assert.equal(denied.status,409);assert.match((await denied.json()).error,/gratis testtegoed.*niet voldoende/);
@@ -85,7 +87,7 @@ test('one authenticated invitee is bounded by 500 cents through the actual priva
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM rig_fixture_fal_dispatch').first()).n,7);
   assert.equal((await db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id=?").bind(`release:${pending.id}`).first()).n,0);
   assert.equal((await db.prepare("SELECT COUNT(*) n FROM rig_rate_limits WHERE bucket='rig-closed-video-global-one-attempt-v1'").first()).n,1);
-  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket=?').bind(`generation:${tester}`).run();
+  await db.prepare('UPDATE rig_rate_limits SET window_start=0 WHERE bucket IN (?,?,?)').bind(`generation:${tester}`,`generation:${tester}:GET`,`generation:${tester}:POST`).run();
   assert.deepEqual(await (await send('/api/video-config')).json(),{enabled:true,funding:'sponsored'});
   assert.equal((await send(`/api/generations/${firstCompletedId}/video`)).status,200);
   assert.equal((await send('/api/assets','d.e.f',{method:'POST',headers:{'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:image})).status,403);
