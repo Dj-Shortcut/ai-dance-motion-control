@@ -27,7 +27,11 @@ export function createNativeSiteAuth({browser,fetchImpl=fetch}={}){
  }
  async function sessionSubject(){return (await snapshot()).userId;}
  async function currentSession(){return Boolean(await sessionSubject());}
- const refresh=()=>{if(!disposed)void snapshot().catch(()=>publish(null));};
+ // An unavailable session check is not proof of sign-out. Keep local work;
+ // api() still requires a fresh verified subject before every request and
+ // discards its response if the post-request check cannot verify that subject.
+ // Definitive 401/403 and verified account changes are published by snapshot.
+ const refresh=()=>{if(!disposed)void snapshot().catch(()=>{});};
  const visible=()=>{if(browser.document?.visibilityState==='visible')refresh();};
  function watchSession(listener){
   if(disposed||typeof listener!=='function')throw ended();

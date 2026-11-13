@@ -88,7 +88,10 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
     if(url.pathname==='/api/session'){
      const balance=await mapped.DB.prepare('SELECT COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0) AS balance, EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AS frozen').bind(trustedUserId,trustedUserId).first();
      if(!Number.isSafeInteger(balance?.balance))return fail();
-     return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:maySell(await coverage(mapped),configuredPackages(mapped)),funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
+     // Identity/lifecycle reads must never wait for provider billing. Unknown
+     // purchase availability is false here; packages, balance, readiness and
+     // checkout still perform their own current coverage/admission checks.
+     return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:false,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
     if(req.method==='POST'&&url.pathname==='/api/payments/create'){
      const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;

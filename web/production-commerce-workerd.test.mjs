@@ -31,7 +31,7 @@ test('native Site → production relay → Mollie credits are owned, verified an
  try{
   let response=await f.site.fetch(SITE+'/api/session',{headers:headers('alice')});assert.equal(response.status,503);assert.equal((await stats(f)).providerReads,0);
   await seeded(f);
-  response=await f.site.fetch(SITE+'/api/session',{headers:headers('alice')});assert.equal(response.status,200,await response.clone().text());const alice=await response.json();assert.equal(alice.mode,'live');assert.equal(alice.balanceCents,0);assert.equal(alice.purchasesEnabled,true);assert.equal(alice.funding,'credits');
+  response=await f.site.fetch(SITE+'/api/session',{headers:headers('alice')});assert.equal(response.status,200,await response.clone().text());const alice=await response.json();assert.equal(alice.mode,'live');assert.equal(alice.balanceCents,0);assert.equal(alice.purchasesEnabled,false);assert.equal(alice.funding,'credits');
   const packages=await(await f.site.fetch(SITE+'/api/payments/packages',{headers:headers('alice',alice.userId)})).json();assert.equal(packages.mode,'live');assert.equal(packages.currency,'EUR');assert.equal(packages.packages[0].amountCents,500);assert.equal((await stats(f)).providerReads,0);
   const requestId='purchase-intent-0001',payload={packageId:'small',requestId};
   response=await f.site.fetch(SITE+'/api/payments/create',{method:'POST',headers:{...headers('alice',alice.userId),authorization:'browser-secret',cookie:'private=browser'},body:JSON.stringify(payload)});assert.equal(response.status,200,await response.clone().text());assert.match((await response.json()).checkoutUrl,/^https:\/\/www\.mollie\.com\/checkout\//);

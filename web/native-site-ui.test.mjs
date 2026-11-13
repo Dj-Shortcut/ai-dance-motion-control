@@ -41,6 +41,50 @@ test('native account changes abort the bound UI and cannot authorize a write as 
   await assert.rejects(auth.api('/api/generations',{method:'POST',body:'{}'},alice),/aanmelding/);assert.equal(writes,1);
  }finally{stop();binding.dispose();auth.dispose();dom.window.close();}
 });
+
+for(const failure of ['503','network','timeout'])test(`a native session watcher ${failure} pauses requests without discarding the recoverable studio`,async()=>{
+ const {dom,w,d}=page();let sessionState='ok',sessionReads=0,writes=0,disposed=0,tick;
+ w.setInterval=fn=>{tick=fn;return 1;};w.clearInterval=()=>{};w.rigGenerationDispose=()=>{disposed++;};
+ const media={image:{blob:new Blob(['local portrait'])},video:{blob:new Blob(['local selected clip'])}};w.rigPreparedMedia=()=>media;
+ const auth=createNativeSiteAuth({browser:w,fetchImpl:async(url,init)=>{
+  const path=new URL(url).pathname;
+  if(path==='/api/session'){sessionReads++;if(sessionState==='network')throw TypeError('Offline');if(sessionState==='timeout')throw new DOMException('Timed out','TimeoutError');if(sessionState==='503')return Response.json({error:'Temporary failure'},{status:503});return Response.json({userId:alice});}
+  if(path==='/api/video-config')return Response.json({enabled:false});
+  if(init.method==='POST')writes++;return Response.json({id:'owned-response'});
+ }});
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}});
+ try{
+  app.binding.scopedStorage.setItem('rig-generation-pending',JSON.stringify({quoteId:'accepted-quote',idempotencyKey:'accepted-intent'}));const pending=app.binding.scopedStorage.getItem('rig-generation-pending');
+  sessionState=failure;const before=sessionReads;if(failure==='timeout')tick();else w.dispatchEvent(new w.Event(failure==='503'?'focus':'pageshow'));await waitFor(()=>sessionReads>before);await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(app.binding.isActive(),true);assert.equal(d.getElementById('rigStudio').hidden,false);assert.equal(d.getElementById('authGate').hidden,true);assert.equal(disposed,0);assert.equal(w.rigPreparedMedia(),media);assert.equal(app.binding.scopedStorage.getItem('rig-generation-pending'),pending);
+  await assert.rejects(app.binding.request('/api/generations',{method:'POST',body:'{}'}));assert.equal(writes,0,'an unverified session cannot dispatch a write');
+  sessionState='ok';const response=await app.binding.request('/api/generation-quotes',{method:'POST',body:'{}'});assert.equal(response.status,200);assert.equal(writes,1);assert.equal(app.binding.isActive(),true);assert.equal(disposed,0,'same-account recovery does not require sign-in or discard local files');
+ }finally{app.dispose();dom.window.close();}
+});
+
+for(const status of [401,403])test(`a definitive native session ${status} still ends the binding and clears private UI`,async()=>{
+ const {dom,w,d}=page();let endedStatus=null,disposed=0;w.rigGenerationDispose=()=>{disposed++;};
+ const auth=createNativeSiteAuth({browser:w,fetchImpl:async url=>new URL(url).pathname==='/api/session'?endedStatus?Response.json({error:'Signed out'},{status:endedStatus}):Response.json({userId:alice}):Response.json({enabled:false})});
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}});
+ try{endedStatus=status;w.dispatchEvent(new w.Event('focus'));await waitFor(()=>!app.binding.isActive());assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(d.getElementById('authGate').hidden,false);assert.equal(disposed,1);await assert.rejects(app.binding.request('/api/generations',{method:'POST',body:'{}'}),/aanmelding/);}finally{app.dispose();dom.window.close();}
+});
+
+for(const path of ['/api/assets','/api/generations'])test(`an unknown post-write session check discards the ${path} response but retains the same-account recovery state`,async()=>{
+ const {dom,w,d}=page();let unavailable=false,canceled=false,writes=0,disposed=0;w.rigGenerationDispose=()=>{disposed++;};
+ const auth=createNativeSiteAuth({browser:w,fetchImpl:async(url,init)=>{
+  const target=new URL(url).pathname;if(target==='/api/session')return unavailable?Response.json({error:'Temporary failure'},{status:503}):Response.json({userId:alice});if(target==='/api/video-config')return Response.json({enabled:false});
+  if(target===path){writes++;unavailable=true;return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"id":"server-accepted"}'));},cancel(){canceled=true;}}),{headers:{'content-type':'application/json'}});}
+  if(target==='/api/generation-intents/accepted-intent/reconcile')return Response.json({id:'server-accepted',state:'queued'});throw Error('Unexpected offline fixture route');
+ }});
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}});
+ try{
+  const pending=JSON.stringify({quoteId:'accepted-quote',idempotencyKey:'accepted-intent'});app.binding.scopedStorage.setItem('rig-generation-pending',pending);
+  await assert.rejects(app.binding.request(path,{method:'POST',body:'{}'}));await waitFor(()=>canceled);
+  assert.equal(writes,1);assert.equal(app.binding.isActive(),true);assert.equal(d.getElementById('rigStudio').hidden,false);assert.equal(app.binding.scopedStorage.getItem('rig-generation-pending'),pending);assert.equal(disposed,0);
+  await assert.rejects(app.binding.request(path,{method:'POST',body:'{}'}));assert.equal(writes,1,'unknown identity cannot retry an accepted write');
+  unavailable=false;const recovered=await app.binding.request('/api/generation-intents/accepted-intent/reconcile',{method:'POST',body:JSON.stringify({quoteId:'accepted-quote'})});assert.equal((await recovered.json()).id,'server-accepted');assert.equal(writes,1,'recovery reads the original intent rather than submitting a second generation');
+ }finally{app.dispose();dom.window.close();}
+});
 test('native boot reuses the studio, keeps native sign-in anchors and mounts the gift invitation',async()=>{
  const code='x'.repeat(43),{dom,w,d}=page('https://rig.example.chatgpt.site/#invite='+code),loaded=[],calls=[];
  let listener,disposed=false,generationDisposed=0;w.rigGenerationDispose=()=>{generationDisposed++;};
