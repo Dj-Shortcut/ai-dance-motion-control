@@ -15,7 +15,7 @@ const ceremonyError=error=>{
 export function createOwnerVerification({window:browser,document=browser?.document,webauthn={startRegistration,startAuthentication,browserSupportsWebAuthn,cancel:()=>WebAuthnAbortService.cancelCeremony()}}={}){
  const request=browser?.rigRequest,active=browser?.rigSessionActive;
  if(!browser||!document||browser.rigNativeSite!==true||typeof request!=='function'||typeof active!=='function')throw Error('Je aanmelding is gewijzigd.');
- let disposed=false,busy=false,popup=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0,refreshSequence=0;
+ let disposed=false,busy=false,popup=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0,refreshSequence=0,suspended=false;
  const current=()=>!disposed&&browser.rigRequest===request&&browser.rigSessionActive===active&&active()===true;
  const element=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
  const supported=()=>{try{return webauthn.browserSupportsWebAuthn()===true;}catch{return false;}};
@@ -23,14 +23,16 @@ export function createOwnerVerification({window:browser,document=browser?.docume
  function status(message,error=false){if(!current()||!statusNode)return;statusNode.textContent=message;statusNode.dataset.error=String(error);}
  function stopPoll(){if(poll!==null){browser.clearTimeout(poll);poll=null;}}
  function cancel(){
-  sequence++;try{webauthn.cancel();}catch{}
+  const wasBusy=busy;sequence++;busy=false;try{webauthn.cancel();}catch{}
+  if(wasBusy)status('Bevestiging geannuleerd. Je kunt opnieuw bevestigen.');
+  if(current()&&setupButton)setupButton.disabled=!supported();
   if(rejectPopup){const reject=rejectPopup;rejectPopup=null;reject(failure('Bevestiging geannuleerd.','verification_cancelled'));}
   if(popup?.open)popup.close();popup?.remove();popup=null;
  }
  function dispose(){
   if(disposed)return;cancel();disposed=true;stopPoll();pending=null;
   mountRoot?.replaceChildren();mountRoot=null;statusNode=null;pendingNode=null;
-  browser.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
+  browser.removeEventListener('pagehide',onPageHide);browser.removeEventListener('pageshow',onPageShow);document.getElementById('authLogout')?.removeEventListener('click',dispose);
  }
  async function call(path,payload){
   check();const response=await request(path,{cache:'no-store',...(payload===undefined?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})});check();
@@ -74,7 +76,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
    return {challengeId:options.challengeId,credential};
   }catch(error){
    const safe=ceremonyError(error);if(safe?.code==='browser_unsupported'&&current()&&mountRoot&&!mountRoot.querySelector('.owner-security-browser-hint'))mountRoot.append(browserHint());throw safe;
-  }finally{busy=false;}
+  }finally{if(token===sequence)busy=false;}
  }
  function showPending(value){
   pending=value;pendingNode.replaceChildren();pendingNode.hidden=false;
@@ -82,14 +84,14 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   status('Wacht op aparte goedkeuring. Je gegevens blijven leesbaar.');
  }
  async function pendingStatus(){
-  if(!current()||!pending)return;
+  if(!current()||suspended||!pending)return;
   const token=pending.candidateId;try{
    const value=await call('/api/owner/security/registration/'+token);if(!current()||pending?.candidateId!==token)return;
    if(value.status==='active'){pending=null;stopPoll();pendingNode.replaceChildren();pendingNode.hidden=true;await refresh();return;}
    if(value.status==='expired'||value.status==='rejected'){pending=null;stopPoll();pendingNode.hidden=true;status('Deze aanvraag is niet actief. Je kunt opnieuw instellen.',true);return;}
    if(value.status!=='pending')throw failure('Controleer de status opnieuw.','security_unavailable');
   }catch(error){if(current()&&pending?.candidateId===token)status(error.message,true);}
-  if(current()&&pending){stopPoll();poll=browser.setTimeout(()=>void pendingStatus(),10000);}
+  if(current()&&!suspended&&pending){stopPoll();poll=browser.setTimeout(()=>void pendingStatus(),10000);}
  }
  async function enroll(){
   check();if(busy||!setupButton)return;if(!supported()){status('Open RIG in Chrome of Safari om je apparaat in te stellen.',true);return;}
@@ -101,10 +103,11 @@ export function createOwnerVerification({window:browser,document=browser?.docume
    const credential=await webauthn.startRegistration({optionsJSON:options.publicKey});check();if(token!==sequence)throw failure('Instellen geannuleerd.','verification_cancelled');
    if(Date.now()>=options.expiresAt)throw failure('De aanvraag is verlopen. Probeer opnieuw.','verification_expired');
    const value=await call('/api/owner/security/registration/verify',{challengeId:options.challengeId,credential});
+   if(token!==sequence)throw failure('Instellen geannuleerd.','verification_cancelled');
    if(!identifier(value?.candidateId)||typeof value.fingerprint!=='string'||value.fingerprint.length>128||value.status!=='pending')throw failure('De aanvraag kon niet veilig worden klaargezet.','security_unavailable');
    showPending(value);stopPoll();poll=browser.setTimeout(()=>void pendingStatus(),10000);
-  }catch(error){const safe=ceremonyError(error);status(safe?.code==='verification_cancelled'?'Instellen geannuleerd. Er is nog geen apparaat geactiveerd.':safe.message,true);if(safe?.code==='browser_unsupported'&&current()&&mountRoot&&!mountRoot.querySelector('.owner-security-browser-hint'))mountRoot.append(browserHint());}
-  finally{busy=false;if(current()&&setupButton)setupButton.disabled=!supported();}
+  }catch(error){if(token!==sequence)return;const safe=ceremonyError(error);status(safe?.code==='verification_cancelled'?'Instellen geannuleerd. Er is nog geen apparaat geactiveerd.':safe.message,true);if(safe?.code==='browser_unsupported'&&current()&&mountRoot&&!mountRoot.querySelector('.owner-security-browser-hint'))mountRoot.append(browserHint());}
+  finally{if(token===sequence){busy=false;if(current()&&setupButton)setupButton.disabled=!supported();}}
  }
  async function refresh({manual=false}={}){
   if(!current())return;const token=++refreshSequence;
@@ -129,7 +132,9 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   pendingNode=element('div');pendingNode.className='owner-security-pending';pendingNode.hidden=true;container.append(title,statusNode,actions,pendingNode);if(!supported())container.append(browserHint());
   setupButton.addEventListener('click',()=>void enroll());refreshButton.addEventListener('click',()=>void refresh({manual:true}));void refresh();
  }
- browser.addEventListener('pagehide',dispose);document.getElementById('authLogout')?.addEventListener('click',dispose);
+ function onPageHide(event){if(event.persisted===true&&current()){suspended=true;cancel();stopPoll();}else dispose();}
+ function onPageShow(){if(current())suspended=false;}
+ browser.addEventListener('pagehide',onPageHide);browser.addEventListener('pageshow',onPageShow);document.getElementById('authLogout')?.addEventListener('click',dispose);
  return {prepare,mount,dispose,cancel};
 }
 

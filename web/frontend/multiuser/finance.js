@@ -30,15 +30,16 @@
   ];
   let disposed=false,dialog=null,ui=null,data=null,loadSequence=0,loading=false,salesSequence=0,salesLoading=false,expensePending=null,policyPending=null,correction=null;
 
-  function dispose(){
+  function onPageHide(event){if(event.persisted!==true||!current())dispose();}
+ function dispose(){
     if(disposed)return;disposed=true;loadSequence++;salesSequence++;data=null;expensePending=null;policyPending=null;correction=null;
     window.rigOwnerVerification?.cancel?.();window.rigOwnerAdministration?.dispose?.();
-    button.hidden=true;button.closest('header')?.classList.remove('has-finance');button.removeEventListener('click',open);window.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
+    button.hidden=true;button.closest('header')?.classList.remove('has-finance');button.removeEventListener('click',open);window.removeEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.removeEventListener('click',dispose);
     if(dialog?.open)dialog.close();dialog?.remove();dialog=null;ui=null;
     if(window.rigFinanceDispose===dispose)delete window.rigFinanceDispose;
   }
   window.rigFinanceDispose=dispose;
-  window.addEventListener('pagehide',dispose);
+  window.addEventListener('pagehide',onPageHide);
   document.getElementById('authLogout')?.addEventListener('click',dispose);
 
   async function request(path,init={}){

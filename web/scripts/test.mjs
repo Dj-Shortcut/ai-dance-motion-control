@@ -5,7 +5,7 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 const groups={
  unit:[
   'browser-preparation-capability-ui','screen-recording-crop-ui','browser-cleanup-preparation','browser-cleanup-aac','browser-cleanup-compositor','browser-cleanup-ui','browser-cleanup-client','overlay-cleanup-contract','workflow-client-contract','workflow-inputs','workflow-runtime',
-  'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','guided-flow-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
+  'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','guided-flow-ui','mobile-generation-lifecycle-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui','funding-payments-ui','funding-diagnostics',
   'browser-recording-integrity','browser-frame-padding','browser-edit-dimensions','rig-mcp','rig-chatgpt-files','rig-sites-app','build-rig-sites',
   'generation','rig-inline-inputs','rig-inline-assets','rig-inline-generation','rig-r2-delivery','rig-r2-inputs','payment','payment-body','payment-rejections','private-upload','provider-response','result-store',

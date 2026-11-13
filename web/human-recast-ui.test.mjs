@@ -43,6 +43,8 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
   else throw Error('unexpected '+path);
   return {ok:true,json:async()=>value};
  };
+ // Delayed fixture responses do not replace the authenticated UI binding.
+ let transport=w.rigRequest;w.rigRequest=(...args)=>transport(...args);const wrapRequest=wrapper=>{transport=wrapper(transport);};
  w.eval(app);w.eval(generation);w.rigVideoMode='live';
  // These core tests omit flow.js; guided-flow-ui.test.mjs covers its real screen visibility and focus navigation.
  for(const screen of d.querySelectorAll('[data-flow-screen]'))screen.hidden=false;
@@ -51,7 +53,7 @@ function fixture({qualities=['standard','pro','human-recast'],verifiedDuration=5
  const file=(id,name,type)=>{const source=new w.File(['source'],name,{type});Object.defineProperty(el(id),'files',{configurable:true,value:[source]});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));return source;};
  const load=()=>{file('personInput','my-portrait.jpg','image/jpeg');file('motionInput','reference.mp4','video/mp4');el('motionVideo').dispatchEvent(new w.Event('loadedmetadata'));};
  const prepare=()=>{el('prepare').click();el('confirmBrief').click();};
- return {dom,w,d,el,calls,images,videos,storage,serverStore,verifications,created,revoked,change,prompt,file,load,prepare};
+ return {dom,w,d,el,calls,images,videos,storage,serverStore,verifications,created,revoked,change,prompt,file,load,prepare,wrapRequest};
 }
 test('the video-mode choice uses the advertised Recast capability and never falls back to an absent edit route',()=>{
  const f=fixture({qualities:['standard','pro','edit-standard','human-recast']});
@@ -112,6 +114,7 @@ test('the recast quote previews the exact fixed main portrait and revokes that l
   f.prompt('Een andere beschrijving.');assert.equal(f.el('quotePortraitPreview').hidden,true);assert.equal(f.el('quotePortraitImage').hasAttribute('src'),false);assert.ok(f.revoked.includes(first));
   f.el('closeQuote').click();const second=await quote();assert.notEqual(second,first);f.el('closeQuote').click();assert.equal(f.el('quotePortraitPreview').hidden,true);assert.ok(f.revoked.includes(second));
   const third=await quote();f.w.rigGenerationDispose();assert.equal(f.el('quotePortraitPreview').hidden,true);assert.equal(f.el('confirmGeneration').hidden,true);assert.ok(f.revoked.includes(third));f.el('confirmGeneration').click();assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);
+  f.w.eval(generation); // A terminal disposal requires a fresh authenticated UI instance.
   f.el('closeQuote').click();const fourth=await quote();f.w.dispatchEvent(new f.w.Event('pagehide'));assert.ok(f.revoked.includes(fourth));assert.equal(f.el('quotePortraitPreview').hidden,true);
  }finally{f.dom.window.close();}
 });
@@ -212,7 +215,7 @@ test('a trial completing after a new selection leaves the current draft and main
  const f=fixture({verifiedDuration:null,jobState:'queued'});
  try{
   f.load();f.el('editModeButton').click();f.change('duration',12);f.change('start',7.5);f.prompt('Eerste scène.');
-  let release;const original=f.w.rigRequest;f.w.rigRequest=async(path,options)=>path==='/api/generations/job-recast'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/job-recast/video'})});}):original(path,options);
+  let release;f.wrapRequest(original=>async(path,options)=>path==='/api/generations/job-recast'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/job-recast/video'})});}):original(path,options));
   f.el('prepare').click();f.el('tryShortVideo').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await settle(()=>!f.el('confirmGeneration').hidden&&!f.el('confirmUpload').disabled);f.w.rigOwnerVerification.prepare=async()=>({proof:'confirmed'});f.el('confirmGeneration').click();await settle(()=>release);
   const newFile=f.file('personInput','new-phone-photo.jpg','image/jpeg');f.prompt('Nieuw idee.');f.change('duration',10);f.change('start',2.5);crop(f,'person',30,50);
   release();await settle(()=>!f.w.rigGenerationBusy());
@@ -257,7 +260,7 @@ test('an older completed result cannot restore a draft while a newer job, intent
   try{f.load();f.prompt('Blijf bij deze nieuwe keuze.');await openRecentResult(f);assert.equal(f.el('prepare').disabled,true);assert.notEqual(f.el('prepare').textContent,'Maak volledige video');assert.equal(f.storage.get(key),key.endsWith('job')?'new-job':JSON.stringify({quoteId:'new-quote',idempotencyKey:'new-intent'}),'opening an older video keeps the newer recovery handle');assert.equal(f.el('checkGeneration').hidden,false,'the newer job or intent remains reachable for status recovery');f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('editPrompt').value,'Blijf bij deze nieuwe keuze.');assert.equal(f.el('briefDialog').open,false);assert.equal(f.calls.some(([p])=>p==='/api/assets'),false);}finally{f.dom.window.close();}
  }
  const f=fixture({recentJob:{id:'older-result',state:'completed'}});
- try{f.load();await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Verder met deze video');let release;const original=f.w.rigRequest;f.w.rigRequest=async(path,options)=>path==='/api/generations/older-result'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/older-result/video'})});}):original(path,options);f.el('recentVideo').click();await settle(()=>release);assert.equal(f.el('prepare').disabled,true);f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('briefDialog').open,false);release();await settle(()=>!f.el('prepare').disabled);assert.equal(f.w.rigGenerationBusy(),false,'recent-result polling releases the continuation controls');}finally{f.dom.window.close();}
+ try{f.load();await openRecentResult(f);assert.equal(f.el('prepare').textContent,'Verder met deze video');let release;f.wrapRequest(original=>async(path,options)=>path==='/api/generations/older-result'?await new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>({state:'completed',videoPath:'/api/generations/older-result/video'})});}):original(path,options));f.el('recentVideo').click();await settle(()=>release);assert.equal(f.el('prepare').disabled,true);f.el('prepare').dispatchEvent(new f.w.Event('click'));assert.equal(f.el('briefDialog').open,false);release();await settle(()=>!f.el('prepare').disabled);assert.equal(f.w.rigGenerationBusy(),false,'recent-result polling releases the continuation controls');}finally{f.dom.window.close();}
 });
 
 test('a reloaded completed trial retains settings but requires original files; asynchronous frame restoration cannot overwrite a new choice or session',async()=>{
@@ -348,7 +351,7 @@ test('Motion continuation restores explicit Standard, audio, camera, crops and e
 test('status control visibly locks while one check runs, then disappears after completion without submitting a new generation',async()=>{
  const saved=new Map([['rig-generation-job','job-recast']]),f=fixture({storage:saved,jobState:'completed'});let release,checks=0;
  try{
-  const original=f.w.rigRequest;f.w.rigRequest=(path,options)=>{if(path==='/api/generations/job-recast'){checks++;return new Promise(resolve=>release=()=>resolve(original(path,options)));}return original(path,options);};
+  f.wrapRequest(original=>(path,options)=>{if(path==='/api/generations/job-recast'){checks++;return new Promise(resolve=>release=()=>resolve(original(path,options)));}return original(path,options);});
   assert.equal(f.el('checkGeneration').hidden,false);f.el('checkGeneration').click();await settle(()=>checks===1);
   assert.equal(f.el('checkGeneration').disabled,true);assert.match(f.el('checkGeneration').textContent,/wordt gecontroleerd/);f.el('checkGeneration').click();assert.equal(checks,1);
   release();await settle(()=>f.el('checkGeneration').hidden&&!f.w.rigGenerationBusy());assert.equal(f.el('checkGeneration').disabled,false);assert.equal(f.storage.has('rig-generation-job'),false);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);

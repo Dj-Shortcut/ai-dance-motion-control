@@ -1,6 +1,10 @@
 'use strict';
 (() => {
+  const previous=window.rigGenerationInstance;
+  if(previous?.current?.()){previous.restore?.();return;}
+  previous?.stop?.();
   const el = id => document.getElementById(id);
+  const listeners=new AbortController(),on=(target,type,handler)=>target?.addEventListener(type,handler,{signal:listeners.signal});
   const currency = n => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n/100);
   const providerCurrency = micros => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(micros/1000000);
   const ownerProvider = data => data?.funding==='owner-provider';
@@ -11,10 +15,11 @@
   const falTransferNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je gekozen foto’s, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   const falRecastNotice = 'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.';
   let quote = null, active = false, recentId=null,recentState=null,ownerVerifying=false;
-  let workflowIntent=null,cleanupModule=null;
+  let workflowIntent=null,cleanupModule=null,disposed=false,suspended=false,resumeRequested=false,confirmation=null,quoteWork=null;
   const loadCleanupModule=()=>cleanupModule??=(typeof window.rigLoadCleanupModule==='function'?window.rigLoadCleanupModule():import('/multiuser/cleanup-client.js')).catch(error=>{cleanupModule=null;throw error;});
   const getBinding=()=>({request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage});
   const bindingCurrent=binding=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&binding.active?.()===true;
+  const lifecycleBinding=getBinding(),lifecycleCurrent=()=>!disposed&&bindingCurrent(lifecycleBinding);
   function stopWorkflowIntent(){workflowIntent?.abort.abort();workflowIntent=null;}
   function beginWorkflowIntent(){stopWorkflowIntent();const binding=getBinding(),intent={abort:new AbortController(),binding};intent.current=()=>workflowIntent===intent&&!intent.abort.signal.aborted&&bindingCurrent(binding);workflowIntent=intent;return intent;}
   function bindRecovery(id){
@@ -24,7 +29,7 @@
     el('checkGeneration').hidden=false;return true;
   }
 
-  const setActive=value=>{active=value;el('recentVideo').disabled=value;el('checkGeneration').disabled=value;el('checkGeneration').textContent=value?'Status wordt gecontroleerd…':'Controleer opdracht';document.dispatchEvent(new Event('rig-generation-busy-change'));};
+  const setActive=value=>{active=value;el('recentVideo').disabled=value;el('checkGeneration').disabled=value;el('checkGeneration').textContent=value?'Status wordt gecontroleerd…':'Controleer opdracht';document.dispatchEvent(new Event('rig-generation-busy-change'));if(!value&&resumeRequested)queueMicrotask(flushResume);};
   window.rigGenerationBusy=()=>active||ownerVerifying;
   let quotePortraitURL=null;
   function clearQuotePortrait(){
@@ -39,8 +44,25 @@
     quotePortraitURL=URL.createObjectURL(new Blob([media.image.blob],{type:'image/jpeg'}));
     el('quotePortraitImage').src=quotePortraitURL;el('quotePortraitPreview').hidden=false;
   }
-  window.rigGenerationDispose=()=>{stopWorkflowIntent();window.rigCleanupDispose?.();window.rigTrialDispose?.();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;clearQuotePortrait();if(el('confirmGeneration'))el('confirmGeneration').hidden=true;};
-  window.addEventListener('pagehide',()=>{stopWorkflowIntent();clearQuotePortrait();});
+  function stopInstance(){if(disposed)return;disposed=true;listeners.abort();resumeRequested=false;quoteWork?.abort.abort();stopWorkflowIntent();confirmation?.verifier?.cancel?.();ownerVerifying=false;quote=null;clearQuotePortrait();if(estimateTimer!==null)clearTimeout(estimateTimer);estimateSequence++;}
+  window.rigGenerationDispose=()=>{stopInstance();window.rigCleanupDispose?.();window.rigTrialDispose?.();if(el('confirmGeneration'))el('confirmGeneration').hidden=true;};
+  function recoveryHandle(){const storage=lifecycleBinding.storage,id=storage.getItem('rig-generation-job'),pending=storage.getItem('rig-generation-pending');return {id:/^[A-Za-z0-9_-]{1,100}$/.test(id||'')?id:null,pending:!!pending};}
+  function showTracking(){const handle=recoveryHandle();if(!handle.id&&!handle.pending)return false;el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;document.dispatchEvent(new CustomEvent('rig-generation-tracking',{detail:handle}));el('quoteDialog').showModal();return true;}
+  function suspend(){
+    if(!lifecycleCurrent())return;suspended=true;resumeRequested=false;quoteWork?.abort.abort();stopWorkflowIntent();clearQuotePortrait();
+    const attempt=confirmation;if(attempt&&!attempt.submitted){attempt.interrupted=true;confirmation=null;attempt.verifier?.cancel?.();ownerVerifying=false;setActive(false);el('confirmGeneration').disabled=false;el('confirmGeneration').hidden=quote!==attempt.quote;el('checkGeneration').hidden=true;note('De video is niet gestart. Bevestig opnieuw als je verder wilt.');}
+  }
+  function flushResume(){
+    if(!resumeRequested||suspended||active||confirmation?.submitted||!lifecycleCurrent()||document.visibilityState==='hidden')return;
+    resumeRequested=false;if(!showTracking())return;note('Je bestaande opdracht wordt gecontroleerd…');void recoverGeneration({resumeWorkflow:false});
+  }
+  function resume(){if(!lifecycleCurrent())return;suspended=false;const handle=recoveryHandle();if(handle.id||handle.pending){resumeRequested=true;flushResume();}else if(quote&&!active){
+    if(window.rigPreparedMedia()!==quote.media||quote.funding!==window.rigVideoFunding||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){quote=null;el('confirmGeneration').hidden=true;note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');return;}
+    try{if(quote.media.quality==='human-recast')showQuotePortrait(quote.media);el('quoteDialog').showModal();el('confirmGeneration').hidden=false;el('confirmGeneration').disabled=false;}catch{quote=null;clearQuotePortrait();el('confirmGeneration').hidden=true;note('Het gebruikte hoofdbeeld kon niet worden hersteld. Bekijk de prijs opnieuw.');}
+  }}
+  on(window,'pagehide',suspend);
+  on(window,'pageshow',event=>{if(suspended||event.persisted)resume();});
+  on(document,'visibilitychange',()=>{if(document.visibilityState==='hidden')suspend();else if(document.visibilityState==='visible')resume();});
   const note = text => { el('quoteMessage').textContent = text; };
   const refreshBalance = () => document.dispatchEvent(new Event('rig-balance-changed'));
   function providerFailureMessage(data){
@@ -60,23 +82,26 @@
     if (!response.ok) { const error=new Error(data.error || 'De dienst is momenteel niet beschikbaar.'); error.status=response.status;if([400,409].includes(response.status)&&data.code==='subject_rejected'&&data.generationStarted===false){error.code='subject_rejected';error.generationStarted=false;}if(response.status===400&&data.code==='provider_limit_exceeded'&&typeof data.error==='string'&&data.error.length>0&&data.error.length<=300)error.code='provider_limit_exceeded';throw error; }
     return data;
   }
-  const delay = ms => new Promise(resolve=>setTimeout(resolve,ms));
+  const delay = (ms,signal) => new Promise((resolve,reject)=>{let timer;const finish=()=>{signal?.removeEventListener('abort',abort);resolve();},abort=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(Error('De verwerking is onderbroken.'));};if(signal?.aborted)return abort();timer=setTimeout(finish,ms);signal?.addEventListener('abort',abort,{once:true});});
   async function upload(kind, blob, options={}) {
     if (!(blob instanceof Blob) || blob.size < 1 || blob.size > 16*1024*1024) throw new Error('Een bestand is leeg of groter dan 16 MB.');
     const headers={'Content-Type':blob.type || 'application/octet-stream','X-Rig-Asset-Kind':kind};
     if(kind==='video'){if(!Number.isInteger(options.duration)||options.duration<3||options.duration>(options.maxDuration??30))throw new Error('Kies een geldig fragment.');headers['X-Rig-Duration-Seconds']=String(options.duration);headers['X-Rig-Keep-Sound']=String(options.keepSound===true);}
-    let data = await call('/api/assets',{method:'POST',headers,body:blob});
+    let data = await call('/api/assets',{method:'POST',headers,body:blob,signal:options.signal});
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(data.id || '')) throw new Error('Het bestand kon niet worden gecontroleerd.');
     const id=data.id;
     for (let attempts=0;data.status==='processing' && attempts<60;attempts++) {
-      await delay(2000); data=await call(`/api/assets/${encodeURIComponent(id)}`);
+      await delay(2000,options.signal); data=await call(`/api/assets/${encodeURIComponent(id)}`,{signal:options.signal});
       if (data.id!==id) throw new Error('Het bestand kon niet worden gecontroleerd.');
     }
     if (data.status!=='ready' || data.kind && data.kind!==kind) throw new Error('Het bestand is nog niet klaar voor gebruik.');
     return id;
   }
   async function getQuote() {
-    if(active)return;clearQuotePortrait();if(window.rigScopedStorage.getItem('rig-generation-pending') || window.rigScopedStorage.getItem('rig-generation-job')){el('uploadDialog').close();el('quoteDialog').showModal();note('Er is al een opdracht gestart. Controleer eerst de status.');el('checkGeneration').hidden=false;return;}const media=window.rigPreparedMedia();if(!media){note('Bereid eerst je beelden voor.');return;}
+    if(active||suspended||!lifecycleCurrent())return;clearQuotePortrait();if(window.rigScopedStorage.getItem('rig-generation-pending') || window.rigScopedStorage.getItem('rig-generation-job')){el('uploadDialog').close();el('quoteDialog').showModal();note('Er is al een opdracht gestart. Controleer eerst de status.');el('checkGeneration').hidden=false;return;}const media=window.rigPreparedMedia();if(!media){note('Bereid eerst je beelden voor.');return;}
+    const work={abort:new AbortController(),binding:getBinding()};quoteWork=work;
+    const checkWork=()=>{if(work.abort.signal.aborted||quoteWork!==work||!bindingCurrent(work.binding)||disposed)throw Error('Het voorbereiden is onderbroken. Je video is niet gestart. Bekijk de prijs opnieuw.');};
+    const quoteCall=async(path,options={})=>{checkWork();const result=await call(path,{...options,signal:work.abort.signal});checkWork();return result;},quoteUpload=async(kind,blob,options={})=>{checkWork();const result=await upload(kind,blob,{...options,signal:work.abort.signal});checkWork();return result;};
     setActive(true);quote=null;el('confirmUpload').disabled=true;el('uploadDialog').close();el('quoteDialog').showModal();el('confirmGeneration').hidden=true;
     showReviewedType(media.quality);
     try {
@@ -92,12 +117,12 @@
       const cleanup=media.cleanup;
       if(cleanup){const module=await loadCleanupModule();if(!recast||!module.cleanupAllowed(window)||cleanup.version!=='owner-cleanup-v1'||cleanup.reviewed!==true||!/^[A-Za-z0-9_-]{1,100}$/.test(cleanup.sourceId||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(cleanup.maskId||''))throw new Error('Controleer het masker opnieuw voor je de prijs bekijkt.');}
       const refs=media.assetRefs;
-      const imageId=refs?.imageId??await upload('image',media.image.blob),videoId=cleanup?cleanup.sourceId:refs?.videoId??await upload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
-      const faceId=media.face?(refs?.faceId??await upload('face',media.face)):null;
-      const angleIds=[];for(let i=0;i<media.angles.length;i++)angleIds.push(refs?.angleIds?.[i]??await upload('angle',media.angles[i]));
+      const imageId=refs?.imageId??await quoteUpload('image',media.image.blob),videoId=cleanup?cleanup.sourceId:refs?.videoId??await quoteUpload('video',media.video.blob,{duration:seconds,keepSound:media.keepSound,maxDuration:limit});
+      const faceId=media.face?(refs?.faceId??await quoteUpload('face',media.face)):null;
+      const angleIds=[];for(let i=0;i<media.angles.length;i++)angleIds.push(refs?.angleIds?.[i]??await quoteUpload('angle',media.angles[i]));
       if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
       const request={imageId,videoId,faceId,angleIds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady}),...(cleanup?{cleanupMaskId:cleanup.maskId}:{})};
-      const data=await call('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+      const data=await quoteCall('/api/generation-quotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||'')||!Number.isFinite(data.durationSeconds)||!Number.isInteger(data.billedSeconds)||data.billedSeconds!==Math.ceil(data.durationSeconds))throw new Error('De prijs kon niet worden bevestigd.');
       const ownFal=window.rigVideoFunding==='owner-provider';
       if(ownFal){
@@ -116,14 +141,14 @@
         note(`Je gebruikt je eigen fal-account. Fal-raming: ${providerCurrency(data.providerEstimateUsdMicros)} voor ${data.billedSeconds} seconden. De werkelijke Fal-kosten kunnen afwijken. Pas na je bevestiging wordt de video gestart.`);
       }else if(window.rigVideoFunding==='credits'){
         if(window.rigVideoMode!=='live')throw new Error('Je betaalde tegoed kon niet worden gecontroleerd.');
-        const status=await call('/api/payments/balance');
+        const status=await quoteCall('/api/payments/balance');
         if(status?.mode!=='live'||status.currency!=='EUR'||status.frozen===true||!Number.isSafeInteger(status.balance)||status.balance<0)throw new Error('Je RIG-tegoed kon niet worden gecontroleerd.');
         if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
         if(data.priceCents>status.balance){note(`Deze video kost ${currency(data.priceCents)}. Je hebt ${currency(status.balance)} RIG-tegoed. Koop tegoed of kies een korter fragment.`);return;}
         if(window.rigNativeSite===true&&!hasApproval){note(`Deze video kost ${currency(data.priceCents)}. De prijsbevestiging is momenteel niet beschikbaar. Bereid je bestanden opnieuw voor.`);return;}
         quote={id:data.id,media,...approved};note(`Als je bevestigt, betaal je ${currency(data.priceCents)} uit je RIG-tegoed. Je hebt ${currency(status.balance)} beschikbaar. Je video duurt ${data.durationSeconds.toFixed(2)} seconden.`);
       }else if(window.rigVideoFunding==='sponsored'){
-        const status=await call('/api/sponsor-invitations/status');
+        const status=await quoteCall('/api/sponsor-invitations/status');
         if(status?.state!=='eligible'||!Number.isSafeInteger(status.remainingCents)||status.remainingCents<0||status.remainingCents>500)throw new Error('Je gratis testtegoed kon niet worden gecontroleerd.');
         if(window.rigPreparedMedia()!==media)throw new Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
         if(data.priceCents>status.remainingCents){note(`Deze video kost ${currency(data.priceCents)}. Je hebt ${currency(status.remainingCents)} gratis testtegoed; dat is niet voldoende. Kies een korter fragment of een andere kwaliteit.`);return;}
@@ -144,9 +169,9 @@
         const reviewedMessage=el('quoteMessage').textContent;
         if(!Number.isInteger(full.selectedSeconds)||full.selectedSeconds<=seconds||full.selectedSeconds>limit||full.quality!==media.quality||full.prompt!==media.prompt||full.keepSound!==media.keepSound)throw Error('Je volledige selectie kon niet veilig worden bewaard.');
         note('Je volledige fragment wordt privé bewaard, zodat je na je proefje meteen verder kunt…');
-        const fullVideoId=await upload('video',full.video.blob,{duration:full.selectedSeconds,keepSound:full.keepSound,maxDuration:limit});
+        const fullVideoId=await quoteUpload('video',full.video.blob,{duration:full.selectedSeconds,keepSound:full.keepSound,maxDuration:limit});
         if(window.rigPreparedMedia()!==media)throw Error('Je instellingen zijn gewijzigd. Bereid je bestanden opnieuw voor.');
-        const stored=await call('/api/video-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:data.id,fullVideoId,imageId,faceId,angleIds,selectedSeconds:full.selectedSeconds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady}),cleanup:full.cleanupWanted===true,originalStartSeconds:full.originalStartSeconds})});
+        const stored=await quoteCall('/api/video-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:data.id,fullVideoId,imageId,faceId,angleIds,selectedSeconds:full.selectedSeconds,quality:media.quality,keepSound:media.keepSound,prompt:media.prompt,...(edit?{transferPolicy:falTransferPolicy}:{steadyCamera:media.steady}),cleanup:full.cleanupWanted===true,originalStartSeconds:full.originalStartSeconds})});
         if(stored.saved!==true||!Number.isSafeInteger(stored.expiresAt)||stored.expiresAt<=Date.now())throw Error('Je volledige fragment kon niet worden bewaard. Start je proefje nog niet.');
         document.dispatchEvent(new CustomEvent('rig-trial-draft-saved',{detail:{quoteId:data.id,expiresAt:stored.expiresAt}}));
         // Restore the reviewed price/consent text; storage never authorizes Fal.
@@ -157,52 +182,56 @@
       if(recast){note(el('quoteMessage').textContent+'\nKwaliteit: '+data.outputResolution.toLowerCase()+'.');showQuotePortrait(media);}
       if(edit)note(el('quoteMessage').textContent+'\n\n'+(cleanup?'Voor deze bewerking gebruikt Fal tijdelijke links voor je hoofdportret, bronvideo, masker, opgeschoonde clip en resultaat (24 uur). Iedereen met zo’n link kan die bestanden openen. Met ‘Bevestig videobewerking’ ga je daarmee akkoord.':recast?falRecastNotice:falTransferNotice));
       el('confirmGeneration').hidden=false;
-    } catch(error) { quote=null;clearQuotePortrait();note(error.message || 'De prijs kon niet worden berekend.'); }
-    finally { setActive(false);el('confirmUpload').disabled=false; }
+    } catch(error) { if(bindingCurrent(work.binding)&&!disposed){quote=null;clearQuotePortrait();note(work.abort.signal.aborted?'Het voorbereiden is onderbroken. Je video is niet gestart. Bekijk de prijs opnieuw.':error.message || 'De prijs kon niet worden berekend.');} }
+    finally { if(quoteWork===work){quoteWork=null;if(!disposed&&bindingCurrent(work.binding)){setActive(false);el('confirmUpload').disabled=false;}else active=false;} }
   }
   async function recoverGeneration({resumeWorkflow=true,fromHistory=false}={}) {
-    if(active)return;const intent=beginWorkflowIntent();setActive(true);el('checkGeneration').disabled=true;
+    if(active||suspended||!lifecycleCurrent())return;const intent=beginWorkflowIntent();setActive(true);el('checkGeneration').disabled=true;
     try {
       let id=window.rigScopedStorage.getItem('rig-generation-job');
       if(!id){const raw=window.rigScopedStorage.getItem('rig-generation-pending');if(!raw){note('Er is geen eerdere opdracht om te controleren.');return;}let entry;try{entry=JSON.parse(raw)}catch{throw new Error('De opgeslagen opdracht kan niet worden gelezen.')}
         if(!/^[A-Za-z0-9_-]{1,100}$/.test(entry.quoteId||'')||!/^[A-Za-z0-9_-]{1,100}$/.test(entry.idempotencyKey||''))throw new Error('De opgeslagen opdracht kan niet worden gelezen.');
-        const data=await call(`/api/generation-intents/${encodeURIComponent(entry.idempotencyKey)}/reconcile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:entry.quoteId})});
-        if(data.state==='canceled'){window.rigScopedStorage.removeItem('rig-generation-pending');el('checkGeneration').hidden=true;note('De opdracht is niet gestart. Je kunt opnieuw een prijs berekenen.');return;}
+        const data=await call(`/api/generation-intents/${encodeURIComponent(entry.idempotencyKey)}/reconcile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:entry.quoteId}),signal:intent.abort.signal});
+        if(!intent.current())return;
+        if(data.state==='canceled'){window.rigScopedStorage.removeItem('rig-generation-pending');el('checkGeneration').hidden=true;note('De opdracht is niet gestart. Je kunt opnieuw een prijs berekenen.');document.dispatchEvent(new CustomEvent('rig-generation-not-started'));return;}
         if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');id=data.id;window.rigScopedStorage.setItem('rig-generation-job',id);window.rigScopedStorage.removeItem('rig-generation-pending');document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id,trialToken:window.rigTrialTokenForQuote?.(entry.quoteId)??null}}));}
-      if(intent.current())await follow(id,intent,{resumeWorkflow,fromHistory});
-    }catch(error){if(intent.current())note(`${error.message || 'De opdrachtstatus is onbekend.'} Start geen nieuwe opdracht voordat dit is opgelost.`)}finally{refreshBalance();setActive(false);el('checkGeneration').disabled=false;}
+      if(!/^[A-Za-z0-9_-]{1,100}$/.test(id||''))throw Error('De opgeslagen opdracht kan niet worden gelezen.');
+      if(intent.current()){showTracking();await follow(id,intent,{resumeWorkflow,fromHistory});}
+    }catch(error){if(intent.current())note(`${error.message || 'De opdrachtstatus is onbekend.'} Start geen nieuwe opdracht voordat dit is opgelost.`)}finally{if(!disposed&&bindingCurrent(intent.binding)){refreshBalance();setActive(false);el('checkGeneration').disabled=false;}else active=false;}
   }
   async function confirm() {
-    if(active||!quote)return;
+    if(active||suspended||!lifecycleCurrent()||!quote)return;
     if(window.rigPreparedMedia()!==quote.media||quote.funding!==window.rigVideoFunding||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
     const intent=beginWorkflowIntent();setActive(true);el('confirmGeneration').disabled=true;
     const current=quote,requestId=current.idempotencyKey??crypto.randomUUID(),ownFal=current.funding==='owner-provider';
     const binding={request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage};
-    const sessionCurrent=()=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&typeof binding.active==='function'&&binding.active()===true;
+    const sessionCurrent=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&typeof binding.active==='function'&&binding.active()===true;
     const quoteCurrent=()=>quote===current&&window.rigPreparedMedia()===current.media&&current.funding===window.rigVideoFunding&&(typeof window.rigGenerationQuality!=='function'||window.rigGenerationQuality()===current.media.quality);
     const payload={quoteId:current.id,idempotencyKey:requestId,...(current.transferPolicy===falTransferPolicy?{transferConsent:falTransferPolicy}:{})};let verification=null,submitted=false;
+    const attempt={quote:current,submitted:false,interrupted:false};confirmation=attempt;
     try {
       if(ownFal){
         if(!sessionCurrent())return;
         if(typeof window.rigOwnerVerification?.prepare!=='function')throw new Error('Vernieuw RIG om deze video veilig te bevestigen.');
         note('Bevestig het gebruik van je eigen Fal-tegoed op je apparaat.');ownerVerifying=true;
-        try{verification=await window.rigOwnerVerification.prepare('owner-generation',payload);}finally{ownerVerifying=false;}
+        attempt.verifier=window.rigOwnerVerification;
+        try{verification=await attempt.verifier.prepare('owner-generation',payload);}finally{if(confirmation===attempt)ownerVerifying=false;}
         if(!sessionCurrent()||!intent.current())return;
         if(!quoteCurrent()){quote=null;note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
         if(!verification)throw new Error('De beveiligingscontrole is niet afgerond. De video is niet gestart.');
       }
       if(!intent.current())return;
-      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));document.dispatchEvent(new CustomEvent('rig-generation-intent',{detail:{trialToken:current.media.trialToken??null,quoteId:current.id}}));quote=null;clearQuotePortrait();submitted=true;
+      binding.storage.setItem('rig-generation-pending',JSON.stringify({quoteId:current.id,idempotencyKey:requestId}));el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;document.dispatchEvent(new CustomEvent('rig-generation-intent',{detail:{trialToken:current.media.trialToken??null,quoteId:current.id}}));quote=null;clearQuotePortrait();submitted=true;attempt.submitted=true;
       note('Je opdracht wordt gestart…');
       const data=await call('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,...(current.approvalToken?{approvalToken:current.approvalToken}:{}),...(verification?{verification}:{})})});
-      if(ownFal&&!sessionCurrent())return;
+      if(!sessionCurrent())return;
       refreshBalance();
       if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.id||''))throw new Error('De opdrachtstatus is onbekend.');
-      if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');return;}
+      if(data.state==='failed'&&failureFinalized(data)){window.rigScopedStorage.removeItem('rig-generation-pending');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;note(providerFailureMessage(data)||'Je bestanden konden niet worden voorbereid. Je tegoed is teruggezet.');document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id:data.id}}));return;}
       document.dispatchEvent(new CustomEvent('rig-generation-accepted',{detail:{id:data.id,trialToken:current.media.trialToken??null,fromCurrent:true}}));window.rigScopedStorage.setItem('rig-generation-job',data.id);window.rigScopedStorage.removeItem('rig-generation-pending');recentId=data.id;el('recentVideo').hidden=false;el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;
       if(intent.current())await follow(data.id,intent);
     } catch(error) {
-      if(ownFal&&!sessionCurrent()||!intent.current())return;
+      if(!sessionCurrent()||!intent.current()&&!attempt.submitted)return;
       if(!submitted){
         const reusable=quoteCurrent();if(!reusable)quote=null;
         note(reusable?(error.message||'De bevestiging is geannuleerd. De video is niet gestart.'):'Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=!reusable;el('checkGeneration').hidden=true;return;
@@ -210,10 +239,10 @@
       if([400,409].includes(error.status)&&error.code==='subject_rejected'&&error.generationStarted===false){
         let pending;try{pending=JSON.parse(window.rigScopedStorage.getItem('rig-generation-pending'));}catch{}
         if(pending?.quoteId===current.id&&pending.idempotencyKey===requestId)window.rigScopedStorage.removeItem('rig-generation-pending');
-        note('Deze video is niet gestart: het gekozen videotype past niet bij je referentie. Kies zelf een passend videotype, bereid je beelden opnieuw voor en controleer de nieuwe prijs.');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;
+        note('Deze video is niet gestart: het gekozen videotype past niet bij je referentie. Kies zelf een passend videotype, bereid je beelden opnieuw voor en controleer de nieuwe prijs.');el('confirmGeneration').hidden=true;el('checkGeneration').hidden=true;document.dispatchEvent(new CustomEvent('rig-generation-not-started'));
       }else{note(`${error.message || 'De opdrachtstatus is onbekend.'} Start niet opnieuw voordat de status is gecontroleerd.`);el('confirmGeneration').hidden=true;el('checkGeneration').hidden=false;}
     }
-    finally{ownerVerifying=false;setActive(false);if(!ownFal||sessionCurrent()){refreshBalance();el('confirmGeneration').disabled=false;}}
+    finally{if(confirmation===attempt){confirmation=null;ownerVerifying=false;if(sessionCurrent()){setActive(false);refreshBalance();el('confirmGeneration').disabled=false;}else active=false;}}
   }
   async function follow(id,intent=null,{resumeWorkflow=true,fromHistory=false}={}) {
     for(let i=0;i<180;i++) {
@@ -232,7 +261,19 @@
       }
       if(data.state==='completed') {
         const expected=`/api/generations/${id}/video`;if(data.videoPath!==expected)throw new Error('Het resultaat kon niet veilig worden geopend.');
-        const videoUrl=await window.rigOpenVideo(expected);if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}if(!window.rigSessionActive())throw new Error('De aanmelding is beëindigd.');const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');let savedDraft=null;try{const draft=await call(`/api/generations/${encodeURIComponent(id)}/draft`);if(typeof draft?.available==='boolean')savedDraft=draft;}catch{}if(intent&&!intent.current())return;document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery,fromHistory,savedDraft}}));return;
+        const videoUrl=await window.rigOpenVideo(expected);
+        if(intent&&!intent.current()){URL.revokeObjectURL(videoUrl);return;}
+        if(!lifecycleCurrent())throw new Error('De aanmelding is beëindigd.');
+        const video=el('resultVideo');video.src=videoUrl;video.hidden=false;el('resultEmpty').hidden=true;el('resultName').textContent='Jouw nieuwe video';el('export').href=videoUrl;el('export').download='RIG-video.mp4';el('export').hidden=false;
+        let savedDraft=null;
+        try{const draft=await call(`/api/generations/${encodeURIComponent(id)}/draft`,intent?{signal:intent.abort.signal}:{});if(typeof draft?.available==='boolean')savedDraft=draft;}catch{}
+        if(intent&&!intent.current()||!lifecycleCurrent())return;
+        // Keep the recovery handle until every awaited read has finished and
+        // this exact account/intent can actually publish the completed result.
+        if(window.rigScopedStorage.getItem('rig-generation-job')===id)window.rigScopedStorage.removeItem('rig-generation-job');
+        const recovery=!!window.rigScopedStorage.getItem('rig-generation-job')||!!window.rigScopedStorage.getItem('rig-generation-pending');el('checkGeneration').hidden=!recovery;
+        note(recovery?'Je eerdere video is klaar. Controleer de status van je nieuwe opdracht.':'Je video is klaar.');
+        document.dispatchEvent(new CustomEvent('rig-generation-completed',{detail:{id,popup:!recovery,fromHistory,savedDraft}}));return;
       }
       if(data.state==='failed'){
         document.dispatchEvent(new CustomEvent('rig-generation-failed',{detail:{id}}));
@@ -242,7 +283,7 @@
         note(providerMessage||(finalized?'De video kon niet worden gemaakt. Je tegoed is teruggezet.':'De video kon niet worden gemaakt. Je tegoed wordt gecontroleerd.'));return;
       }
       if(['unknown','needs_review'].includes(data.state)){note('De opdracht wordt gecontroleerd. Start niet opnieuw.');return;}
-      note('Je video wordt gemaakt…');await delay(5000);
+      note('Je video wordt gemaakt…');await delay(5000,intent?.abort.signal);
     }
     note('Je opdracht loopt nog. Je kunt de status later opnieuw bekijken.');
   }
@@ -252,12 +293,11 @@
       const data=await call('/api/generations/recent');if(!bindingCurrent(binding))return;
       if(data.job&&['completed','submitting','queued','processing','awaiting_client_processing','ready_to_advance','unknown','needs_review','failed'].includes(data.job.state)&&/^[A-Za-z0-9_-]{1,100}$/.test(data.job.id||'')){
         recentId=data.job.id;recentState=data.job.state;el('recentVideo').hidden=false;
-        if(recentState==='completed'){if(binding.storage.getItem('rig-generation-job')===recentId)binding.storage.removeItem('rig-generation-job');}
-        else bindRecovery(recentId);
+        if(recentState!=='completed'&&bindRecovery(recentId))showTracking();
       }
     }catch{}
   }
-  el('recentVideo').addEventListener('click',async()=>{
+  on(el('recentVideo'),'click',async()=>{
     if(!recentId||active)return;el('quoteDialog').showModal();
     let pendingTrial=false;try{const entry=JSON.parse(window.rigScopedStorage.getItem('rig-generation-pending')||'null');pendingTrial=!!entry&&!!window.rigTrialTokenForQuote?.(entry.quoteId);}catch{}
     if(pendingTrial&&!window.rigScopedStorage.getItem('rig-generation-job')){await recoverGeneration({resumeWorkflow:false,fromHistory:true});return;}
@@ -322,17 +362,17 @@
     if(estimateTimer!==null)clearTimeout(estimateTimer);
     estimateTimer=setTimeout(()=>{estimateTimer=null;void updateProviderEstimate(seq);},250);
   }
-  for(const target of [el('duration'),el('start'),...document.querySelectorAll('input[name=quality]')]){target.addEventListener('input',scheduleProviderEstimate);target.addEventListener('change',scheduleProviderEstimate)}
-  el('cleanupEnabled')?.addEventListener('change',scheduleProviderEstimate);
-  el('motionInput').addEventListener('change',()=>{estimateSequence++;if(estimateTimer!==null)clearTimeout(estimateTimer);estimateTimer=null;el('providerEstimate').hidden=true;});
+  for(const target of [el('duration'),el('start'),...document.querySelectorAll('input[name=quality]')]){on(target,'input',scheduleProviderEstimate);on(target,'change',scheduleProviderEstimate)}
+  on(el('cleanupEnabled'),'change',scheduleProviderEstimate);
+  on(el('motionInput'),'change',()=>{estimateSequence++;if(estimateTimer!==null)clearTimeout(estimateTimer);estimateTimer=null;el('providerEstimate').hidden=true;});
   // Wait for app.js to update the duration after metadata has loaded.
-  el('motionVideo').addEventListener('loadedmetadata',()=>queueMicrotask(scheduleProviderEstimate));
-  document.addEventListener('rig-generation-mode-change',()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();scheduleProviderEstimate();});
+  on(el('motionVideo'),'loadedmetadata',()=>queueMicrotask(scheduleProviderEstimate));
+  on(document,'rig-generation-mode-change',()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();scheduleProviderEstimate();});
   discoverRecent();
-  el('resultVideo').addEventListener('error',()=>{el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('export').hidden=true;el('status').textContent='Het resultaat kon niet worden geladen. Probeer later opnieuw.';});
-  if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){el('quoteDialog').showModal();note('Een eerdere opdracht is nog niet afgerond. Controleer de status voordat je een nieuwe start.');el('checkGeneration').hidden=false;}
-  document.addEventListener('rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
-  document.addEventListener('rig-prepared-ready',async()=>{
+  on(el('resultVideo'),'error',()=>{el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('export').hidden=true;el('status').textContent='Het resultaat kon niet worden geladen. Probeer later opnieuw.';});
+  if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){showTracking();note('Een eerdere opdracht is nog niet afgerond. Controleer de status voordat je een nieuwe start.');}
+  on(document,'rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
+  on(document,'rig-prepared-ready',async()=>{
     if(active)return;setActive(true);
     try {
       if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){el('quoteDialog').showModal();note('Een eerdere opdracht wordt nog gecontroleerd.');el('checkGeneration').hidden=false;return;}
@@ -344,6 +384,7 @@
       el('uploadDialog').showModal();
     } catch(error) {el('quoteDialog').showModal();note(error.message||'Een eerdere opdracht kon niet worden gecontroleerd.');el('checkGeneration').hidden=true;}
     finally {setActive(false);}
-  });el('closeUpload').addEventListener('click',()=>el('uploadDialog').close());el('confirmUpload').addEventListener('click',getQuote);
-  el('quoteDialog').addEventListener('close',()=>{stopWorkflowIntent();clearQuotePortrait();});el('quoteDialog').addEventListener('cancel',stopWorkflowIntent);el('closeQuote').addEventListener('click',()=>{stopWorkflowIntent();clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});el('confirmGeneration').addEventListener('click',confirm);el('checkGeneration').addEventListener('click',recoverGeneration);
+  });on(el('closeUpload'),'click',()=>el('uploadDialog').close());on(el('confirmUpload'),'click',getQuote);
+  on(el('quoteDialog'),'close',()=>{stopWorkflowIntent();clearQuotePortrait();});on(el('quoteDialog'),'cancel',stopWorkflowIntent);on(el('closeQuote'),'click',()=>{stopWorkflowIntent();clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});on(el('confirmGeneration'),'click',confirm);on(el('checkGeneration'),'click',recoverGeneration);
+  window.rigGenerationInstance=Object.freeze({current:lifecycleCurrent,stop:stopInstance,restore:()=>{if(lifecycleCurrent())showTracking();}});
 })();

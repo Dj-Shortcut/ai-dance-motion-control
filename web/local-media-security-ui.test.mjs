@@ -81,3 +81,17 @@ test('replacing local media revokes the old URL and page exit revokes current UR
   f.w.dispatchEvent(new f.w.Event('pagehide'));assert.ok(f.revoked.includes(second));
  }finally{f.dom.window.close();}
 });
+
+test('a cached page preserves local media links until the document actually exits',()=>{
+ const f=fixture();try{
+  f.files('personInput',f.file('person.jpg','image/jpeg'));
+  f.files('resultInput',f.file('result.mp4','video/mp4'));
+  const urls=f.created.map(entry=>entry.url),result=f.el('resultVideo').src;
+  f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:true}));
+  assert.equal(urls.some(url=>f.revoked.includes(url)),false,'a cached document still owns its media');
+  f.w.dispatchEvent(new f.w.PageTransitionEvent('pageshow',{persisted:true}));
+  assert.equal(f.el('resultVideo').src,result);assert.equal(f.el('export').href,result);
+  f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:false}));
+  assert.ok(urls.every(url=>f.revoked.includes(url)),'an actual page exit still releases all local media');
+ }finally{f.dom.window.close();}
+});

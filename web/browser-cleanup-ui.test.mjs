@@ -65,7 +65,7 @@ test('read-only discovery never composes; an explicit existing-job recovery resu
 });
 for(const jobState of ['awaiting_client_processing','ready_to_advance'])test(`a fresh browser discovers ${jobState} and can explicitly resume it without a new generation`,async()=>{
  const f=fixture({jobState,recentJob:{id:'job-recast',state:jobState}});try{
-  await settle(()=>!f.el('recentVideo').hidden);assert.equal(f.storage.get('rig-generation-job'),'job-recast');assert.equal(f.cleanupCalls.length,0);assert.equal(f.el('quoteDialog').open,false,'discovery does not open a confirmation or start processing');
+  await settle(()=>!f.el('recentVideo').hidden);assert.equal(f.storage.get('rig-generation-job'),'job-recast');assert.equal(f.cleanupCalls.length,0);assert.equal(f.el('quoteDialog').open,true,'discovery restores the existing job status without starting processing');assert.equal(f.el('confirmGeneration').hidden,true);
   f.el('recentVideo').click();await settle(()=>!f.w.rigGenerationBusy()&&f.el('quoteMessage').textContent.includes('lokale tussenstap'));
   assert.equal(f.cleanupCalls.length,0,'viewing status does not automatically advance the accepted workflow');assert.equal(f.el('checkGeneration').hidden,false);
   f.el('checkGeneration').click();await settle(()=>f.el('quoteMessage').textContent==='Je video is klaar.');

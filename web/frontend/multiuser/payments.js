@@ -265,7 +265,7 @@
   byId('creditsButton').addEventListener('click',()=>{void openCredits();});
   byId('refreshPayment').addEventListener('click',()=>{void recover();});
   byId('closeCredits').addEventListener('click',()=>{dialogSequence++;clearHistory();resetCommerce();byId('creditsDialog').close();});
-  window.addEventListener('pagehide',window.rigPaymentsDispose);
+  window.addEventListener('pagehide',event=>{if(event.persisted!==true)window.rigPaymentsDispose();});
   document.addEventListener('rig-balance-changed',()=>{void refreshBalance();});
   document.addEventListener('rig-video-availability',()=>{configureCreditsDialog();void refreshBalance();});
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void refreshBalance();});

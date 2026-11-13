@@ -53,6 +53,7 @@ function fixture({withGeneration=false,canShare=false,qualities=['standard','pro
  return {dom,w,d,el,calls,prepared,shared,storage,serverStore,change,file,load,view,showing,make,close:()=>w.close()};
 }
 const writePaths=f=>f.calls.filter(([path])=>['/api/assets','/api/generation-quotes','/api/generations','/api/payments/create'].includes(path)).map(([path])=>path);
+const cachedTransition=(f,type)=>f.w.dispatchEvent(new f.w.PageTransitionEvent(type,{persisted:true}));
 const quoteReady=async f=>{try{await settle(()=>!f.el('confirmGeneration').hidden&&!f.el('confirmUpload').disabled);}catch(error){error.message+=`: ${f.el('quoteMessage').textContent}; calls=${writePaths(f).join(',')}; funding=${f.w.rigVideoFunding}/${f.w.rigVideoMode}`;throw error;}};
 async function finishTrial(f){
  f.make();f.change('duration',18);f.el('tryShortVideo').click();f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await quoteReady(f);f.el('confirmGeneration').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());
@@ -67,6 +68,43 @@ test('the guided studio begins with one start action and only the current screen
   assert.equal(f.el('prepare').textContent,'Probeer met je eigen foto');assert.equal(f.el('prepare').disabled,false);assert.equal(f.d.querySelector('.ideas-panel,[data-idea-mode]'),null);assert.equal(f.el('makeFullVideo'),null);assert.equal(f.el('makeFullFromResult'),null);assert.deepEqual(writePaths(f),[]);
   assert.equal(f.el('newVideo').hidden,true,'the result-only secondary action stays out of the start screen');
   f.el('prepare').click();assert.equal(f.showing('files'),true);assert.equal(f.showing('start'),false);assert.equal(f.el('prepare').textContent,'Verder');assert.equal(f.el('prepare').disabled,true);assert.match(f.el('flowStep').textContent,/1\s*(?:van|\/)\s*3/);assert.equal(f.el('flowProgress').children.length,3);
+ }finally{f.close();}
+});
+
+test('a cached page keeps the selected files and working guided navigation when it returns',()=>{
+ const f=fixture();try{
+  const files=f.make();f.el('closeBrief').click();const flow=f.w.rigFlow;
+  cachedTransition(f,'pagehide');cachedTransition(f,'pageshow');
+  assert.equal(f.w.rigFlow,flow,'a reusable document must not lose its event handlers');
+  assert.equal(f.el('personInput').files[0],files.person);assert.equal(f.el('motionInput').files[0],files.motion);
+  f.el('flowBack').click();assert.equal(f.showing('files'),true);f.el('prepare').click();assert.equal(f.showing('where'),true);
+  assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+for(const event of ['rig-generation-intent','rig-generation-tracking'])test(`${event} keeps an existing submission in the status screen before a provider acknowledgement`,async()=>{
+ const f=fixture();try{
+  f.make();f.el('preparedDialog').showModal();
+  f.storage.set('rig-generation-pending',JSON.stringify({quoteId:'existing-quote',idempotencyKey:'existing-intent'}));
+  f.d.dispatchEvent(new f.w.CustomEvent(event,{detail:{pending:true}}));
+  assert.equal(f.showing('result'),true);assert.equal(f.el('resultTitle').textContent,'Je video wordt gemaakt');
+  for(const id of ['briefDialog','uploadDialog','preparedDialog'])assert.equal(f.el(id).open,false,id+' must not cover a submitted job');
+  assert.equal(f.el('quoteDialog').open,true);assert.equal(f.el('newVideo').hidden,true);
+  f.el('quoteDialog').close();await Promise.resolve();assert.equal(f.el('briefDialog').open,false,'closing status must not reopen preparation');
+  cachedTransition(f,'pagehide');cachedTransition(f,'pageshow');
+  assert.ok(f.w.rigFlow);assert.equal(f.showing('result'),true);assert.equal(f.el('quoteDialog').open,true);
+  assert.deepEqual(writePaths(f),[],'restoring a known submission does not submit or prepare media');
+ }finally{f.close();}
+});
+
+test('a definitively unstarted submission leaves processing without replaying preparation or losing the chosen files',()=>{
+ const f=fixture();try{
+  const files=f.make();f.storage.set('rig-generation-pending','owned pending handle');
+  f.d.dispatchEvent(new f.w.CustomEvent('rig-generation-tracking',{detail:{pending:true}}));
+  f.storage.delete('rig-generation-pending');f.d.dispatchEvent(new f.w.Event('rig-generation-not-started'));
+  assert.equal(f.showing('result'),true);assert.equal(f.el('resultTitle').textContent,'Je video is niet gestart');assert.equal(f.el('newVideo').hidden,false);
+  assert.equal(f.el('personInput').files[0],files.person);assert.equal(f.el('motionInput').files[0],files.motion);
+  assert.equal(f.el('briefDialog').open,false);assert.equal(f.prepared.length,0);assert.deepEqual(writePaths(f),[]);
  }finally{f.close();}
 });
 

@@ -215,3 +215,34 @@ test('a failed old enrollment poll cannot overwrite a newer active status check'
   assert.match(f.d.querySelector('.finance-status').textContent,/Extra verificatie actief/);assert.equal(f.d.querySelector('.finance-status').dataset.error,'false');assert.equal(f.d.querySelector('.owner-security-pending').hidden,true);
  }finally{f.close();}
 });
+
+test('cached page hide cancels confirmation but preserves the panel for a new explicit device check',async()=>{
+ const f=fixture();try{
+  f.mount();await waitFor(()=>f.d.querySelector('.finance-status').textContent.includes('Stel eerst'));
+  const first=f.client.prepare('owner-generation',{quoteId:'cached-original'}),rejected=assert.rejects(first,{code:'verification_cancelled'});await waitFor(()=>f.d.querySelector('dialog')?.open);
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));await rejected;
+  assert.equal(f.d.querySelector('dialog'),null);assert.match(f.d.getElementById('security').textContent,/Extra beveiliging/);assert.equal(f.timers.size,0);assert.equal(f.authCalls.length,0);
+  const calls=f.calls.length;f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));await new Promise(r=>setTimeout(r,5));assert.equal(f.calls.length,calls,'restore never requests an automatic challenge');
+  const next=f.client.prepare('owner-generation',{quoteId:'cached-original'});await waitFor(()=>f.d.querySelector('dialog')?.open);approve(f);assert.equal((await next).credential.id,'test-only-assertion-1');
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.d.getElementById('security').textContent,'');await assert.rejects(f.client.prepare('owner-generation',{}),{code:'session_changed'});
+ }finally{f.close();}
+});
+
+test('a late cancelled authenticator cannot release a newer verification or return its old proof',async()=>{
+ const old=deferred(),next=deferred(),f=fixture({authenticate:()=>f.authCalls.length===1?old.promise:next.promise});try{
+  const first=f.client.prepare('owner-generation',{quoteId:'old'}),rejected=assert.rejects(first,{code:'operation_changed'});await waitFor(()=>f.d.querySelector('dialog')?.open);approve(f);await waitFor(()=>f.authCalls.length===1);
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));
+  const second=f.client.prepare('owner-generation',{quoteId:'new'});await waitFor(()=>f.d.querySelector('dialog')?.open);approve(f);await waitFor(()=>f.authCalls.length===2);
+  old.resolve({id:'old-unusable-proof'});await rejected;await assert.rejects(f.client.prepare('finance-expense',{}),{code:'verification_busy'});
+  next.resolve({id:'new-explicit-proof'});assert.equal((await second).credential.id,'new-explicit-proof');assert.equal(f.calls.length,2);assert.ok(f.calls.every(c=>c.path.endsWith('/verification/options')));
+ }finally{old.resolve({});next.resolve({});f.close();}
+});
+
+test('cached enrollment suspension ignores a late verify response and never restarts polling by itself',async()=>{
+ const late=deferred(),f=fixture({handler:call=>call.path==='/api/owner/security'?Response.json({configured:false,activeCredentialCount:0}):call.path.endsWith('/registration/verify')?late.promise:Response.json(options())});try{
+  f.mount();await waitFor(()=>f.calls.length===1);setup(f);await waitFor(()=>f.calls.some(c=>c.path.endsWith('/registration/verify')));
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));assert.equal(f.d.querySelector('#security button').disabled,false);
+  late.resolve(Response.json({candidateId,fingerprint:'late-unused-candidate',status:'pending'}));await new Promise(r=>setTimeout(r,10));assert.equal(f.d.querySelector('.owner-security-pending').hidden,true);assert.equal(f.timers.size,0);
+  const count=f.calls.length;f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));await new Promise(r=>setTimeout(r,5));assert.equal(f.calls.length,count);assert.doesNotMatch(f.d.getElementById('security').textContent,/late-unused-candidate/);
+ }finally{late.resolve(Response.json({}));f.close();}
+});

@@ -133,3 +133,13 @@ test('paid purchases needing invoice review remain visible even when there is no
   await accounting(f);await waitFor(()=>f.root.textContent.includes('Nog geen uitgegeven facturen'));const warning=f.root.querySelector('[data-invoice-review]');assert.ok(warning);assert.equal(warning.dataset.invoiceReview,ORDER);assert.match(warning.textContent,/Factuur controleren · Factuuradres ontbreekt/);assert.equal(f.root.querySelector('[data-invoice-pdf]'),null);assert.equal(f.verifications.length,0);
  }finally{f.close();}
 });
+
+test('cached page transitions preserve manual administration without new mutations and actual unload clears it',async()=>{
+ const f=fixture();try{
+  await accounting(f);const form=f.d.getElementById('ownerAccountingDocumentForm');f.d.getElementById('ownerAccountingReference').value='ACC-mijn-bewaarde-keuze';const before=f.calls.length;
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));
+  assert.equal(f.d.getElementById('ownerAccountingDocumentForm'),form);assert.equal(f.d.getElementById('ownerAccountingReference').value,'ACC-mijn-bewaarde-keuze');assert.equal(f.calls.length,before);assert.equal(posts(f).length,0);
+  await recovery(f);assert.ok(f.calls.some(([path])=>path==='/api/owner/recovery'));assert.equal(posts(f).length,0);
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.root.children.length,0);
+ }finally{f.close();}
+});

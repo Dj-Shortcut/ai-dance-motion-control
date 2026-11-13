@@ -7,7 +7,7 @@ const script=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import
 const waitFor=async fn=>{for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('UI did not settle')};
 function fixture(funding,{price=100,remaining=500,duration=3,mode=funding==='credits'?'live':undefined,providerCosts=funding==='owner',retailPreview={currency:'EUR',priceCents:75,binding:false}}={}){
  const dom=new JSDOM(html,{url:'https://rig.local/',runScripts:'outside-only'}),win=dom.window,d=win.document;
- win.Blob=Blob;win.rigVideoFunding=funding;win.rigVideoMode=mode;
+ win.Blob=Blob;win.rigVideoFunding=funding;win.rigVideoMode=mode;win.rigSessionActive=()=>true;
  for(const e of d.querySelectorAll('dialog')){e.showModal=function(){this.open=true};e.close=function(){this.open=false};}
  const store=new Map(),calls=[];let uploads=0;
  win.rigScopedStorage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
