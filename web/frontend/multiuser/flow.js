@@ -5,6 +5,7 @@
  if(!primary||screens.length!==4||!el('flowBack'))return;
  const binding={request:window.rigRequest,active:window.rigSessionActive},controller=new AbortController();
  let disposed=false,view='start',ready=!primary.disabled,inputsReady=false,continuation=false,lockedChoice=false,processing=false,plan='trial',fullReview=false,fullIntent=false,continuationLabel='Volledige versie maken',priceSequence=0,priceTimer=null,shareFile=null,shareSequence=0;
+ let historyView=null;
  const current=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&binding.active?.()===true;
  const on=(target,type,handler,options={})=>target?.addEventListener(type,handler,{...options,signal:controller.signal});
  const source=()=>el('motionVideo'),seconds=()=>Number(el('duration').value),minimum=()=>Number(el('duration').min)||3;
@@ -169,7 +170,8 @@
   show('make',{focus:false});el('briefDialog').showModal();schedulePrices();
  }));
  on(document,'rig-generation-accepted',showProcessing);
- on(document,'rig-generation-completed',()=>{processing=false;el('quoteDialog').classList.remove('flow-processing');el('newVideo').hidden=false;show('result');void prepareShare();});
+ on(el('recentVideo'),'click',()=>{historyView=view;},{capture:true});
+ on(document,'rig-generation-completed',event=>{processing=false;el('quoteDialog').classList.remove('flow-processing');el('newVideo').hidden=false;const previous=historyView;historyView=null;if(event.detail?.keepDraftView){const next=['files','where','make'].includes(previous)?previous:'files';show(next,{focus:false});if(next==='make'){el('briefDialog').showModal();schedulePrices();}return;}show('result');void prepareShare();});
  on(document,'rig-generation-failed',()=>{processing=false;el('quoteDialog').classList.remove('flow-processing');el('newVideo').hidden=false;show('result',{focus:false});});
  const observer=new MutationObserver(()=>{
   if(!current())return;

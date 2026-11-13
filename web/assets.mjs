@@ -77,7 +77,7 @@ function createMediaRequest(o,path,user,init={}){return new Request(BASE+path,{.
 // `limit` must be durable and enforce request, byte, and concurrency budgets.
 export function createAssets(o){
  if(!optionsOk(o)||typeof o.authenticate!=='function')throw Error('asset dependencies missing');
- async function resolveOwned(user,id,upload,expectedSha,context){
+ async function resolveOwned(user,id,upload,expectedSha,context,held=false){
    if(!USER.test(user??'')||!UUID.test(id??''))return null;
    // The public HTTP asset-preparation handler never accepts this context.
    // Only the generation handler can supply a quote-bound policy after consent.
@@ -97,7 +97,7 @@ export function createAssets(o){
    if(!['image','video'].includes(kind)||!validManifest(m,user,kind)||!validHeaders(res.headers,size))throw Error('bad asset');
    const bytes=await readBounded(res.body,MAX);if(bytes.length!==size||hex(await crypto.subtle.digest('SHA-256',bytes))!==sha)throw Error('integrity mismatch');
    if(expectedSha && sha!==expectedSha)throw Error('asset changed');
-   if(!upload)return {id,kind,verified:true,sha256:sha,width,height,...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};
+   if(!upload){const expiry=res.headers.get('x-rig-expires-at'),expiresAt=expiry!==null&&/^[0-9]{1,16}$/.test(expiry)?Number(expiry):undefined;const descriptor={id,kind,verified:true,sha256:sha,width,height,mime,size,...(Number.isSafeInteger(expiresAt)?{expiresAt}:{}),...(kind==='video'?{durationVerified:true,durationSeconds:duration,...(fps!==undefined?{fps}:{})}:{})};return held?{...descriptor,bytes}:descriptor;}
    // Do not expose URLs or credentials in user-facing responses; upload is made
    // only after authenticated ownership and digest checks on exact held bytes.
    let url,inline=false;
@@ -151,6 +151,6 @@ export function createAssets(o){
      return answer(201,{id:m.id,status:'ready',kind:role,...(kind==='video'?{durationSeconds:m.durationSeconds}:{})});
    }catch{return Response.json({error:mediaPhase==='request'?'De verbinding met de privé-mediadienst is mislukt.':'Het antwoord van de privé-mediadienst kon niet worden gelezen.'},{status:503,headers:{'Cache-Control':'no-store','X-Rig-Media-Uncertain':'1'}})}
  }
- return {getOwned:(user,id)=>resolveOwned(user,id,false),uploadOwned:(user,id,sha,context)=>resolveOwned(user,id,true,sha,context),handle};
+ return {getOwned:(user,id)=>resolveOwned(user,id,false),readOwned:(user,id,sha)=>resolveOwned(user,id,false,sha,null,true),uploadOwned:(user,id,sha,context)=>resolveOwned(user,id,true,sha,context),handle};
 }
 export const assetTesting={readBounded,validManifest,MAX};

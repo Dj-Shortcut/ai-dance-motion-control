@@ -33,7 +33,11 @@ test('a five-second trial uses the existing explicit payment and generation flow
   const browser={location:win.location,history:win.history,sessionStorage:storage,URL:win.URL};
   const clientFactory=()=>({auth:{getSession:async()=>({data:{session:active?{access_token:currentToken}:null}}),signOut:async()=>{active=false;return {};}}});
   const requested=[];
-  const fetcher=(url,init)=>{requested.push(new URL(url).pathname);const headers=new Headers(init.headers);if((init.method||'GET').toUpperCase()==='POST')headers.set('origin','https://rig.local');return backend(new Request(url,{...init,headers}),env);};
+  const fetcher=async(url,init)=>{requested.push(new URL(url).pathname);const headers=new Headers(init.headers);if((init.method||'GET').toUpperCase()==='POST')headers.set('origin','https://rig.local');
+   // This legacy money fixture has no R2. Keep its real session/authentication
+   // boundary; durable draft bytes are exercised by the dedicated Worker tests.
+   if(new URL(url).pathname==='/api/video-drafts'){const session=await backend(new Request('https://rig.local/api/session',{headers}),env);return session.ok?Response.json({saved:true,expiresAt:Date.now()+86400000}):session;}
+   return backend(new Request(url,{...init,headers}),env);};
   const auth=createBrowserAuth({projectUrl,publishableKey,callbackUrl:'https://rig.local/auth/callback',browser,clientFactory,fetcher});
   const binding=await prepareBoundUi({auth,browser});
   win.rigRequest=binding.request;win.rigScopedStorage=binding.scopedStorage;win.rigOpenVideo=binding.openVideo;win.rigSessionActive=binding.isActive;let checkoutVisited=false;win.rigCheckout=()=>{checkoutVisited=true;};
@@ -70,7 +74,7 @@ test('a five-second trial uses the existing explicit payment and generation flow
  d.getElementById('start').value='2.3';d.getElementById('start').dispatchEvent(new alice.win.Event('change'));
  d.getElementById('motionCropButton').click();d.getElementById('cropX').value='10';d.getElementById('cropW').value='80';d.getElementById('applyCrop').click();
  d.getElementById('prepare').click();assert.equal(d.getElementById('briefDialog').open,true);d.getElementById('tryShortVideo').click();await waitFor(()=>d.getElementById('uploadDialog').open);
- assert.equal(d.getElementById('duration').value,'8');assert.deepEqual(alice.prepared,[{crop:{x:10,y:0,w:80,h:100},start:2.3,duration:5}]);assert.equal(alice.requested.includes('/api/generations'),false);
+ assert.equal(d.getElementById('duration').value,'8');assert.deepEqual(alice.prepared,[{crop:{x:10,y:0,w:80,h:100},start:2.3,duration:8},{crop:{x:10,y:0,w:80,h:100},start:2.3,duration:5}]);assert.equal(alice.requested.includes('/api/generations'),false);
  d.getElementById('confirmUpload').click();await waitFor(()=>!d.getElementById('confirmGeneration').hidden);
  assert.match(d.getElementById('quoteMessage').textContent,/1,00/);assert.equal(alice.requested.includes('/api/generations'),false);assert.equal((await (await alice.binding.request('/api/payments/balance')).json()).balance,500);
  d.getElementById('confirmGeneration').click();await waitFor(()=>d.getElementById('quoteMessage').textContent.includes('Je proefje is klaar.'));

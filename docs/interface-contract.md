@@ -76,14 +76,27 @@ gericht de oorspronkelijke bestanden en de gewenste lengte, sla het
 startscherm over en toon daarna de volledige keuze met een nieuwe prijs.
 Verzin daarbij geen oorspronkelijke duur, prompt of referenties.
 Een nieuwe selectie blijft leidend; een oud resultaat mag die niet vervangen.
-Na verversen moeten ontbrekende oorspronkelijke bestanden bewust opnieuw
-gekozen worden. `Nog eentje` begint bewust een nieuw concept en mag een
+Een nieuw proefje bewaart vóór de betaalde bevestiging ook het volledige
+gekozen, genormaliseerde fragment met het hoofdbeeld en de gebruikte referenties
+in de bestaande privéopslag. Bewaar nooit de volledige ruwe telefoonopname om
+een kort gekozen fragment te vervolgen. Bind het bewaarde concept onveranderlijk
+aan de eigen proefquote; alleen de eigenaar van het bijbehorende voltooide
+proefje kan het openen. Ook na verversen of via `Mijn video's` gaat
+`Volledige versie maken` rechtstreeks naar stap 3/3, met dezelfde media,
+omschrijving en opties. Een verse volledige quote, toestemming en bevestiging
+blijven verplicht. Een masker voor een proefje wordt nooit voor een langere
+video hergebruikt: controleer een nieuw masker voor dat volledige fragment.
+Een oud proefje waarvoor de langere bron nooit is bewaard kan ontbrekende
+beelden niet terughalen; leg dat eerlijk uit zonder een nieuw proefje te starten.
+`Nog eentje` begint bewust een nieuw concept en mag een
 lopende of onzekere opdracht niet laten verdwijnen.
 
 Bewaar alleen de begrensde proefinstellingen per aangemeld account, maximaal
 24 uur, zodat een nieuw tabblad hetzelfde proefje kan vervolgen. Foto-, video-
 en referentiebytes, bestandstoegangslinks en aanmeldgegevens horen niet in die
-opslag. Afmelden wist het eigen bewaarde proefconcept. Geschiedenis bekijken
+browseropslag. De aanvullende bronmedia blijven maximaal 24 uur in de bestaande
+privé-invoeropslag; een verlopen of ontbrekende bron geeft een gerichte melding.
+Afmelden wist het eigen lokaal bewaarde proefconcept. Geschiedenis bekijken
 controleert uitsluitend bestaande opdrachten en start geen betaalde vervolgstap.
 
 ## Controle voor publicatie

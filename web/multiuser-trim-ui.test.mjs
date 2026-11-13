@@ -116,9 +116,9 @@ test('a five-second trial preserves the chosen start, crops, description, qualit
    const imageCrops=[];f.win.rigMedia.prepareImage=async(_source,crop)=>{imageCrops.push({...crop});return {blob:new f.win.Blob(['image'],{type:'image/jpeg'})};};
    f.byId('prepare').click();assert.equal(f.byId('tryShortVideo').disabled,false);assert.equal(f.byId('shortTrialHint').hidden,true);
    f.byId('tryShortVideo').click();await waitFor(()=>f.win.rigPreparedMedia()!==null);
-   assert.equal(f.prepared.length,1);assert.equal(f.prepared[0].duration,5);assert.equal(f.prepared[0].start,2.3);
-   assert.deepEqual(f.prepared[0].crop,{x:10,y:0,w:80,h:100});assert.deepEqual(imageCrops,[{x:15,y:0,w:80,h:100}]);
-   assert.equal(f.prepared[0].keepSound,false);assert.equal(f.win.rigPreparedMedia().prompt,prompt);assert.equal(f.win.rigPreparedMedia().quality,mode==='edit'?'edit-standard':'pro');
+   assert.equal(f.prepared.length,2);assert.deepEqual(f.prepared.map(video=>video.duration),[10,5]);assert.ok(f.prepared.every(video=>video.start===2.3));
+   for(const video of f.prepared){assert.deepEqual(video.crop,{x:10,y:0,w:80,h:100});assert.equal(video.keepSound,false);}assert.deepEqual(imageCrops,[{x:15,y:0,w:80,h:100}]);
+   assert.equal(f.win.rigPreparedMedia().prompt,prompt);assert.equal(f.win.rigPreparedMedia().quality,mode==='edit'?'edit-standard':'pro');
    assert.equal(f.byId('duration').value,'10','the full selection remains intact');assert.equal(f.win.rigPreparedMedia().selectedSeconds,5);assert.equal(f.byId('start').value,'2.3');
    f.byId(mode==='edit'?'motionModeButton':'editModeButton').click();f.byId(mode==='edit'?'editModeButton':'motionModeButton').click();
    assert.equal(f.byId('duration').value,'10','the full duration is remembered for that mode');
@@ -159,6 +159,6 @@ test('trial preparation rejects an empty prompt, inactive session or capability 
   f.win.rigVideoEnabled=true;f.doc.dispatchEvent(new f.win.Event('rig-video-availability'));
   let images=0;f.win.rigMedia.prepareImage=()=>{images++;return new Promise(resolve=>{release=()=>resolve({blob:new f.win.Blob(['image'],{type:'image/jpeg'})});});};
   f.byId('tryShortVideo').click();assert.equal(f.byId('tryShortVideo').disabled,true);f.byId('tryShortVideo').dispatchEvent(new f.win.Event('click'));
-  assert.equal(images,1);assert.equal(f.prepared.length,0);release();await waitFor(()=>f.win.rigPreparedMedia()!==null);assert.equal(f.prepared.length,1);
+  assert.equal(images,1);assert.equal(f.prepared.length,0);release();await waitFor(()=>f.win.rigPreparedMedia()!==null);assert.deepEqual(f.prepared.map(video=>video.duration),[12,5]);
  }finally{release?.();f.close()}
 });

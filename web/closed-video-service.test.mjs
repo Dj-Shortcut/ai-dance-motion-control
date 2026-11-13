@@ -3,6 +3,7 @@ import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {createClosedVideoService,closedVideoTesting} from './closed-video-service.mjs';
 import {Miniflare} from 'miniflare';
 import {createD1GenerationStores} from './d1.mjs';
+import {createDurableMediaLease} from './durable-media-lease.mjs';
 async function migrate(db,file){const sql=(await readFile(file,'utf8')).replace(/^\s*--.*$/gm,'');for(const s of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run()}
 const config={LOCAL_FIXTURE:'yes',RIG_MODE:'test',RIG_MOLLIE_MODE:'test',RIG_PUBLIC_ORIGIN:'https://rig.local',RIG_SITES_BRIDGE_ORIGIN:'https://gateway.example',RIG_CLOSED_VIDEO_ENABLED:'yes',RIG_MEDIA_SECRET:'x'.repeat(40),FAL_KEY:'local-fake-not-a-key',RIG_PRICE_STANDARD:'25',RIG_PRICE_PRO:'25',RIG_PRICE_VERSION:'fixture-1',RIG_CLOSED_VIDEO_MAX_CENTS:'300',RIG_CLOSED_VIDEO_MAX_USD_MICROS:'500000'};
 const send=(mf,user,path,{method='GET',body,headers={}}={})=>mf.dispatchFetch('https://rig.local'+path,{method,headers:{'x-local-user':user,...(method==='POST'?{origin:'https://rig.local'}:{}),...headers},...(body?{body}:{})});
@@ -134,3 +135,31 @@ test('closed composition: private assets, scoped jobs and per-request ledger bud
  await mf.dispose();mf=create(config);r=await send(mf,'alice',`/api/generations/${job}/video`);assert.equal(r.status,200);assert.deepEqual(Buffer.from(await r.arrayBuffer()),video);
  await mf.dispose();mf=create({...config,RIG_CLOSED_VIDEO_MAX_USD_MICROS:'300000'});r=await json(mf,'bob','/api/generation-quotes',selection(bi,bv));assert.equal(r.status,503);assert.equal((await (await mf.getD1Database('DB','main')).prepare('SELECT count(*) n FROM rig_fixture_fal_dispatch').first()).n,2);
  }finally{if(mf)await mf.dispose();await rm(dir,{recursive:true,force:true})}});
+
+// Exercise the production service's read admission with the real durable D1
+// lease. Synthetic media never reaches a transform, provider or paid job.
+async function draftReadLeaseFixture(){
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']}),db=await mf.getD1Database('DB');
+ await migrate(db,new URL('./production-schema.sql',import.meta.url));await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'test')").run();
+ const imageId=crypto.randomUUID(),trialId=crypto.randomUUID(),fullId=crypto.randomUUID(),now=Date.now(),expiresAt=now+600000,bytes=new Uint8Array(64),sha=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+ const data={imageId,videoId:trialId,faceId:null,angleIds:[],quality:'pro',prompt:'Mijn volledige scène.',keepSound:true,steadyCamera:false},stores=createD1GenerationStores(db,{mode:'test'}),quote=await stores.quotes.create({userId:'alice',model:'fixture-model',input:{data,refs:[{id:imageId,kind:'image',sha256:sha},{id:trialId,kind:'video',sha256:sha}]},priceCents:125,pricingVersion:'fixture',durationSeconds:5});
+ const ref=(id,kind)=>({id,kind,mime:kind==='video'?'video/mp4':'image/jpeg',sha256:sha,size:bytes.length,width:720,height:720,expiresAt,...(kind==='video'?{durationSeconds:15}:{})});
+ const record={version:1,userId:'alice',quoteId:quote.id,createdAt:now,expiresAt,selection:{request:{...data,videoId:fullId},selectedSeconds:15,originalStartSeconds:2.5,cleanup:false},refs:{image:ref(imageId,'image'),video:ref(fullId,'video')}};
+ let mode='valid',mediaReads=0,providerCalls=0;const lease=createDurableMediaLease(db,{mode:'test'});
+ const bucket={get:async()=>{if(mode==='storage-error')throw Error('transient R2 failure');return {body:new Blob([JSON.stringify(record)]).stream()};},put(){throw Error('No write expected')},delete(){throw Error('No delete expected')},head(){}};
+ const env={...config,DB:db,BUCKET:bucket,RIG_MEDIA:{fetch:async req=>{mediaReads++;assert.equal(req.method,'GET');if(mode==='media-error')return new Response(null,{status:503});return new Response(bytes,{headers:{'content-type':'video/mp4','content-length':String(bytes.length),'x-rig-asset-kind':'video','x-rig-sha256':sha,'x-rig-width':'720','x-rig-height':'720','x-rig-duration-seconds':'15','x-rig-fps':'30','x-rig-expires-at':String(expiresAt)}});}}};
+ const service=await createClosedVideoService(env,{trustedUserId:'alice',lease,verifyTenant:async()=>true,providerFetch:async()=>{providerCalls++;throw Error('No provider request expected')}});
+ return {mf,db,lease,read:()=>service(new Request('https://rig.local/api/video-drafts/'+quote.id+'/assets/'+fullId)),setMode:value=>{mode=value;},counts:()=>({mediaReads,providerCalls})};
+}
+for(const failure of ['storage-error','media-error','asset-quota'])test(`a ${failure} during a saved draft byte read releases the real shared lease and leaves other users admitted`,async()=>{
+ const f=await draftReadLeaseFixture();try{
+  f.setMode(failure);if(failure==='asset-quota')await f.db.prepare('INSERT INTO rig_rate_limits(bucket,window_start,requests) VALUES(?,?,60)').bind('asset:alice',Math.floor(Date.now()/1000)).run();
+  const response=await f.read();assert.equal(response.status,503,await response.clone().text());assert.equal(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),null,'a failed bounded read cannot leave a permanent uncertain transformation');
+  const next=await f.lease.acquire('bob');assert.equal(next.state,'acquired','another account can continue after the failed read');await f.lease.complete(next.token,'settled');assert.equal(f.counts().providerCalls,0);if(failure==='asset-quota')assert.equal(f.counts().mediaReads,0,'quota refusal happens before the private media read');
+ }finally{await f.mf.dispose();}
+});
+test('a successful saved draft byte read keeps shared admission until its bounded response is consumed or cancelled',async()=>{
+ const f=await draftReadLeaseFixture();try{
+  const response=await f.read();assert.equal(response.status,200);assert.deepEqual(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),{state:'active'});assert.equal((await f.lease.acquire('bob')).state,'busy');await response.body.cancel();assert.equal(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),null);const next=await f.lease.acquire('bob');assert.equal(next.state,'acquired');await f.lease.complete(next.token,'settled');assert.equal(f.counts().providerCalls,0);
+ }finally{await f.mf.dispose();}
+});

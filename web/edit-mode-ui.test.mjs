@@ -26,6 +26,8 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   if(path==='/api/generations/recent')value={job:null};
   else if(path==='/api/sponsor-invitations/status')value={state:'eligible',remainingCents:500};
   else if(path==='/api/assets')value={id:'asset'+(++uploads),status:'ready'};
+  else if(path==='/api/video-drafts')value={saved:true,expiresAt:Date.now()+86400000};
+  else if(/^\/api\/generations\/[^/]+\/draft$/.test(path))value={available:false,reason:'missing'};
   else if(path==='/api/generation-quotes'){const input=JSON.parse(options.body),seconds=w.rigPreparedMedia().selectedSeconds??Number(el('duration').value),id=++quotes===1?'quote-edit':'quote-edit-'+quotes;value={id,quality:input.quality,priceCents:price,currency:'EUR',durationSeconds:seconds,billedSeconds:seconds,...(quotePolicy==='echo'?(input.transferPolicy?{transferPolicy:input.transferPolicy}:{}):quotePolicy===null?{}:{transferPolicy:quotePolicy}),...(price<=500?{approvalToken:'t'.repeat(43),idempotencyKey:'rigchatgpt_'+id}:{})};}
   else if(path==='/api/generations')value=polledFailure?{id:'job-edit',state:'queued',priceCents:price,currency:'EUR'}:{id:'job-edit',state:'failed',...(refundConfirmed===undefined?{}:{refundConfirmed}),...(failureCode?{failureCode}:{})};
   else if(path==='/api/generations/job-edit')value={id:'job-edit',state:'failed',priceCents:price,currency:'EUR',...(refundConfirmed===undefined?{}:{refundConfirmed}),...(failureCode?{failureCode}:{})};
@@ -266,7 +268,7 @@ test('a five-second trial invalidates a longer reviewed quote and requires a new
    f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);
    assert.match(f.el('quoteMessage').textContent,/1,00.*gratis testtegoed/);assert.match(f.el('quoteMessage').textContent,/5\.00 seconden/);
    assert.equal(f.calls.filter(([path])=>path==='/api/generation-quotes').length,2);assert.equal(f.calls.some(([path])=>path==='/api/generations'),false);
-   const videoUploads=f.calls.filter(([path,options])=>path==='/api/assets'&&options.headers['X-Rig-Asset-Kind']==='video');assert.equal(videoUploads.at(-1)[1].headers['X-Rig-Duration-Seconds'],'5');
+   const videoUploads=f.calls.filter(([path,options])=>path==='/api/assets'&&options.headers['X-Rig-Asset-Kind']==='video');assert.deepEqual(videoUploads.slice(-2).map(([,options])=>options.headers['X-Rig-Duration-Seconds']),['5','12']);const saved=JSON.parse(f.calls.find(([path])=>path==='/api/video-drafts')[1].body);assert.equal(saved.selectedSeconds,12);assert.notEqual(saved.fullVideoId,JSON.parse(f.calls.filter(([path])=>path==='/api/generation-quotes').at(-1)[1].body).videoId);
    if(mode==='edit'){assert.match(f.el('quoteMessage').textContent,/tijdelijke links/);assert.match(f.el('quoteMessage').textContent,/Bevestig videobewerking/);}
    f.el('confirmGeneration').click();await waitFor(()=>f.calls.some(([path])=>path==='/api/generations'));
    const confirmations=f.calls.filter(([path])=>path==='/api/generations');assert.equal(confirmations.length,1);

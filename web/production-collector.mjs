@@ -1,3 +1,4 @@
+import {collectVideoDrafts} from './video-drafts.mjs';
 // Bounded scheduled reconciliation. Never creates a payment or a Fal request.
 // Ownership comes from the production DB, never an external scheduling argument.
 import {createProductionGenerationContext} from './production-generation-context.mjs';
@@ -20,6 +21,7 @@ export async function collectProduction(env,{network=fetch,videoFactory=createPr
  // Existing customer payments must recover even when new video generation is
  // paused. Only the video branch requires a generation capability.
  const mapped=await validateProductionTenant(env);if(!mapped)return stats;
+ try{const drafts=await collectVideoDrafts(mapped.BUCKET,{now:clock(),limit});if(drafts.checked)stats.drafts=drafts;}catch{stats.unavailable++;}
  const now=clock();if(!Number.isSafeInteger(now)||now<1)throw Error('Invalid collection time');
  const context=await createProductionGenerationContext(env);
  if(context){
