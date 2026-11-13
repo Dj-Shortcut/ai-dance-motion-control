@@ -93,6 +93,7 @@ for(const event of ['rig-generation-intent','rig-generation-tracking'])test(`${e
   f.el('quoteDialog').close();await Promise.resolve();assert.equal(f.el('briefDialog').open,false,'closing status must not reopen preparation');
   cachedTransition(f,'pagehide');cachedTransition(f,'pageshow');
   assert.ok(f.w.rigFlow);assert.equal(f.showing('result'),true);assert.equal(f.el('quoteDialog').open,true);
+  assert.equal(f.el('status').textContent,'Je bestaande opdracht wordt gecontroleerd.','a restored submission must not ask for a new photo');
   assert.deepEqual(writePaths(f),[],'restoring a known submission does not submit or prepare media');
  }finally{f.close();}
 });

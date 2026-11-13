@@ -117,6 +117,7 @@
  function openMake({full=false}={}){fullReview=full||fullIntent;plan=fullReview||!trialAllowed()?'full':'trial';show('make',{focus:false});schedulePrices();}
  function showProcessing(){
   if(!current())return;
+  el('status').textContent='Je bestaande opdracht wordt gecontroleerd.';
   processing=true;shareSequence++;shareFile=null;el('shareResult').hidden=true;el('export').hidden=true;el('resultVideo').pause();el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('newVideo').hidden=true;
   // Once a submission has a recovery handle, preparation must not cover its
   // status, including while the first server acknowledgement is still pending.
