@@ -108,7 +108,8 @@ test('public reads disclose purchase availability, never Fal balances, account i
     const response=await f.call(path);assert.equal(response.status,200,path);assert.equal(response.headers.get('cache-control'),'no-store');
     const value=await response.json();assertPublicOnly(value);values.set(path,value);
    }
-   for(const path of ['/api/session','/api/payments/balance','/api/payments/packages'])assert.equal(values.get(path).purchasesEnabled,active,path);
+   assert.equal(values.get('/api/session').purchasesEnabled,false,'identity reads never promise purchase availability');
+   for(const path of ['/api/payments/balance','/api/payments/packages'])assert.equal(values.get(path).purchasesEnabled,active,path);
    assert.equal(values.get('/api/payments/readiness').ready,active);
    assert.deepEqual(values.get('/api/payments/packages').packages.map(pkg=>({id:pkg.id,available:pkg.available})),[{id:'five',available:active},{id:'ten',available:false},{id:'twentyfive',available:false}]);
    if(!active){assert.equal(values.get('/api/payments/packages').purchasePauseReason,'funding_unavailable');assert.equal(values.get('/api/payments/balance').purchasePauseReason,'funding_unavailable');assert.equal(values.get('/api/payments/readiness').reason,'funding_unavailable');}
@@ -201,4 +202,34 @@ test('production entrypoint dependency graphs never import the funding test bypa
  const result=await build({entryPoints:['closed-video-worker.mjs','production-ingress.mjs','rig-sites-app.mjs','production-collector.mjs'],bundle:true,write:false,outdir:'unused-funding-boundary-output',format:'esm',platform:'browser',metafile:true,logLevel:'silent'});
  assert.ok(Object.keys(result.metafile.inputs).length>20);
  assert.equal(Object.keys(result.metafile.inputs).some(path=>path.endsWith('funding-test-support.mjs')),false);
+});
+
+
+test('signed native sessions stay independent of stalled provider billing while purchases retain fresh fail-closed coverage',async()=>{
+ let finishBilling;const stalled=new Promise(resolve=>{finishBilling=resolve;});
+ const f=await fixture({migration:true,enabled:true,flag:true,billingResponse:()=>stalled});
+ try{
+  Object.assign(f.env,{RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_PRODUCTION_SITES_BRIDGE_KEY:'ba'.repeat(32)});
+  const worker=createProductionCommerceWorker({network:f.transport,videoFactory:async()=>{throw Error('A session must not create a video service');}});
+  const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':'<main>RIG</main>'},fetchImpl:req=>worker.fetch(req,f.env)});
+  const browser=(subject,path,data,user)=>app.fetch(new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:{...(subject?{'oai-authenticated-user-id':subject}:{}),...(user?{'x-rig-expected-user':user}:{}),...(data===undefined?{}:{origin:SITE,'content-type':'application/json'})},...(data===undefined?{}:{body:JSON.stringify(data)})}),f.env);
+  async function session(subject){let timer;try{return await Promise.race([browser(subject,'/api/session'),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Identity waited for provider billing')),1000);})]);}finally{clearTimeout(timer);}}
+  assert.equal((await browser(undefined,'/api/session')).status,401);
+  const first=await session('independent-native-customer');assert.equal(first.status,200);const account=await first.json();assertPublicOnly(account);assert.equal(account.purchasesEnabled,false);assert.equal(account.balanceCents,0);
+  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('session-isolation-fixture',?,725)").bind(account.userId).run();
+  await f.db.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,'fixture review')").bind(account.userId).run();
+  const second=await session('independent-native-customer');assert.equal(second.status,200);assert.deepEqual(await second.json(),{userId:account.userId,balanceCents:725,frozen:true,currency:'EUR',mode:'live',purchasesEnabled:false,funding:'credits'});
+  const other=await session('other-independent-native-customer');const otherAccount=await other.json();assert.notEqual(otherAccount.userId,account.userId);assert.equal(otherAccount.balanceCents,0);assert.equal(otherAccount.frozen,false);
+  assert.equal((await browser('independent-native-customer','/api/payments/balance',undefined,otherAccount.userId)).status,403);
+  assert.equal(f.calls.length,0,'session, anonymous and account-binding checks must not dispatch any provider read');
+  // The same deployment still obtains actual purchase availability separately.
+  // A definitive provider refusal cannot make a package or checkout available.
+  finishBilling(Response.json({error:'fixture billing denied'},{status:403}));
+  const publicPackages=await browser('other-independent-native-customer','/api/payments/packages');assert.equal(publicPackages.status,200);const packages=await publicPackages.json();assert.equal(packages.purchasesEnabled,false);assert.ok(packages.packages.every(p=>p.available===false));
+  const balance=await browser('other-independent-native-customer','/api/payments/balance');assert.equal(balance.status,200);assert.equal((await balance.json()).purchasesEnabled,false);
+  const readiness=await browser('other-independent-native-customer','/api/payments/readiness');assert.equal(readiness.status,200);assert.equal((await readiness.json()).ready,false);
+  const created=await browser('other-independent-native-customer','/api/payments/create',{packageId:'five',requestId:crypto.randomUUID()},otherAccount.userId);assert.equal(created.status,503);const refused=await created.json();assert.equal(refused.paymentCreated,false);assert.equal(refused.checkoutUrl,undefined);
+  assert.ok(f.calls.some(call=>call.origin==='https://api.fal.ai'),'purchase endpoints must still attempt a current funding read');assert.ok(f.calls.every(call=>call.method==='GET'),'no Mollie creation or provider generation may occur');
+  assert.equal(await f.count('rig_orders'),0);assert.equal(await f.count('rig_ledger'),1);
+ }finally{finishBilling(Response.json({error:'fixture cleanup'},{status:403}));await f.mf.dispose();}
 });
