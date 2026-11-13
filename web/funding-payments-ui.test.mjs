@@ -81,3 +81,13 @@ test('no available package produces a compact purchase pause and no checkout req
 test('a legacy standalone test package without an availability field still works',async()=>{
  const f=await screen({native:false,mode:'test',createReply:()=>Response.json({checkoutUrl:CHECKOUT})});try{await buy(f);await wait(()=>f.redirects.length===1);assert.equal(f.calls.filter(([path])=>path==='/api/payments/create').length,1);assert.equal(JSON.parse(f.calls.find(([path])=>path==='/api/payments/create')[1].body).packageId,'five');}finally{f.close();}
 });
+
+test('cached page transitions retain the exact pending purchase and explicit recovery controls without creating another payment',async()=>{
+ const f=await screen({enabled:false,pending:PENDING});try{
+  await wait(()=>!f.el('resumePayment').hidden);const before=f.calls.length;
+  f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:true}));f.w.dispatchEvent(new f.w.PageTransitionEvent('pageshow',{persisted:true}));
+  assert.equal(f.el('creditsDialog').open,true);assert.equal(f.el('resumePayment').hidden,false);assert.equal(f.storage.get('rig-payment-request'),PENDING);assert.equal(f.calls.length,before);assert.equal(f.redirects.length,0);
+  f.el('refreshPayment').click();await wait(()=>f.calls.length>before);assert.equal(f.calls.some(([path])=>path==='/api/payments/create'),false);assert.equal(f.storage.get('rig-payment-request'),PENDING);
+  f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.el('creditsDialog').open,false);assert.equal(f.el('resumePayment').hidden,true);assert.equal(f.storage.get('rig-payment-request'),PENDING);
+ }finally{f.close();}
+});

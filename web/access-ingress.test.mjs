@@ -38,7 +38,9 @@ test('complete payment return is counted once per layer and excessive writes are
  for(const p of ['/api/payments/balance','/api/payments/packages'])assert.equal((await call(p)).status,200);
  let r=await call(`/api/payments/orders/${id}/reconcile`,'POST',{});assert.equal(r.status,200);assert.equal((await r.json()).state,'paid');r=await call('/api/payments/balance');assert.equal(r.status,200);assert.equal((await r.json()).balance,500);
  for(const bucket of ['payment:owner01','payment:ingress:owner01'])assert.equal((await e.DB.prepare('SELECT requests FROM rig_rate_limits WHERE bucket=?').bind(bucket).first()).requests,8);
- for(let i=0;i<4;i++)assert.equal((await call(`/api/payments/orders/${id}/reconcile`,'POST',{})).status,200);
+ // Reads do not consume the write allowance: create + reconcile above leave
+ // ten further writes before the unchanged twelve-write burst is exhausted.
+ for(let i=0;i<10;i++)assert.equal((await call(`/api/payments/orders/${id}/reconcile`,'POST',{})).status,200);
  assert.equal((await call(`/api/payments/orders/${id}/reconcile`,'POST',{})).status,429);
 });
 test('owner-only opt-in reaches media with two-request daily cap while guest and generation remain closed',async()=>{

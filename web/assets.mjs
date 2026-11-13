@@ -11,6 +11,10 @@ const MAX=16*1024*1024; // deliberate Worker memory bound; deployment needs glob
 const USER=/^[a-zA-Z0-9_-]{1,100}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA=/^[a-f0-9]{64}$/;
+// Only the original handler can attest that it applies its own write limiter.
+// A wrapper or replacement cannot bypass the router by copying a public flag.
+const limitedWriteHandles=new WeakSet();
+export function hasAssetWriteLimit(handle){return limitedWriteHandles.has(handle)}
 const answer=(status, value)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const fail=(status=503)=>answer(status,{error:status===401?'Aanmelden vereist.':status===400?'Controleer je bestand.':status===403?'Ongeldige oorsprong.':'Bestand tijdelijk niet beschikbaar.'});
 // Fixed, non-sensitive diagnostic categories from the private media worker.
@@ -151,6 +155,7 @@ export function createAssets(o){
      return answer(201,{id:m.id,status:'ready',kind:role,...(kind==='video'?{durationSeconds:m.durationSeconds}:{})});
    }catch{return Response.json({error:mediaPhase==='request'?'De verbinding met de privé-mediadienst is mislukt.':'Het antwoord van de privé-mediadienst kon niet worden gelezen.'},{status:503,headers:{'Cache-Control':'no-store','X-Rig-Media-Uncertain':'1'}})}
  }
+ limitedWriteHandles.add(handle);
  return {getOwned:(user,id)=>resolveOwned(user,id,false),readOwned:(user,id,sha)=>resolveOwned(user,id,false,sha,null,true),uploadOwned:(user,id,sha,context)=>resolveOwned(user,id,true,sha,context),handle};
 }
 export const assetTesting={readBounded,validManifest,MAX};

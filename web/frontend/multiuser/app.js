@@ -372,7 +372,7 @@ $('briefDialog').addEventListener('cancel',event=>{if(busy&&!cleanupReview)event
 $('cleanupEnabled').addEventListener('change',()=>{if(busy||cleanupWork)return;invalidate();clearBriefFeedback();});
 $('briefCrop').addEventListener('click',()=>{if(busy||cleanupWork||!motionFile)return;returnBriefFromCrop=true;$('briefDialog').close();$('motionCropButton').click();});
 $('cropDialog').addEventListener('close',()=>{if(returnBriefFromCrop){returnBriefFromCrop=false;if(window.rigSessionActive?.()===true){$('briefDialog').showModal();refreshButton();}}});
-window.addEventListener('pagehide',disposeCleanup);
+window.addEventListener('pagehide',event=>{if(!event.persisted)disposeCleanup();});
 
 // Trial continuation metadata is account-scoped and bounded. Source files,
 // image bytes and private URLs stay in memory and are never persisted here.
@@ -541,7 +541,7 @@ window.rigPreparedMedia = () => prepared;
 window.rigResumeFullDraft = () => continueFullVideo();
 window.rigPrepareChoice = trial => prepareWithPrompt({trial:trial===true});
 window.rigNewDraft = () => {if(continuationBlocked())return false;trialContinuation=null;savedFullDraft=null;savedPreparedSource=null;savedVideoSource=null;lastCompletedResult=null;continuationOffer=false;reviewingFull=false;resultRecovery=false;persistTrialContinuation();invalidate();renderContinuation();return true;};
-window.addEventListener('pagehide',()=>Object.values(urls).forEach(URL.revokeObjectURL));
+window.addEventListener('pagehide',event=>{if(!event.persisted)Object.values(urls).forEach(URL.revokeObjectURL);});
 
 $('editPrompt').value=modePrompts[modeKey()];$('duration').max=String(durationLimit());if(editing())$('duration').value='5';
 updateCapabilities();

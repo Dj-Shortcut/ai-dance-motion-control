@@ -7,6 +7,7 @@
  let disposed=false,view='start',ready=!primary.disabled,inputsReady=false,continuation=false,lockedChoice=false,processing=false,plan='trial',fullReview=false,fullIntent=false,continuationLabel='Volledige versie maken',priceSequence=0,priceTimer=null,shareFile=null,shareSequence=0;
  let historyView=null;
  const current=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&binding.active?.()===true;
+ const hasSubmittedGeneration=()=>Boolean(window.rigScopedStorage?.getItem('rig-generation-pending')||window.rigScopedStorage?.getItem('rig-generation-job'));
  const on=(target,type,handler,options={})=>target?.addEventListener(type,handler,{...options,signal:controller.signal});
  const source=()=>el('motionVideo'),seconds=()=>Number(el('duration').value),minimum=()=>Number(el('duration').min)||3;
  const trialSeconds=()=>window.rigGenerationQuality?.()==='human-recast'?6:5;
@@ -114,7 +115,15 @@
   }));
  }
  function openMake({full=false}={}){fullReview=full||fullIntent;plan=fullReview||!trialAllowed()?'full':'trial';show('make',{focus:false});schedulePrices();}
- function showProcessing(){processing=true;shareSequence++;shareFile=null;el('shareResult').hidden=true;el('export').hidden=true;el('resultVideo').pause();el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('newVideo').hidden=true;show('result',{focus:false});el('quoteDialog').classList.add('flow-processing');}
+ function showProcessing(){
+  if(!current())return;
+  el('status').textContent='Je bestaande opdracht wordt gecontroleerd.';
+  processing=true;shareSequence++;shareFile=null;el('shareResult').hidden=true;el('export').hidden=true;el('resultVideo').pause();el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('newVideo').hidden=true;
+  // Once a submission has a recovery handle, preparation must not cover its
+  // status, including while the first server acknowledgement is still pending.
+  for(const id of ['briefDialog','uploadDialog','preparedDialog'])if(el(id).open)el(id).close();
+  show('result',{focus:false});el('quoteDialog').classList.add('flow-processing');if(!el('quoteDialog').open)el('quoteDialog').showModal();
+ }
  async function prepareShare(){
   const sequence=++shareSequence;shareFile=null;el('shareResult').hidden=true;
   if(typeof navigator.share!=='function'||typeof navigator.canShare!=='function')return;
@@ -166,15 +175,19 @@
  // Closing an unpaid preparation/price pop-out returns to the same make
  // screen. Queue this check so an upload-to-quote transition stays intact.
  for(const id of ['uploadDialog','quoteDialog'])on(el(id),'close',()=>queueMicrotask(()=>{
-  if(!current()||view!=='make'||processing||window.rigGenerationBusy?.()===true||document.querySelector('dialog[open]'))return;
+  if(!current()||view!=='make'||processing||hasSubmittedGeneration()||window.rigGenerationBusy?.()===true||document.querySelector('dialog[open]'))return;
   show('make',{focus:false});el('briefDialog').showModal();schedulePrices();
  }));
  on(document,'rig-generation-accepted',showProcessing);
+ on(document,'rig-generation-intent',showProcessing);
+ on(document,'rig-generation-tracking',showProcessing);
  on(el('recentVideo'),'click',()=>{historyView=view;},{capture:true});
  on(document,'rig-generation-completed',event=>{processing=false;el('quoteDialog').classList.remove('flow-processing');el('newVideo').hidden=false;const previous=historyView;historyView=null;if(event.detail?.keepDraftView){const next=['files','where','make'].includes(previous)?previous:'files';show(next,{focus:false});if(next==='make'){el('briefDialog').showModal();schedulePrices();}return;}show('result');void prepareShare();});
  on(document,'rig-generation-failed',()=>{processing=false;el('quoteDialog').classList.remove('flow-processing');el('newVideo').hidden=false;show('result',{focus:false});});
+ on(document,'rig-generation-not-started',()=>{processing=false;el('quoteDialog').classList.remove('flow-processing');show('result',{focus:false});el('resultTitle').textContent='Je video is niet gestart';});
  const observer=new MutationObserver(()=>{
   if(!current())return;
+  if(hasSubmittedGeneration()&&(el('briefDialog').open||el('quoteDialog').open)){showProcessing();return;}
   if(el('briefDialog').open&&view!=='make')openMake({full:el('tryShortVideo').hidden});
   if(el('quoteDialog').open&&!el('checkGeneration').hidden&&el('confirmGeneration').hidden)showProcessing();
  });
@@ -182,5 +195,7 @@
  observer.observe(el('checkGeneration'),{attributes:true,attributeFilter:['hidden']});
  function dispose(){if(disposed)return;disposed=true;controller.abort();observer.disconnect();clearTimeout(priceTimer);priceSequence++;shareSequence++;shareFile=null;if(window.rigFlow===api)delete window.rigFlow;if(window.rigFlowDispose===dispose)delete window.rigFlowDispose;}
  const api={refresh,openFullReview:()=>{fullIntent=false;openMake({full:true});},revealFiles:({advanced=false,full=false}={})=>{fullIntent=full;show('files',{focus:false});el('flowAdvanced').open=advanced;},dispose};window.rigFlow=api;window.rigFlowDispose=dispose;
- on(window,'pagehide',dispose);on(el('authLogout'),'click',dispose);render();
+ on(window,'pagehide',event=>{if(!event.persisted)dispose();});
+ on(window,'pageshow',event=>{if(event.persisted&&current()){if(hasSubmittedGeneration())showProcessing();else render();}});
+ on(el('authLogout'),'click',dispose);render();
 })();

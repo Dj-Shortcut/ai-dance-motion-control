@@ -333,3 +333,14 @@ test('a late stock response cannot disclose provider finances after logout or a 
   }finally{f.close();}
  }
 });
+
+test('cached page transitions preserve financial controls and drafts; actual unload still removes private data',async()=>{
+ const f=await ready(fixture());try{
+  f.d.getElementById('financeButton').click();await waitFor(()=>f.d.getElementById('financeDialog').open);await waitFor(()=>f.calls.length===2);await waitFor(()=>!f.d.querySelector('.finance-toolbar button').disabled);const dialog=f.d.getElementById('financeDialog');
+  f.d.getElementById('financeExpenseNote').value='Mijn onopgeslagen omschrijving';const before=f.calls.length;
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));
+  assert.equal(f.d.getElementById('financeDialog'),dialog);assert.equal(f.d.getElementById('financeButton').hidden,false);assert.equal(f.d.getElementById('financeExpenseNote').value,'Mijn onopgeslagen omschrijving');assert.equal(f.calls.length,before);assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);
+  dialog.close();f.d.getElementById('financeButton').click();await waitFor(()=>f.calls.length===before+1);assert.equal(dialog.open,true);
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.d.getElementById('financeDialog'),null);assert.equal(f.d.getElementById('financeButton').hidden,true);
+ }finally{f.close();}
+});

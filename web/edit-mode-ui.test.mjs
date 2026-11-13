@@ -35,13 +35,15 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
   else throw Error('unexpected request '+path);
   return {ok:true,json:async()=>value};
  };
+ // Transport scenarios change below a stable authenticated request binding.
+ let transport=w.rigRequest;w.rigRequest=(...args)=>transport(...args);const wrapRequest=wrapper=>{transport=wrapper(transport);};
  w.eval(app);if(withGeneration)w.eval(generation);
  const change=(id,value)=>{el(id).value=value;el(id).dispatchEvent(new w.Event('change',{bubbles:true}));};
  const prompt=text=>{el('editPrompt').value=text;el('editPrompt').dispatchEvent(new w.Event('input',{bubbles:true}));};
  const file=(id,name,type)=>{Object.defineProperty(el(id),'files',{configurable:true,value:[new w.File(['file'],name,{type})]});el(id).dispatchEvent(new w.Event('change',{bubbles:true}));};
  const load=()=>{file('personInput','dog.jpg','image/jpeg');file('motionInput','orchestra.mp4','video/mp4');el('motionVideo').dispatchEvent(new w.Event('loadedmetadata'));};
  const prepare=()=>{el('prepare').click();if(el('briefDialog').open)el('confirmBrief').click();};
- return {dom,w,d,el,prepared,imagePreparations,calls,storage,removed,change,prompt,file,load,prepare,setRefundConfirmed:value=>{refundConfirmed=value;}};
+ return {dom,w,d,el,prepared,imagePreparations,calls,storage,removed,change,prompt,file,load,prepare,wrapRequest,setRefundConfirmed:value=>{refundConfirmed=value;}};
 }
 test('editing appears only when the server offers edit-standard and adds no footer controls',()=>{
  const unavailable=fixture({qualities:['standard','pro']});
@@ -279,7 +281,7 @@ test('a five-second trial invalidates a longer reviewed quote and requires a new
 });
 test('a proven subject rejection clears only that non-started pending request so a fresh explicit edit can proceed',async()=>{
  const f=fixture({withGeneration:true});let rejected=false;
- const original=f.w.rigRequest;f.w.rigRequest=async(path,options)=>{if(path==='/api/generations'&&!rejected){rejected=true;f.calls.push([path,options]);return {ok:false,status:409,json:async()=>({error:'Dit videotype past niet.',code:'subject_rejected',generationStarted:false})};}return original(path,options);};
+ f.wrapRequest(original=>async(path,options)=>{if(path==='/api/generations'&&!rejected){rejected=true;f.calls.push([path,options]);return {ok:false,status:409,json:async()=>({error:'Dit videotype past niet.',code:'subject_rejected',generationStarted:false})};}return original(path,options);});
  try{
   f.load();f.change('duration','5');f.prompt('Maak een video met dezelfde beweging.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.includes('Deze video is niet gestart'));
   assert.equal(f.storage.has('rig-generation-pending'),false);assert.equal(f.el('checkGeneration').hidden,true);assert.equal(f.el('confirmGeneration').hidden,true);assert.equal(f.w.rigVideoMode(),'motion','a rejection must not switch or re-submit automatically');assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);
@@ -290,8 +292,8 @@ test('a proven subject rejection clears only that non-started pending request so
 });
 test('ambiguous errors and unproved subject codes retain the existing pending recovery handle',async()=>{
  for(const [status,details] of [[409,{}],[409,{code:'subject_rejected',generationStarted:true}],[503,{code:'subject_rejected',generationStarted:false}]]){
-  const f=fixture({withGeneration:true}),original=f.w.rigRequest;
-  f.w.rigRequest=async(path,options)=>{if(path==='/api/generations'){f.calls.push([path,options]);return {ok:false,status,json:async()=>({error:'Nog onbekend.',...details})};}return original(path,options);};
+  const f=fixture({withGeneration:true});
+  f.wrapRequest(original=>async(path,options)=>{if(path==='/api/generations'){f.calls.push([path,options]);return {ok:false,status,json:async()=>({error:'Nog onbekend.',...details})};}return original(path,options);});
   try{f.load();f.change('duration','5');f.prompt('Maak een dansvideo.');f.prepare();await waitFor(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await waitFor(()=>!f.el('confirmGeneration').hidden);f.el('confirmGeneration').click();await waitFor(()=>f.el('quoteMessage').textContent.includes('Start niet opnieuw'));assert.equal(f.storage.has('rig-generation-pending'),true);assert.equal(f.el('checkGeneration').hidden,false);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1);}finally{f.dom.window.close();}
  }
 });

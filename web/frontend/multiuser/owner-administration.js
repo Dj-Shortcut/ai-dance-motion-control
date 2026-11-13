@@ -17,13 +17,14 @@
  const euro=value=>Number.isSafeInteger(value)?new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(value/100):'Nog onbekend';
  const date=value=>{const d=new Date(typeof value==='string'&&/^\d{4}-\d{2}-\d{2} /.test(value)?value.replace(' ','T')+'Z':value);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('nl-BE',{timeZone:'Europe/Brussels',day:'2-digit',month:'2-digit',year:'numeric'}).format(d);};
  const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Brussels',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+ function onPageHide(event){if(event.persisted!==true||!current())dispose();}
  function dispose(){
   if(disposed)return;disposed=true;
   for(const state of [accounting,recovery])if(state){state.loadId++;state.actionId++;}
   if(accounting?.verifying||recovery?.verifying)window.rigOwnerVerification?.cancel?.();
   for(const url of urls)URL.revokeObjectURL(url);urls.clear();for(const timer of timers)clearTimeout(timer);timers.clear();
   root?.replaceChildren();root=null;accounting=null;recovery=null;
-  window.removeEventListener('pagehide',dispose);document.getElementById('authLogout')?.removeEventListener('click',dispose);
+  window.removeEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.removeEventListener('click',dispose);
  }
  function check(){if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}}
  function message(state,text,error=false){if(!current()||!state)return;state.status.textContent=text;state.status.dataset.error=String(error);}
@@ -165,8 +166,8 @@
  }
  function mount(container,options={}){
   if(!current()){dispose();return;}if(root===container)return;if(root)root.replaceChildren();root=container;onChanged=typeof options.onChanged==='function'?options.onChanged:()=>{};container.replaceChildren();
-  accounting=panel(container,'Administratie voor Accountable');accounting.month=field(accounting.bar,'Maand administratie (leeg = alle)','ownerAccountingMonth','month');accounting.details.addEventListener('toggle',()=>{if(accounting.details.open&&!accounting.loaded&&!accounting.loading)void loadAccounting();});accounting.refresh.addEventListener('click',()=>void loadAccounting());accounting.month.addEventListener('change',()=>{if(accounting.details.open)void loadAccounting();});
-  recovery=panel(container,'Probleemgevallen en klantvragen');recovery.details.addEventListener('toggle',()=>{if(recovery.details.open&&!recovery.loaded&&!recovery.loading)void loadRecovery();});recovery.refresh.addEventListener('click',()=>void loadRecovery());
+  accounting=panel(container,'Administratie voor Accountable');accounting.month=field(accounting.bar,'Maand administratie (leeg = alle)','ownerAccountingMonth','month');accounting.details.addEventListener('toggle',()=>{if(current()&&accounting?.details.open&&!accounting.loaded&&!accounting.loading)void loadAccounting();});accounting.refresh.addEventListener('click',()=>void loadAccounting());accounting.month.addEventListener('change',()=>{if(accounting.details.open)void loadAccounting();});
+  recovery=panel(container,'Probleemgevallen en klantvragen');recovery.details.addEventListener('toggle',()=>{if(current()&&recovery?.details.open&&!recovery.loaded&&!recovery.loading)void loadRecovery();});recovery.refresh.addEventListener('click',()=>void loadRecovery());
  }
- window.addEventListener('pagehide',dispose);document.getElementById('authLogout')?.addEventListener('click',dispose);window.rigOwnerAdministration={mount,dispose};
+ window.addEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.addEventListener('click',dispose);window.rigOwnerAdministration={mount,dispose};
 })();
