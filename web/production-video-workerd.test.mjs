@@ -1,4 +1,4 @@
-import {testCheckoutFunding} from './funding-test-support.mjs';
+import {testCheckoutFunding,seedVerifiedPaidCredit} from './funding-test-support.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -65,7 +65,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   const payments=createProductionPayment({...testCheckoutFunding,transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
   for(let i=0;i<2;i++)assert.equal((await payments.webhook(new Request(env.RIG_PRODUCTION_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'id='+payment.id}),env)).status,200);
  }
- return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches})};
+ return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
 }
 
 test('fresh paid wallet: verified purchase, owned quote, one reserve, private result and isolated test balance',async()=>{
@@ -90,9 +90,9 @@ test('fresh paid wallet: verified purchase, owned quote, one reserve, private re
  }finally{await f.mf.dispose()}
 });
 
-test('one cent cannot fund unlimited preparation: cumulative quota stops work without a wallet debit or Fal generation',async()=>{
+test('a funded wallet cannot prepare unlimited media: cumulative quota stops work without a wallet debit or Fal generation',async()=>{
  const f=await fixture();try{
-  await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1)').bind('preparation-fixture-only',ALICE).run();
+  await seedVerifiedPaidCredit(f.db,ALICE,500);
   const h=await f.service(),before=f.stats();
   // Absent length is conservatively charged at 16 MiB, giving eight attempts
   // under the 128 MiB allowance, even though these fixture images are small.
@@ -104,7 +104,7 @@ test('one cent cannot fund unlimited preparation: cumulative quota stops work wi
    await f.db.prepare('UPDATE rig_rate_limits SET window_start=0').run();
   }
   const denied=await h(new Request(SITE+'/api/assets',{method:'POST',headers:{origin:SITE,'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:f.image.slice()}));
-  assert.equal(denied.status,429);assert.equal(f.stats().mediaCalls-before.mediaCalls,8);assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),1);
+  assert.equal(denied.status,429);assert.equal(f.stats().mediaCalls-before.mediaCalls,8);assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),500);
  }finally{await f.mf.dispose();}
 });
 
@@ -358,8 +358,73 @@ test('a provider price increase during upload is checked again, refunds once and
   const quoted=await(await f.call(h,'/api/generation-quotes',select)).json();assert.equal(quoted.priceCents,125);
   f.setPriceDuringUpload(.2);const submit={quoteId:quoted.id,idempotencyKey:'rate-changed-during-upload'};
   let response=await f.call(h,'/api/generations',submit);assert.equal(response.status,200,await response.clone().text());const failed=await response.json();assert.equal(failed.state,'failed');assert.equal(failed.refundConfirmed,true);assert.equal(failed.priceCents,125);assert.match(failed.message,/nieuwe prijsopgave/);assert.doesNotMatch(failed.message,/Bestanden konden/);
-  assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),500);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,0);
+  assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),500);
+  // Export already used its permanent resource admission. Returning the wallet
+  // credit must not erase that allowance or imply a refund from the provider.
+  assert.deepEqual(await f.db.prepare('SELECT COUNT(*) n,SUM(provider_estimate_usd_micros) usd FROM rig_generation_costs').first(),{n:1,usd:400000});
   response=await f.call(h,'/api/generations',submit);assert.equal(response.status,200);assert.equal((await response.json()).state,'failed');assert.equal(await f.balance(),500);assert.equal(f.stats().dispatches,0);
   assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id LIKE 'release:%'").first()).n,1);
  }finally{await f.mf.dispose();}
+});
+
+async function grantPromotionalCredit(f){
+ const now=Date.now();
+ await f.db.prepare("INSERT INTO rig_production_invitation VALUES(1,?,500,?,?,'rig-public-test-v1',1,?,?,?)").bind('a'.repeat(64),now-2,now+86400000,now-3,ALICE,now-1).run();
+ await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('promo:rig-first-tester-v1',?,500)").bind(ALICE).run();
+}
+const motionSelection=f=>({imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false});
+async function failedMotionAttempt(f,h,key){
+ // Advance only the existing minute-rate fixture windows. Lifetime financial
+ // admissions must remain counted despite quiet minutes and later UTC days.
+ await f.db.prepare('UPDATE rig_rate_limits SET window_start=0').run();
+ const quoted=await f.call(h,'/api/generation-quotes',motionSelection(f));assert.equal(quoted.status,201,await quoted.clone().text());const quote=await quoted.json();
+ const submitted=await f.call(h,'/api/generations',{quoteId:quote.id,idempotencyKey:key});assert.ok(submitted.ok,await submitted.clone().text());const job=await submitted.json();
+ if(job.state==='queued'){
+  const status=await(await f.call(h,'/api/generations/'+job.id)).json();assert.equal(status.state,'failed');assert.equal(status.refundConfirmed,true);
+  await f.db.prepare("UPDATE rig_generation_costs SET budget_day='2000-01-01' WHERE job_id=?").bind(job.id).run();
+  return {job,status,dispatched:true};
+ }
+ assert.equal(job.state,'failed');assert.equal(job.refundConfirmed,true);return {job,dispatched:false};
+}
+
+test('an exhausted shared provider budget rejects repeated attempts before any provider export and refunds correctly',async()=>{
+ const f=await fixture();try{
+  await f.fund();await f.db.prepare('UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=100000 WHERE id=1').run();
+  const h=await f.service();
+  for(let i=0;i<3;i++){assert.equal((await failedMotionAttempt(f,h,'daily-denied-'+i)).dispatched,false);assert.equal(await f.balance(),500);}
+  assert.equal(f.providerUploads(),0);assert.equal(f.stats().dispatches,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,0);
+ }finally{await f.mf.dispose()}
+});
+
+for(const promotional of [true,false])test((promotional?'gift':'paid')+' credit cannot reopen its lifetime provider allowance through terminal refunds or UTC day changes',async()=>{
+ const f=await fixture();try{
+  if(promotional)await grantPromotionalCredit(f);else await f.fund();
+  f.setOutcome('failure');const h=await f.service();
+  for(let i=0;i<6;i++){assert.equal((await failedMotionAttempt(f,h,'lifetime-'+i)).dispatched,i<5);assert.equal(await f.balance(),500);}
+  assert.equal(f.stats().dispatches,5);assert.equal(f.providerUploads(),10);
+  const costs=await f.db.prepare('SELECT COUNT(*) n,SUM(provider_estimate_usd_micros) usd FROM rig_generation_costs').first();assert.deepEqual(costs,{n:5,usd:2000000});
+ }finally{await f.mf.dispose()}
+});
+
+test('arbitrary ledger increases never back provider work; an exact paid issuance extends gift allowance only proportionally',async()=>{
+ const f=await fixture();try{
+  await grantPromotionalCredit(f);await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('unproved-bonus',?,100000)").bind(ALICE).run();
+  f.setOutcome('failure');const h=await f.service();
+  for(let i=0;i<6;i++)assert.equal((await failedMotionAttempt(f,h,'mixed-initial-'+i)).dispatched,i<5);
+  const order=await seedVerifiedPaidCredit(f.db,ALICE,100);
+  assert.equal((await failedMotionAttempt(f,h,'mixed-paid-extends')).dispatched,true);
+  assert.equal((await failedMotionAttempt(f,h,'mixed-paid-still-bounded')).dispatched,false);
+  await f.db.prepare('UPDATE rig_ledger SET delta=101 WHERE event_id=?').bind('credit:'+order).run();
+  assert.equal((await failedMotionAttempt(f,h,'mixed-corrupt-proof')).dispatched,false);
+  assert.equal(f.stats().dispatches,6);assert.equal(f.providerUploads(),12);
+ }finally{await f.mf.dispose()}
+});
+
+test('the permanent 20-attempt allowance bounds exports even when provider rates become tiny',async()=>{
+ const f=await fixture();try{
+  await grantPromotionalCredit(f);f.setPrice(.000001);f.setOutcome('failure');const h=await f.service();
+  for(let i=0;i<21;i++)assert.equal((await failedMotionAttempt(f,h,'tiny-rate-'+i)).dispatched,i<20);
+  assert.equal(f.stats().dispatches,20);assert.equal(f.providerUploads(),40);assert.equal(await f.balance(),500);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,20);
+ }finally{await f.mf.dispose()}
 });

@@ -50,6 +50,7 @@ function generationPrompt(data){
 function configured(s) {
   if (s?.mode !== 'test'&&!(s?.mode==='live'&&isProductionGenerationContext(s.productionContext,{origin:s.trustedOrigin}))) return false;
   try { if (new URL(s?.trustedOrigin).origin !== s.trustedOrigin || !s.trustedOrigin.startsWith('https://')) return false; } catch { return false; }
+  if(s.mode==='live'&&typeof s?.jobs?.admitProviderWork!=='function')return false;
   return typeof s?.authenticate === 'function' && typeof s?.assets?.getOwned === 'function' && typeof s?.assets?.uploadOwned === 'function' && typeof s?.quotes?.create === 'function' && typeof s?.quotes?.getOwned === 'function' && typeof s?.jobs?.getByIdempotency === 'function' && typeof s?.jobs?.getRecent === 'function' && typeof s?.jobs?.begin === 'function' && typeof s?.jobs?.getOwned === 'function' && typeof s?.jobs?.authorizeDispatch === 'function' && typeof s?.jobs?.markSubmitted === 'function' && typeof s?.jobs?.markUnknown === 'function' && typeof s?.jobs?.markPreparationFailed === 'function' && typeof s?.jobs?.claimPoll === 'function' && typeof s?.jobs?.releasePoll === 'function' && typeof s?.jobs?.markCompleted === 'function' && typeof s?.jobs?.markProviderFailed === 'function' && typeof s?.results?.store === 'function' && typeof s?.results?.read === 'function' && typeof s?.falKey === 'string' && s.falKey.length>0 && s.falKey.length<1024 && Number.isSafeInteger(s?.pricing?.standard) && s.pricing.standard>0 && Number.isSafeInteger(s?.pricing?.pro) && s.pricing.pro>0 && typeof s.pricing.version==='string' && s.pricing.version.length>0;
 }
 function publicFunding(value) {
@@ -218,6 +219,13 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if(selected.quality===RECAST_QUALITY){
           const verified=await services.assets.getOwned(user.id,selected.videoId);
           if(!validPrepared(verified,'video',selected.videoId)||verified.sha256!==refs[1]?.sha256||!validRecastVideo(verified))throw Error('Invalid prepared recast video');
+        }
+        // Production reserves its permanent provider/resource allowance before
+        // exporting any owned bytes. Refunds never erase this cost admission.
+        if(services.mode==='live'){
+          preparationFailure='De limiet voor nieuwe videopogingen is bereikt. Je tegoed is niet verbruikt.';
+          if(await services.jobs.admitProviderWork(user.id,jobId)!==true)throw Error('Provider work admission refused');
+          preparationFailure='Bestanden konden niet worden voorbereid.';
         }
         const uploaded=[];
         for(let i=0;i<refs.length;i++){

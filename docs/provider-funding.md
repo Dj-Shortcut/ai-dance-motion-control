@@ -147,6 +147,30 @@ Bij een onzekere eerdere inzending mag deze controle geen automatische nieuwe
 opdracht of onbewezen terugboeking veroorzaken. De bestaande quote-,
 bevestigings-, dagbudget- en accountcontroles blijven gelden.
 
+## Blijvende grenzen voor klantgebruik
+
+Voor klantaccounts reserveert RIG het providerbudget voordat bestanden naar Fal
+worden geëxporteerd. Die toelating blijft in het kostenregister staan na een
+mislukte poging of terugbetaling van RIG-tegoed. Een dagwissel opent dit budget
+niet opnieuw. Eigen gebruik blijft langs de afzonderlijke eigenaarscontroles
+en het gedeelde dagbudget lopen.
+
+De blijvende klantgrens wordt uitsluitend gedekt door exact eenmaal geboekt,
+aantoonbaar betaald aankooptegoed en de geverifieerde eenmalige promotie van
+€5. Terugbetalingen van videoreserveringen en andere positieve boekingen voegen
+geen nieuwe financiering toe. De USD-ramingsgrens gebruikt de laagste van de
+huidige dekkingsfactor en de factor bij de eerste toelating. Daarnaast gelden
+maximaal twintig providerpogingen per €5 geverifieerd toegekend tegoed en blijvende
+grenzen voor het aantal en de bytes van bestandsvoorbereidingen. De bestaande
+dag- en globale voorbereidingsgrenzen blijven ook gelden.
+
+Bij overschrijding stopt RIG nieuw werk. Correcte terugbetalingen naar het
+RIG-saldo blijven behouden; het extra kostenbudget wordt daardoor niet heropend.
+Een conservatief gereserveerde maar onbenutte poging kan daarom onderzoek door
+de eigenaar vereisen. Deze grenzen bewaken RIG-toelatingen en ramingen: zij zijn
+geen bank- of kaartlimiet en dekken geen gebruik buiten RIG of onverwachte
+afwijkingen in de externe facturatie.
+
 ## Bewijs voor de eerste verkoop
 
 Een volledige eerste **live** klantaankoop met automatische tegoedboeking,

@@ -7,6 +7,7 @@ import {workflowNetRetailCents} from './workflow-finance.mjs';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
 import {createD1GenerationStores} from './d1.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 const USER='u-12345678-1234-4123-8123-123456789abc',OTHER='u-22345678-1234-4123-8123-123456789abc';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',HASH='a'.repeat(64);
 async function fixture({owner=false,preclean=false,postcleanup=true,schemaUpgrade=false}={}){
@@ -19,7 +20,7 @@ async function fixture({owner=false,preclean=false,postcleanup=true,schemaUpgrad
  if(schemaUpgrade){await apply(schema.split(marker)[0]);await db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('preexisting-income',?,123)").bind(OTHER).run();await apply(migration);}else await apply(schema);
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('workflow-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
- await db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,2000)').bind('paid:'+USER,USER).run();
+ await seedVerifiedPaidCredit(db,USER,2000);
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FIXTURE',RIG_PRODUCTION_ENVIRONMENT_ID:'workflow-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',...(owner?{RIG_PRODUCTION_OWNER_USER_ID:USER}:{})};
  const context=await createProductionGenerationContext(env),parents=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext:context});
  if(owner)await installTestOwnerCredential(db,USER);

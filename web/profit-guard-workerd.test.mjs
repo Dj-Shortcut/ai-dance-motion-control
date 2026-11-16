@@ -5,6 +5,7 @@ import {Miniflare} from 'miniflare';
 import {createD1GenerationStores} from './d1.mjs';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 const USERS=['u-12345678-1234-4123-8123-123456789abc','u-22345678-1234-4123-8123-123456789abc','u-32345678-1234-4123-8123-123456789abc'];
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 async function fixture({owner=false,daily=1000000}={}){
@@ -14,7 +15,7 @@ async function fixture({owner=false,daily=1000000}={}){
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('guard-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
  await db.prepare('UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=? WHERE id=1').bind(daily).run();
- for(const user of USERS)await db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,2000)').bind('paid:'+user,user).run();
+ for(const user of USERS)await seedVerifiedPaidCredit(db,user,2000);
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FIXTURE',RIG_PRODUCTION_ENVIRONMENT_ID:'guard-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',...(owner?{RIG_PRODUCTION_OWNER_USER_ID:USERS[0]}:{})};
  const productionContext=await createProductionGenerationContext(env),stores=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext});
  if(owner)await installTestOwnerCredential(db,USERS[0]);

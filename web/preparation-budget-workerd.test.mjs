@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {Miniflare} from 'miniflare';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
-import {createPreparationBudget,consumePreparationReservation,preparationRequestBytes,preparationDeniedResponse,PREPARATION_MAX_BYTES,PREPARATION_LIMITS} from './preparation-budget.mjs';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
+import {createPreparationBudget,consumePreparationReservation,preparationRequestBytes,preparationDeniedResponse,PREPARATION_MAX_BYTES,PREPARATION_LIMITS,PREPARATION_LIFETIME_ALLOWANCE} from './preparation-budget.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 const ALICE='u-12345678-1234-4123-8123-123456789abc',BOB='u-22345678-1234-4123-8123-123456789abc';
@@ -20,9 +21,13 @@ async function fixture({owner=false}={}){
  const context=await createProductionGenerationContext(env);assert.ok(context);
  let now=Date.parse('2026-11-09T12:00:00Z');
  const budget=createPreparationBudget(db,{productionContext:context,clock:()=>now});
- const seed=async userId=>db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1)').bind('seed:'+userId,userId).run();
+ const seed=(userId,cents=500)=>seedVerifiedPaidCredit(db,userId,cents);
+ const promo=async userId=>{
+  await db.prepare("INSERT INTO rig_production_invitation(id,code_hash,amount_cents,created_at,expires_at,source_environment_id,source_invitation_id,source_invalidated_at,redeemed_by,redeemed_at) VALUES(1,?,500,?,?,'rig-public-test-v1',1,?,?,?)").bind('a'.repeat(64),now-1,now+86400000,now-2,userId,now).run();
+  await db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('promo:rig-first-tester-v1',?,500)").bind(userId).run();
+ };
  const totals=()=>db.prepare('SELECT COUNT(*) operations,COALESCE(SUM(bytes),0) bytes FROM rig_preparation_reservations').first();
- return {mf,db,legacy,context,budget,seed,totals,nextDay:()=>{now+=86400000;}};
+ return {mf,db,legacy,context,budget,seed,promo,totals,nextDay:()=>{now+=86400000;}};
 }
 
 test('preparation budget validates trusted scope and byte bounds; no-credit and frozen accounts consume no allowance',async()=>{
@@ -58,8 +63,51 @@ test('concurrent attempts stop at the per-user daily count; unknown and failed a
   // There is deliberately no release function: unconsumed or uncertain work
   // cannot reclaim an allowance by reporting a browser-side failure.
   assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
-  f.nextDay();assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'reserved');
+  f.nextDay();assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('release:fake-positive',?,500)").bind(ALICE).run();
+  assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  await f.seed(ALICE);assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'reserved');
   assert.equal((await f.totals()).operations,21);
+ }finally{await f.mf.dispose();}
+});
+
+test('a promotional account has one permanent byte allowance across days; only verified purchased credit extends it',async()=>{
+ const f=await fixture();try{
+  await f.promo(ALICE);
+  for(let day=0;day<2;day++){
+   for(let i=0;i<4;i++)assert.equal((await f.budget.reserve({userId:ALICE,bytes:PREPARATION_MAX_BYTES})).state,'reserved');
+   f.nextDay();
+  }
+  assert.deepEqual(await f.totals(),{operations:8,bytes:PREPARATION_LIFETIME_ALLOWANCE.bytes});
+  assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('release:returned-credit',?,500)").bind(ALICE).run();
+  assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  await f.seed(ALICE);assert.equal((await f.budget.reserve({userId:ALICE,bytes:PREPARATION_MAX_BYTES})).state,'reserved');
+ }finally{await f.mf.dispose();}
+});
+
+test('arbitrary positive ledger entries cannot buy preparation resources and reversed purchases stop backing new work',async()=>{
+ const f=await fixture();try{
+  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('unverified-positive',?,500)").bind(ALICE).run();
+  assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  const order=await f.seed(ALICE);assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'reserved');
+  // The exact reversal event removes backing even before any operator repairs
+  // an inconsistent historical order state; a positive wallet is insufficient.
+  await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES(?,?,?,-500)').bind('reverse:'+order,ALICE,order).run();
+  assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+  assert.deepEqual(await f.totals(),{operations:1,bytes:1});
+ }finally{await f.mf.dispose();}
+});
+
+test('the owner keeps daily limits without consuming a customer lifetime allowance',async()=>{
+ const f=await fixture({owner:true});try{
+  for(let day=0;day<3;day++){
+   const outcomes=await Promise.all(Array.from({length:PREPARATION_LIMITS.userOperations},()=>f.budget.reserve({userId:ALICE,bytes:1})));
+   assert.ok(outcomes.every(value=>value.state==='reserved'));
+   assert.equal((await f.budget.reserve({userId:ALICE,bytes:1})).state,'limited');
+   f.nextDay();
+  }
+  assert.deepEqual(await f.totals(),{operations:60,bytes:60});
  }finally{await f.mf.dispose();}
 });
 
