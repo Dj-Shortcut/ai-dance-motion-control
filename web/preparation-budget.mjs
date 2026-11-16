@@ -1,9 +1,13 @@
 // Cumulative, production-only resource limits. Each admitted attempt remains
 // counted even when validation, transformation, a lease or its response fails.
+// Customer lifetime resources grow only with verified issued credit; refunds,
+// retries and UTC day changes never replenish that permanent allowance.
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
+import {issuedCreditCentsSQL} from './credit-backing.mjs';
 
 export const PREPARATION_MAX_BYTES=16*1024*1024;
 export const PREPARATION_LIMITS=Object.freeze({userOperations:20,userBytes:128*1024*1024,globalOperations:100,globalBytes:512*1024*1024});
+export const PREPARATION_LIFETIME_ALLOWANCE=Object.freeze({creditCents:500,operations:20,bytes:128*1024*1024});
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const reservations=new WeakMap();
 const validBytes=n=>Number.isSafeInteger(n)&&n>=1&&n<=PREPARATION_MAX_BYTES;
@@ -26,6 +30,7 @@ export function consumePreparationReservation(reservation,{db,userId,bytes}={}){
 
 export function createPreparationBudget(db,{productionContext,clock=Date.now}={}){
  if(!db?.prepare||typeof clock!=='function'||!isProductionGenerationContext(productionContext,{db}))throw Error('Preparation budget unavailable');
+ const backing=issuedCreditCentsSQL('candidate.user_id');
  return {async reserve({userId,bytes}={}){
   if(!USER.test(userId||'')||!validBytes(bytes))throw Error('Invalid preparation request');
   const now=clock();if(!Number.isSafeInteger(now)||now<0)throw Error('Invalid preparation time');
@@ -37,14 +42,17 @@ export function createPreparationBudget(db,{productionContext,clock=Date.now}={}
   // One SQLite write statement tests BOTH scopes and records the attempt. D1
   // serializes these writes, so concurrent users cannot overrun the global cap.
   const row=await db.prepare(`INSERT INTO rig_preparation_reservations(id,user_id,budget_day,bytes,created_at)
-   SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+   SELECT ?,?,?,?,? FROM (SELECT ? AS user_id) candidate WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
    AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?)
    AND (?=1 OR COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=?),0)>0)
    AND (SELECT COUNT(*) FROM rig_preparation_reservations WHERE budget_day=? AND user_id=?)<?
    AND COALESCE((SELECT SUM(bytes) FROM rig_preparation_reservations WHERE budget_day=? AND user_id=?),0)<=?
    AND (SELECT COUNT(*) FROM rig_preparation_reservations WHERE budget_day=?)<?
    AND COALESCE((SELECT SUM(bytes) FROM rig_preparation_reservations WHERE budget_day=?),0)<=?
-   RETURNING id`).bind(id,userId,day,bytes,now,userId,owner?1:0,userId,day,userId,PREPARATION_LIMITS.userOperations,day,userId,PREPARATION_LIMITS.userBytes-bytes,day,PREPARATION_LIMITS.globalOperations,day,PREPARATION_LIMITS.globalBytes-bytes).first();
+   AND (?=1 OR ((${backing}) BETWEEN 1 AND 100000000
+    AND (SELECT COUNT(*) FROM rig_preparation_reservations WHERE user_id=candidate.user_id)<CAST((${backing})*${PREPARATION_LIFETIME_ALLOWANCE.operations}/${PREPARATION_LIFETIME_ALLOWANCE.creditCents} AS INTEGER)
+    AND COALESCE((SELECT SUM(bytes) FROM rig_preparation_reservations WHERE user_id=candidate.user_id),0)<=CAST((${backing})*${PREPARATION_LIFETIME_ALLOWANCE.bytes}/${PREPARATION_LIFETIME_ALLOWANCE.creditCents} AS INTEGER)-?))
+   RETURNING id`).bind(id,userId,day,bytes,now,userId,userId,owner?1:0,userId,day,userId,PREPARATION_LIMITS.userOperations,day,userId,PREPARATION_LIMITS.userBytes-bytes,day,PREPARATION_LIMITS.globalOperations,day,PREPARATION_LIMITS.globalBytes-bytes,owner?1:0,bytes).first();
   if(row?.id!==id)return {state:'limited'};
   const reservation=Object.freeze({id,bytes,budgetDay:day});
   reservations.set(reservation,{db,userId,bytes,consumed:false});
@@ -53,6 +61,6 @@ export function createPreparationBudget(db,{productionContext,clock=Date.now}={}
 }
 
 export function preparationDeniedResponse(state){
- const [status,error]=state==='unfunded'?[402,'Koop eerst RIG-tegoed om bestanden voor te bereiden.']:state==='frozen'?[403,'Je tegoed wordt gecontroleerd.']:state==='limited'?[429,'Je dagelijkse limiet voor bestandsvoorbereiding is bereikt. Probeer morgen opnieuw.']:[503,'Bestandsvoorbereiding is tijdelijk niet beschikbaar.'];
+ const [status,error]=state==='unfunded'?[402,'Koop eerst RIG-tegoed om bestanden voor te bereiden.']:state==='frozen'?[403,'Je tegoed wordt gecontroleerd.']:state==='limited'?[429,'Je limiet voor bestandsvoorbereiding is bereikt. Probeer later opnieuw of neem contact op via Hulp.']:[503,'Bestandsvoorbereiding is tijdelijk niet beschikbaar.'];
  return Response.json({error},{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 }

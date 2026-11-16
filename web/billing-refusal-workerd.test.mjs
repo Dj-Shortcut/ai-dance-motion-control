@@ -9,6 +9,7 @@ import {createProductionGenerationContext} from './production-generation-context
 import {providerBillingRejection} from './provider-response.mjs';
 import {loadProfitPolicy,validProfitSnapshot,profitable} from './profit-policy.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 const USER='u-12345678-1234-4123-8123-123456789abc',OTHER='u-22345678-1234-4123-8123-123456789abc';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 const DETAIL='User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing';
@@ -19,7 +20,7 @@ async function fixture({owner=false,response=refusal}={}){
  const sql=(await readFile(new URL('./production-schema.sql',import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const statement of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(statement).run();
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('billing-refusal-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
- await db.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,500)').bind('fixture-only-funding',USER).run();
+ await seedVerifiedPaidCredit(db,USER,500);
  const env={DB:legacy,PRODUCTION_DB:db,RIG_PRODUCTION_VIDEO_ENABLED:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRIVATE_SERVICE_ONLY:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_FIXTURE',RIG_PRODUCTION_ENVIRONMENT_ID:'billing-refusal-fixture',RIG_PRODUCTION_SITE_ID:'appgprj_6aeec13b50448191b88da670dac8aa98',RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',...(owner?{RIG_PRODUCTION_OWNER_USER_ID:USER}:{})};
  const productionContext=await createProductionGenerationContext(env),stores=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext});if(owner)await installTestOwnerCredential(db,USER);
  const assets={image:{id:'image',kind:'image',verified:true,sha256:'a'.repeat(64),url:'https://v3b.fal.media/files/b/fixture/image.jpg'},video:{id:'video',kind:'video',verified:true,sha256:'b'.repeat(64),durationVerified:true,durationSeconds:5,url:'https://v3b.fal.media/files/b/fixture/video.mp4'}};

@@ -4,7 +4,8 @@ import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} fr
 import {RECAST_QUALITY} from './recast-contract.mjs';
 import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
 import {isProviderBillingRejection} from './provider-response.mjs';
-import {prepareOwnerFundingAdmission} from './funding-coverage.mjs';
+import {prepareOwnerFundingAdmission,fundingCoverageCoefficient} from './funding-coverage.mjs';
+import {issuedCreditCentsSQL} from './credit-backing.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -56,6 +57,26 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
   const proof=await db.prepare(`SELECT 1 AS found FROM rig_generation_jobs j WHERE j.id=? AND j.user_id=? AND ${mode} AND ${finalized('j',state)}`).bind(id,user).first();
   if(proof?.found!==1)throw Error('Funding finalization requires reconciliation');
   return jobFrom(row);
+ }
+ async function creditAdmission(user,policy,usd){
+  let factor=fundingCoverageCoefficient(policy);
+  const first=await db.prepare("SELECT snapshot_json,provider_estimate_usd_micros FROM rig_generation_costs WHERE user_id=? AND funding_kind='credits' ORDER BY authorized_at,job_id LIMIT 1").bind(user).first();
+  if(first){
+   let snapshot;try{snapshot=JSON.parse(first.snapshot_json)}catch{return {sql:'0',params:[]}}
+   const originalPolicy={...snapshot,version:snapshot.policyVersion};
+   if(!validProfitSnapshot(snapshot,{policy:originalPolicy,fundingKind:'credits',retailPriceCents:snapshot.retailPriceCents,providerEstimateUsdMicros:first.provider_estimate_usd_micros}))return {sql:'0',params:[]};
+   // Later pricing changes cannot enlarge the initial USD allowance per cent.
+   factor=Math.min(factor,fundingCoverageCoefficient(originalPolicy));
+  }
+  const issued=issuedCreditCentsSQL('j.user_id');
+  // Every customer has a permanent provider/resource ceiling. Only exact
+  // purchased-credit issuance and the verified one-time gift extend it, never
+  // releases/refunds or arbitrary ledger positives. Every admitted attempt
+  // counts forever, including failed preparation:20 attempts per EUR5 backing
+  // also bounds exports independently of future very small provider rates.
+  return {sql:`(${issued}) BETWEEN 1 AND 100000000
+   AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c WHERE c.user_id=j.user_id AND c.funding_kind='credits'),0)+?<=(${issued})*?
+   AND (SELECT COUNT(*) FROM rig_generation_costs c WHERE c.user_id=j.user_id AND c.funding_kind='credits')<MAX(1,CAST((${issued})/25 AS INTEGER))`,params:[usd,factor]};
  }
  const stores={quotes:{
   async create({userId,model,input,priceCents,pricingVersion,durationSeconds}){
@@ -128,15 +149,21 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
    if(await db.prepare("SELECT 1 FROM rig_generation_jobs WHERE user_id=? AND state IN ('submitting','unknown','queued')").bind(userId).first())return {kind:'pending'};
    return {kind:'insufficient'};
   },
-  async authorizeDispatch(user,id){
+  async admitProviderWork(user,id){
    const row=await getJob(user,id),policy=await loadProfitPolicy(db);
    if(!row||row.state!=='submitting'||row.fal_request_id!==null||row.poll_token!==null)return false;
    const input=JSON.parse(row.input_json),snapshot=input.profitSnapshot;
    if(!validProfitSnapshot(snapshot,{policy,fundingKind:row.funding_kind,retailPriceCents:row.price_cents,providerEstimateUsdMicros:input.providerEstimateUsdMicros})||!profitable(snapshot))return false;
    const now=Date.now(),day=new Date(now).toISOString().slice(0,10),usd=snapshot.providerEstimateUsdMicros;
-   // D1 batches are transactions. The single-writer INSERT enforces one shared
-   // daily ceiling across users, then the dispatch update requires that exact
-   // immutable authorization. Unknown and failed submissions retain the budget.
+   const eligible=await db.prepare(`SELECT 1 AS allowed FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
+    WHERE j.id=? AND j.user_id=? AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL AND q.expires_at>?
+     AND ${mode} AND ${active('j')} AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=j.user_id)`).bind(id,user,now).first();
+   if(eligible?.allowed!==1)return false;
+   const prior=await db.prepare('SELECT * FROM rig_generation_costs WHERE job_id=?').bind(id).first();
+   if(prior)return prior.quote_id===row.quote_id&&prior.user_id===user&&prior.funding_kind===row.funding_kind&&prior.provider_estimate_usd_micros===usd&&prior.snapshot_json===JSON.stringify(snapshot)&&prior.budget_day===day;
+   const lifetime=row.funding_kind==='credits'?await creditAdmission(user,policy,usd):{sql:'1',params:[]};
+   // One atomic write reserves shared and customer lifetime budgets BEFORE
+   // provider uploads. Failures and refunds never remove this admission.
    const authorize=db.prepare(`INSERT INTO rig_generation_costs(job_id,quote_id,user_id,funding_kind,provider_estimate_usd_micros,budget_day,authorized_at,snapshot_json)
     SELECT j.id,j.quote_id,j.user_id,q.funding_kind,?,?,?,? FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents
     WHERE j.user_id=? AND j.id=? AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL AND ${mode}
@@ -147,20 +174,34 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
       AND eur_per_usd_micros=? AND provider_vat_bps=? AND payment_fee_bps=? AND failure_buffer_bps=? AND preparation_cents=?
       AND min_margin_bps=? AND min_price_cents=? AND min_pro_price_cents=?)
      AND NOT EXISTS(SELECT 1 FROM rig_generation_costs WHERE job_id=j.id)
-     AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c JOIN rig_generation_jobs pending ON pending.id=c.job_id WHERE ${pendingProviderBudget}),0)+?<=?`)
+     AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c JOIN rig_generation_jobs pending ON pending.id=c.job_id WHERE ${pendingProviderBudget}),0)+?<=?
+     AND (${lifetime.sql})`)
     .bind(usd,day,now,JSON.stringify(snapshot),user,id,row.input_json,row.funding_kind,now,ownerFor(user),policy.version,policy.dailyProviderLimitUsdMicros,
-     policy.eurPerUsdMicros,policy.providerVatBps,policy.paymentFeeBps,policy.failureBufferBps,policy.preparationCents,policy.minMarginBps,policy.minPriceCents,policy.minProPriceCents,day,usd,policy.dailyProviderLimitUsdMicros);
+     policy.eurPerUsdMicros,policy.providerVatBps,policy.paymentFeeBps,policy.failureBufferBps,policy.preparationCents,policy.minMarginBps,policy.minPriceCents,policy.minProPriceCents,day,usd,policy.dailyProviderLimitUsdMicros,...lifetime.params);
+   const result=await authorize.run();
+   if(result.meta?.changes===1)return true;
+   const raced=await db.prepare('SELECT * FROM rig_generation_costs WHERE job_id=?').bind(id).first();
+   return Boolean(raced&&raced.quote_id===row.quote_id&&raced.user_id===user&&raced.funding_kind===row.funding_kind&&raced.provider_estimate_usd_micros===usd&&raced.snapshot_json===JSON.stringify(snapshot)&&raced.budget_day===day);
+  },
+  async authorizeDispatch(user,id){
+   if(!await stores.jobs.admitProviderWork(user,id))return false;
+   const row=await getJob(user,id),policy=await loadProfitPolicy(db);
+   if(!row||row.state!=='submitting'||row.fal_request_id!==null||row.poll_token!==null)return false;
+   const input=JSON.parse(row.input_json),snapshot=input.profitSnapshot,now=Date.now(),day=new Date(now).toISOString().slice(0,10);
+   if(!validProfitSnapshot(snapshot,{policy,fundingKind:row.funding_kind,retailPriceCents:row.price_cents,providerEstimateUsdMicros:input.providerEstimateUsdMicros})||!profitable(snapshot))return false;
    const dispatch=db.prepare(`UPDATE rig_generation_jobs SET poll_token='dispatch-authorized',poll_lease_until=-1
     WHERE user_id=? AND id=? AND state='submitting' AND fal_request_id IS NULL AND poll_token IS NULL AND ${mode}
      AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=rig_generation_jobs.user_id)
      AND ${active('rig_generation_jobs')}
      AND (${creditQuote('rig_generation_jobs')} OR rig_generation_jobs.user_id=?)
      AND EXISTS(SELECT 1 FROM rig_generation_costs c WHERE c.job_id=rig_generation_jobs.id AND c.quote_id=rig_generation_jobs.quote_id
-      AND c.user_id=rig_generation_jobs.user_id AND c.authorized_at=? AND c.snapshot_json=? AND c.budget_day=?)`).bind(user,id,ownerFor(user),now,JSON.stringify(snapshot),day);
-   const results=await db.batch([authorize,dispatch]);
-   if(results[0]?.meta?.changes===1&&results[1]?.meta?.changes===1)return true;
-   if(results[0]?.meta?.changes!==0||results[1]?.meta?.changes!==0)throw Error('Cost authorization requires reconciliation');
-   return false;
+      AND c.user_id=rig_generation_jobs.user_id AND c.funding_kind=? AND c.provider_estimate_usd_micros=? AND c.snapshot_json=? AND c.budget_day=?)
+     AND EXISTS(SELECT 1 FROM rig_generation_quotes q WHERE q.id=rig_generation_jobs.quote_id AND q.user_id=rig_generation_jobs.user_id AND q.expires_at>?)
+     AND EXISTS(SELECT 1 FROM rig_finance_policy WHERE id=1 AND version=? AND daily_provider_limit_usd_micros=?
+      AND eur_per_usd_micros=? AND provider_vat_bps=? AND payment_fee_bps=? AND failure_buffer_bps=? AND preparation_cents=?
+      AND min_margin_bps=? AND min_price_cents=? AND min_pro_price_cents=?)`).bind(user,id,ownerFor(user),row.funding_kind,snapshot.providerEstimateUsdMicros,JSON.stringify(snapshot),day,now,
+      policy.version,policy.dailyProviderLimitUsdMicros,policy.eurPerUsdMicros,policy.providerVatBps,policy.paymentFeeBps,policy.failureBufferBps,policy.preparationCents,policy.minMarginBps,policy.minPriceCents,policy.minProPriceCents);
+   return (await dispatch.run()).meta?.changes===1;
   },
   async markSubmitted(user,id,falRequestId){
    if(!requestId.test(falRequestId||''))throw Error('Invalid provider request');

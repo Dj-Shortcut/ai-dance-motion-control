@@ -6,6 +6,7 @@ import {createD1GenerationStores} from './d1.mjs';
 import {createProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {closedVideoTesting} from './closed-video-service.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 import {RECAST_MODEL,RECAST_QUALITY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS} from './recast-contract.mjs';
 
 const OWNER='u-12345678-1234-4123-8123-123456789abc',CUSTOMER='u-22345678-1234-4123-8123-123456789abc';
@@ -92,7 +93,7 @@ test('customers cannot claim provider funding; old unconfirmed quotes require re
    .bind(id,OWNER,'fal-ai/kling-video/v3/pro/motion-control',JSON.stringify(input),now+600000,now).run();
   const q=await f.stores.quotes.getOwned(OWNER,id);assert.equal(q.fundingKind,'credits');assert.equal(q.priceCents,125);
   assert.equal(await f.guard.permits({durationSeconds:5,priceCents:125,quote:q}),false);
-  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('verified-purchase',?,500)").bind(OWNER).run();
+  await seedVerifiedPaidCredit(f.db,OWNER,500);
   assert.equal(await f.guard.permits({durationSeconds:5,priceCents:125,quote:q}),false);assert.equal((await f.begin(q)).kind,'pricing');
   assert.deepEqual((await f.ledger()).map(row=>row.delta),[500]);
   // The same historical shape can already have a submitted provider request.

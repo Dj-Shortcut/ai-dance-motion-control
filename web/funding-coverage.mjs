@@ -1,6 +1,6 @@
 // Server-only sale admission. No recharge, payment, generation or credential
 // management is performed here. The caller owns authentication/owner routing.
-import {loadProfitPolicy} from './profit-policy.mjs';
+import {loadProfitPolicy,profitPolicyRow} from './profit-policy.mjs';
 const BILLING='https://api.fal.ai/v1/account/billing?expand=credits';
 const MAX_USD=1000000000000000,MAX_CENTS=100000000000,MAX_BUFFER=1000000000000;
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -36,6 +36,7 @@ function coefficient(finance){
  const value=Number((n+d-1n)/d);
  if(!whole(value,1,20000))throw refused('funding_setup','finance_policy_unavailable');return value;
 }
+export function fundingCoverageCoefficient(finance){profitPolicyRow(finance);return coefficient(finance);}
 async function configuration(env){
  const db=database(env);let row,finance,mode;
  try{row=await db.prepare('SELECT * FROM rig_funding_policy WHERE id=1').first();mode=await db.prepare('SELECT mode FROM rig_payment_environment WHERE id=1').first();finance=await loadProfitPolicy(db);}catch{throw refused('funding_setup','policy_unavailable');}
