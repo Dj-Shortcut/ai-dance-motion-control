@@ -5,6 +5,7 @@ import {JSDOM} from 'jsdom';
 import {createNativeSiteAuth} from './frontend/multiuser/native-site-auth.mjs';
 import {startNativeSiteApp} from './frontend/multiuser/native-site-boot.mjs';
 import {prepareGuardedBinding} from './frontend/multiuser/guarded-binding.mjs';
+import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const payments=readFileSync(new URL('./frontend/multiuser/payments.js',import.meta.url),'utf8');
@@ -13,6 +14,7 @@ const waitFor=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve};};
 function page(url='https://rig.example.chatgpt.site/'){
  const dom=new JSDOM(html,{url,runScripts:'outside-only'}),w=dom.window;
+ installCustomerVerificationStub(w);
  for(const dialog of w.document.querySelectorAll('dialog')){dialog.showModal=function(){this.open=true;};dialog.close=function(){this.open=false;};}
  return {dom,w,d:w.document};
 }
@@ -91,12 +93,24 @@ test('native boot reuses the studio, keeps native sign-in anchors and mounts the
  const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:fn=>{listener=fn;return ()=>{};},dispose:()=>{disposed=true;},api:async(path)=>{calls.push(path);if(path==='/api/session')return Response.json({userId:alice});if(path==='/api/video-config')return Response.json({enabled:true,funding:'sponsored'});throw Error('unexpected request');}};
  const started=await startNativeSiteApp({window:w,auth,loadScript:async name=>{loaded.push(name);}});
  try{
-  assert.deepEqual(loaded,['media.js','app.js','flow.js','owner-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);assert.equal(w.rigNativeSite,true);assert.equal(w.rigVideoFunding,'sponsored');assert.equal(d.getElementById('rigStudio').hidden,false);
+  assert.deepEqual(loaded,['media.js','app.js','flow.js','owner-security.js','customer-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);assert.equal(w.rigNativeSite,true);assert.equal(w.rigVideoFunding,'sponsored');assert.equal(d.getElementById('rigStudio').hidden,false);
   assert.equal(w.rigDraftStorage,started.binding.draftStorage);assert.equal(w.rigScopedStorage,started.binding.scopedStorage);assert.notEqual(w.rigDraftStorage,w.rigScopedStorage);
   assert.equal(d.getElementById('authLogin').tagName,'A');assert.match(d.getElementById('authLogin').href,/\/signin-with-chatgpt\?return_to=%2F$/);assert.equal(d.getElementById('authLogin').target,'_top');assert.match(d.getElementById('authLogout').href,/\/signout-with-chatgpt$/);
   assert.equal(w.location.hash,'');assert.match(d.querySelector('.sponsor-invitation').textContent,/Activeer gratis €5/);assert.equal(calls.some(path=>path.includes('redeem')),false);
   listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(generationDisposed,1);started.dispose();assert.equal(generationDisposed,1);
  }finally{started.dispose();dom.window.close();}
+});
+for(const remainingAttempts of [2,0])test(`native boot retains the bounded invitation offer at ${remainingAttempts} remaining attempts`,async()=>{
+ const {dom,w,d}=page(),loaded=[];
+ const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:()=>()=>{},dispose(){},api:async path=>{
+  if(path==='/api/session')return Response.json({userId:alice});
+  if(path==='/api/video-config')return Response.json({enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro'],invitationLimits:{version:'first-tester-bounded-v1',maxDurationSeconds:10,remainingAttempts,referenceImages:1,orientation:'image'}});
+  throw Error('Unexpected request');
+ }};
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async name=>loaded.push(name)});try{
+  assert.equal(w.rigVideoEnabled,remainingAttempts>0);assert.equal(loaded.filter(name=>name==='generation-ui.js').length,1);assert.equal(w.rigVideoInvitationLimits.remainingAttempts,remainingAttempts);
+  assert.match(d.getElementById('videoAvailabilityNote').textContent,remainingAttempts?/€5 RIG-tegoed.*2 videopogingen.*10 seconden.*mislukte poging/:/2 videopogingen zijn gebruikt.*bestaande video’s blijven beschikbaar/);assert.doesNotMatch(d.getElementById('videoAvailabilityNote').textContent,/Fal|USD/);
+ }finally{app.dispose();dom.window.close();}
 });
 test('native explicit logout clears only the current account persisted trial slot before ending its binding',async()=>{
  const {dom,w,d}=page();

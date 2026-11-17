@@ -9,6 +9,9 @@
   const providerCurrency = micros => new Intl.NumberFormat('nl-BE',{style:'currency',currency:'USD',maximumFractionDigits:3}).format(micros/1000000);
   const ownerProvider = data => data?.funding==='owner-provider';
   const privateTestOwner = () => window.rigVideoFunding==='owner'&&window.rigVideoMode!=='live';
+  const invitation=()=>window.rigVideoInvitationLimits?.version==='first-tester-bounded-v1'?window.rigVideoInvitationLimits:null;
+  let boundedSession=!!invitation();
+  const refreshInvitation=()=>{boundedSession=boundedSession||!!invitation();if(boundedSession&&lifecycleCurrent()&&typeof window.rigRefreshVideoCapabilities==='function')void window.rigRefreshVideoCapabilities().catch(()=>{});};
   const mayShowPricePreview = () => ['credits','sponsored','owner-provider'].includes(window.rigVideoFunding)||privateTestOwner();
   const failureFinalized = data => ownerProvider(data)?data.finalizationConfirmed===true:data.refundConfirmed===true;
   const falTransferPolicy = 'fal-temporary-links-v1';
@@ -75,11 +78,11 @@
     if(ownerProvider(data))return (reason||'De video kon niet worden gemaakt.')+(failureFinalized(data)?' De opdracht is afgesloten. De werkelijke Fal-kosten zie je op fal.ai.':' De opdracht wordt nog gecontroleerd. Start niet opnieuw.');
     return reason?reason+(data.refundConfirmed===true?' Je RIG-tegoed is teruggezet.':' Je RIG-tegoed wordt nog gecontroleerd. Start de opdracht niet opnieuw.'):null;
   }
-  function showReviewedType(quality){const edit=quality==='edit-standard'||quality==='human-recast';el('quoteTitle').textContent=edit?'In de video':'Op je foto';el('confirmGeneration').textContent=edit?'Bevestig videobewerking':'Bevestig persoonsvideo';}
+  function showReviewedType(quality){const edit=quality==='edit-standard'||quality==='human-recast';el('quoteTitle').textContent=edit?'In de video':'Op je foto';el('confirmGeneration').textContent=window.rigVideoFunding==='credits'?'Bevestig video':edit?'Bevestig videobewerking':'Bevestig persoonsvideo';if(window.rigVideoFunding==='credits')window.rigCustomerVerification?.mount?.(el('quoteDialog'));else window.rigCustomerVerification?.hide?.();}
   async function call(path, options={}) {
     const response=await window.rigRequest(path,{credentials:'same-origin',cache:'no-store',...options});
     let data; try { data=await response.json(); } catch { throw new Error('De dienst is momenteel niet beschikbaar.'); }
-    if (!response.ok) { const error=new Error(data.error || 'De dienst is momenteel niet beschikbaar.'); error.status=response.status;if([400,409].includes(response.status)&&data.code==='subject_rejected'&&data.generationStarted===false){error.code='subject_rejected';error.generationStarted=false;}if(response.status===400&&data.code==='provider_limit_exceeded'&&typeof data.error==='string'&&data.error.length>0&&data.error.length<=300)error.code='provider_limit_exceeded';throw error; }
+    if (!response.ok) { const error=new Error(data.error || 'De dienst is momenteel niet beschikbaar.'); error.status=response.status;if([400,409].includes(response.status)&&data.code==='subject_rejected'&&data.generationStarted===false){error.code='subject_rejected';error.generationStarted=false;}if(response.status===428&&['security_setup_required','step_up_required','verification_invalid','verification_expired'].includes(data.code)){error.code=data.code;error.message=data.code==='security_setup_required'?'Stel eerst je passkey in. Bevestig daarna je video opnieuw.':'Je apparaatbevestiging is niet geldig of verlopen. Bevestig je video opnieuw.';}if(response.status===400&&data.code==='provider_limit_exceeded'&&typeof data.error==='string'&&data.error.length>0&&data.error.length<=300)error.code='provider_limit_exceeded';throw error; }
     return data;
   }
   const delay = (ms,signal) => new Promise((resolve,reject)=>{let timer;const finish=()=>{signal?.removeEventListener('abort',abort);resolve();},abort=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(Error('De verwerking is onderbroken.'));};if(signal?.aborted)return abort();timer=setTimeout(finish,ms);signal?.addEventListener('abort',abort,{once:true});});
@@ -105,7 +108,10 @@
     setActive(true);quote=null;el('confirmUpload').disabled=true;el('uploadDialog').close();el('quoteDialog').showModal();el('confirmGeneration').hidden=true;
     showReviewedType(media.quality);
     try {
-      const recast=media.quality==='human-recast',edit=recast||media.quality==='edit-standard',limit=edit?15:30,min=recast?6:3;
+      const recast=media.quality==='human-recast',edit=recast||media.quality==='edit-standard',bounded=invitation(),limit=bounded?.maxDurationSeconds??(edit?15:30),min=recast?6:3;
+      if(bounded&&(bounded.remainingAttempts===0||media.trialToken&&bounded.remainingAttempts<2))throw new Error(bounded.remainingAttempts===0?'Je videopogingen zijn gebruikt. Je bestaande video’s blijven beschikbaar.':'Je hebt nog één videopoging. Kies meteen je volledige fragment.');
+      if(bounded&&(edit||media.face||media.angles.length))throw new Error('Deze uitnodiging gebruikt één foto, zonder close-up of extra hoeken.');
+      if(bounded&&media.fullDraft&&media.fullDraft.selectedSeconds>limit)throw new Error('Kies voor deze uitnodiging een volledig fragment van maximaal 10 seconden.');
       if(edit&&(!Array.isArray(window.rigVideoQualities)||!window.rigVideoQualities.includes(media.quality)))throw new Error('Video bewerken is momenteel niet beschikbaar.');
       const seconds=media.selectedSeconds??Number(el('duration').value);if(!Number.isInteger(seconds)||seconds<min||seconds>limit)throw new Error(`Kies een geheel aantal seconden tussen ${min} en ${limit}.`);
       if(!media.prompt?.trim()||media.prompt.trim().length>1900)throw new Error('Beschrijf eerst kort wat je wilt maken.');
@@ -201,6 +207,8 @@
   }
   async function confirm() {
     if(active||suspended||!lifecycleCurrent()||!quote)return;
+    if(invitation()?.remainingAttempts===0){note('Je videopogingen zijn gebruikt. Je bestaande video’s blijven beschikbaar.');el('confirmGeneration').hidden=true;return;}
+    if(invitation()&&quote.media.trialToken&&invitation().remainingAttempts<2){note('Je hebt nog één videopoging. Kies meteen je volledige fragment van maximaal 10 seconden.');el('confirmGeneration').hidden=true;return;}
     if(window.rigPreparedMedia()!==quote.media||quote.funding!==window.rigVideoFunding||typeof window.rigGenerationQuality==='function'&&window.rigGenerationQuality()!==quote.media.quality){note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
     const intent=beginWorkflowIntent();setActive(true);el('confirmGeneration').disabled=true;
     const current=quote,requestId=current.idempotencyKey??crypto.randomUUID(),ownFal=current.funding==='owner-provider';
@@ -210,12 +218,12 @@
     const payload={quoteId:current.id,idempotencyKey:requestId,...(current.transferPolicy===falTransferPolicy?{transferConsent:falTransferPolicy}:{})};let verification=null,submitted=false;
     const attempt={quote:current,submitted:false,interrupted:false};confirmation=attempt;
     try {
-      if(ownFal){
+      if(ownFal||current.funding==='credits'){
         if(!sessionCurrent())return;
-        if(typeof window.rigOwnerVerification?.prepare!=='function')throw new Error('Vernieuw RIG om deze video veilig te bevestigen.');
-        note('Bevestig het gebruik van je eigen Fal-tegoed op je apparaat.');ownerVerifying=true;
-        attempt.verifier=window.rigOwnerVerification;
-        try{verification=await attempt.verifier.prepare('owner-generation',payload);}finally{if(confirmation===attempt)ownerVerifying=false;}
+        attempt.verifier=ownFal?window.rigOwnerVerification:window.rigCustomerVerification;
+        if(typeof attempt.verifier?.prepare!=='function')throw new Error('Vernieuw RIG om deze video veilig met je passkey te bevestigen.');
+        note(ownFal?'Bevestig het gebruik van je eigen Fal-tegoed op je apparaat.':'Bevestig deze video met Face ID, je vingerafdruk of schermcode.');ownerVerifying=true;
+        try{verification=await attempt.verifier.prepare(ownFal?'owner-generation':'customer-generation',payload);}finally{if(confirmation===attempt)ownerVerifying=false;}
         if(!sessionCurrent()||!intent.current())return;
         if(!quoteCurrent()){quote=null;note('Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=true;return;}
         if(!verification)throw new Error('De beveiligingscontrole is niet afgerond. De video is niet gestart.');
@@ -235,6 +243,12 @@
       if(!submitted){
         const reusable=quoteCurrent();if(!reusable)quote=null;
         note(reusable?(error.message||'De bevestiging is geannuleerd. De video is niet gestart.'):'Je videotype of instellingen zijn gewijzigd. Bereken de prijs opnieuw.');el('confirmGeneration').hidden=!reusable;el('checkGeneration').hidden=true;return;
+      }
+      if(current.funding==='credits'&&error.status===428&&['security_setup_required','step_up_required','verification_invalid','verification_expired'].includes(error.code)){
+        let pending;try{pending=JSON.parse(binding.storage.getItem('rig-generation-pending'));}catch{}
+        if(pending?.quoteId===current.id&&pending.idempotencyKey===requestId)binding.storage.removeItem('rig-generation-pending');
+        const reusable=window.rigPreparedMedia()===current.media&&current.funding===window.rigVideoFunding&&(typeof window.rigGenerationQuality!=='function'||window.rigGenerationQuality()===current.media.quality);
+        quote=reusable?current:null;note(error.message);el('confirmGeneration').hidden=!reusable;el('checkGeneration').hidden=true;window.rigCustomerVerification?.mount?.(el('quoteDialog'));document.dispatchEvent(new CustomEvent('rig-generation-not-started'));return;
       }
       if([400,409].includes(error.status)&&error.code==='subject_rejected'&&error.generationStarted===false){
         let pending;try{pending=JSON.parse(window.rigScopedStorage.getItem('rig-generation-pending'));}catch{}
@@ -315,7 +329,7 @@
     if(el('cleanupEnabled')?.checked&&window.rigVideoCleanup?.enabled===true&&window.rigVideoFunding==='owner-provider'&&window.rigGenerationQuality?.()==='human-recast'){target.textContent='Totale Fal-raming na controle van tekst en overlays.';target.hidden=false;return;}
     const duration=Number(el('duration').value), start=Number(el('start').value);
     const quality=typeof window.rigGenerationQuality==='function'?window.rigGenerationQuality():document.querySelector('input[name="quality"]:checked')?.value;
-    if(!(typeof window.rigMotionSelected==='function'?window.rigMotionSelected():el('motionInput').files.length) || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<(quality==='human-recast'?6:3) || duration>(['edit-standard','human-recast'].includes(quality)?15:30) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
+    if(invitation()?.remainingAttempts===0 || !(typeof window.rigMotionSelected==='function'?window.rigMotionSelected():el('motionInput').files.length) || !Number.isFinite(video.duration) || !Number.isFinite(duration) || !Number.isFinite(start) || duration<(quality==='human-recast'?6:3) || duration>(invitation()?.maxDurationSeconds??(['edit-standard','human-recast'].includes(quality)?15:30)) || start<0 || start+duration>video.duration+0.05){target.hidden=true;target.textContent='';return;}
     try {
       const params=new URLSearchParams({quality,duration:String(duration)});
       const key=`${window.rigVideoFunding}:${window.rigVideoMode}:${params}`;
@@ -367,11 +381,14 @@
   on(el('motionInput'),'change',()=>{estimateSequence++;if(estimateTimer!==null)clearTimeout(estimateTimer);estimateTimer=null;el('providerEstimate').hidden=true;});
   // Wait for app.js to update the duration after metadata has loaded.
   on(el('motionVideo'),'loadedmetadata',()=>queueMicrotask(scheduleProviderEstimate));
-  on(document,'rig-generation-mode-change',()=>{if(ownerVerifying)window.rigOwnerVerification?.cancel?.();scheduleProviderEstimate();});
+  on(document,'rig-generation-mode-change',()=>{if(ownerVerifying)confirmation?.verifier?.cancel?.();scheduleProviderEstimate();});
+  on(document,'rig-video-availability',()=>{boundedSession=boundedSession||!!invitation();scheduleProviderEstimate();});
+  for(const event of ['rig-generation-accepted','rig-generation-failed','rig-generation-completed'])on(document,event,refreshInvitation);
+  on(window,'focus',refreshInvitation);on(window,'pageshow',refreshInvitation);on(document,'visibilitychange',()=>{if(document.visibilityState==='visible')refreshInvitation();});
   discoverRecent();
   on(el('resultVideo'),'error',()=>{el('resultVideo').hidden=true;el('resultEmpty').hidden=false;el('export').hidden=true;el('status').textContent='Het resultaat kon niet worden geladen. Probeer later opnieuw.';});
   if(window.rigScopedStorage.getItem('rig-generation-pending')||window.rigScopedStorage.getItem('rig-generation-job')){showTracking();note('Een eerdere opdracht is nog niet afgerond. Controleer de status voordat je een nieuwe start.');}
-  on(document,'rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
+  on(document,'rig-prepared-change',()=>{clearQuotePortrait();if(ownerVerifying)confirmation?.verifier?.cancel?.();quote=null;el('confirmGeneration').hidden=true;});
   on(document,'rig-prepared-ready',async()=>{
     if(active)return;setActive(true);
     try {
@@ -385,6 +402,6 @@
     } catch(error) {el('quoteDialog').showModal();note(error.message||'Een eerdere opdracht kon niet worden gecontroleerd.');el('checkGeneration').hidden=true;}
     finally {setActive(false);}
   });on(el('closeUpload'),'click',()=>el('uploadDialog').close());on(el('confirmUpload'),'click',getQuote);
-  on(el('quoteDialog'),'close',()=>{stopWorkflowIntent();clearQuotePortrait();});on(el('quoteDialog'),'cancel',stopWorkflowIntent);on(el('closeQuote'),'click',()=>{stopWorkflowIntent();clearQuotePortrait();if(ownerVerifying)window.rigOwnerVerification?.cancel?.();el('quoteDialog').close();});on(el('confirmGeneration'),'click',confirm);on(el('checkGeneration'),'click',recoverGeneration);
+  on(el('quoteDialog'),'close',()=>{stopWorkflowIntent();confirmation?.verifier?.cancel?.();clearQuotePortrait();});on(el('quoteDialog'),'cancel',()=>{stopWorkflowIntent();confirmation?.verifier?.cancel?.();});on(el('closeQuote'),'click',()=>{stopWorkflowIntent();clearQuotePortrait();if(ownerVerifying)confirmation?.verifier?.cancel?.();el('quoteDialog').close();});on(el('confirmGeneration'),'click',confirm);on(el('checkGeneration'),'click',recoverGeneration);
   window.rigGenerationInstance=Object.freeze({current:lifecycleCurrent,stop:stopInstance,restore:()=>{if(lifecycleCurrent())showTracking();}});
 })();

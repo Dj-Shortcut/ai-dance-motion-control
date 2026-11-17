@@ -15,6 +15,7 @@ import {RECAST_QUALITY,RECAST_MIN_DURATION,RECAST_MAX_DURATION} from './recast-c
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
 import {r2InputsConfig} from './rig-r2-inputs.mjs';
 import {loadProfitPolicy,retailPriceCents,validProfitSnapshot,profitable} from './profit-policy.mjs';
+import {invitationRenderLimits,validInvitationRenderContract,invitationPolicyPermitted} from './invitation-render-budget.mjs';
 const id=/^[A-Za-z0-9_-]{1,100}$/;
 const version=/^[A-Za-z0-9_.-]{1,40}$/;
 const integer=(s,max)=>typeof s==='string'&&/^[1-9][0-9]*$/.test(s)&&Number.isSafeInteger(+s)&&+s<=max;
@@ -31,6 +32,7 @@ function providerTransport(fetcher){return async(input,init={})=>{const u=new UR
 function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){const recastAvailable=recastEnabled(env,{trustedUserId,accessMode,productionContext});return {
  async quoteCurrent(quote){
   const policy=await loadProfitPolicy(env.DB),snapshot=quote?.input?.profitSnapshot;
+  if(env.RIG_MODE==='live'&&await invitationRenderLimits(env.DB,trustedUserId)&&(!invitationPolicyPermitted(policy)||!validInvitationRenderContract(quote)))return false;
   return validProfitSnapshot(snapshot,{policy,fundingKind:quote?.fundingKind,retailPriceCents:quote?.priceCents,providerEstimateUsdMicros:quote?.input?.providerEstimateUsdMicros})&&profitable(snapshot);
  },
  async retailPrice(quality,durationSeconds,providerEstimateUsdMicros){
@@ -43,6 +45,8 @@ function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){cons
  async permits({durationSeconds,priceCents,quote}){
   if(!Number.isFinite(durationSeconds)||durationSeconds<3||durationSeconds>30||!Number.isSafeInteger(priceCents)||priceCents<=0||priceCents>+env.RIG_CLOSED_VIDEO_MAX_CENTS)return false;
   if(env.RIG_MODE==='live'){
+   const invitation=await invitationRenderLimits(env.DB,trustedUserId);
+   if(invitation&&(invitation.remainingAttempts<1||durationSeconds>invitation.maxDurationSeconds))return false;
    const kind=quote?.fundingKind??productionFundingKind(productionContext,trustedUserId);
    if(!['credits','owner-provider'].includes(kind))return false;
    if(quote){
@@ -61,7 +65,11 @@ function guard(env,priceFetch,{trustedUserId,accessMode,productionContext}){cons
   }
   try{const state=await createSponsoredInvitationStore(env.DB).eligibility(trustedUserId);return state.state==='eligible'&&state.remainingCents>=priceCents}catch{return false}
  },
- async estimate(quality,durationSeconds){const recast=quality===RECAST_QUALITY;if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env))||(recast&&recastAvailable))||!Number.isFinite(durationSeconds)||durationSeconds<(recast?RECAST_MIN_DURATION:3)||durationSeconds>(recast?RECAST_MAX_DURATION:quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY,quality),rate=recast?recastPricePerSecond(p):p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');return n;},
+ async estimate(quality,durationSeconds){const recast=quality===RECAST_QUALITY;if(!(['standard','pro'].includes(quality)||(quality==='edit-standard'&&editEnabled(env))||(recast&&recastAvailable))||!Number.isFinite(durationSeconds)||durationSeconds<(recast?RECAST_MIN_DURATION:3)||durationSeconds>(recast?RECAST_MAX_DURATION:quality==='edit-standard'?15:30))throw Error('Invalid estimate');const p=await priceFetch(env.FAL_KEY,quality),rate=recast?recastPricePerSecond(p):p?.prices?.[quality];if(p?.currency!=='USD'||p?.unit!=='second'||!Number.isFinite(rate)||rate<=0)throw Error('Price unavailable');const n=Math.ceil(rate*1e6)*Math.ceil(durationSeconds);if(!Number.isSafeInteger(n)||n<=0||n>+env.RIG_CLOSED_VIDEO_MAX_USD_MICROS)throw Error('Test provider cap exceeded');
+  if(env.RIG_MODE==='live'&&await invitationRenderLimits(env.DB,trustedUserId)){
+   if(!['standard','pro'].includes(quality)||durationSeconds>10||Math.ceil(rate*1e6)>(quality==='standard'?126000:168000)||!invitationPolicyPermitted(await loadProfitPolicy(env.DB)))throw Error('Invitation contract ceiling exceeded');
+  }
+  return n;},
  async claimOnce({userId,jobId,quote}={}){
   if(userId!==trustedUserId||!quote||!Number.isSafeInteger(quote.priceCents)||quote.priceCents<=0)return false;
   if(accessMode==='sponsored'){
@@ -146,7 +154,7 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
     return result;
    };
   }
-  return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),...(recastAvailable?{recast:+env.RIG_PRICE_RECAST}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
+  return {...stores,...(paid?{productionContext,fundingKind:productionFundingKind(productionContext,trustedUserId),invitationLimits:await invitationRenderLimits(env.DB,trustedUserId)}:{}),inputGatewayOrigin:env.RIG_SITES_BRIDGE_ORIGIN,inputR2Config:r2Inputs,inlineO3Owner,assets:makeAssets(),results:createResultStore(env.BUCKET,privateResultFetch(env.FAL_KEY,transport)),falKey:env.FAL_KEY,pricing:{standard:+env.RIG_PRICE_STANDARD,pro:+env.RIG_PRICE_PRO,...(editEnabled(env)?{editStandard:+env.RIG_PRICE_EDIT}:{}),...(recastAvailable?{recast:+env.RIG_PRICE_RECAST}:{}),version:env.RIG_PRICE_VERSION},trialGuard:guard(env,currentPrice,{trustedUserId,accessMode,productionContext})};
  },generationFactory:s=>{const generation=createGenerationHandler(s,transport),drafts=createVideoDraftHandler({...s,bucket:env.BUCKET});return req=>videoDraftPath(new URL(req.url).pathname,req.method)?drafts(req):generation(req);}});
  return async req=>{
   const p=new URL(req.url).pathname;

@@ -11,6 +11,7 @@ import {loadProfitPolicy,retailPriceCents,createProfitSnapshot,profitable} from 
 import {createPreparationBudget,consumePreparationReservation,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 import {createWorkflowRuntime} from './workflow-runtime.mjs';
 import {createWorkflowHttp} from './workflow-http.mjs';
+import {invitationRenderLimits,invitationPolicyPermitted} from './invitation-render-budget.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const reply=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
@@ -47,7 +48,8 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
    if(!await verifyTenant())return unavailable();
    if(url.pathname==='/api/video-config'){
     if(req.method!=='GET'||url.search)return reply({error:'Aanvraag geweigerd.'},400);
-    return reply({enabled:true,funding,mode:'live',...(funding==='owner-provider'?{providerCurrency:'USD'}:{currency:'EUR'}),qualities:['standard','pro',...(editEnabled(mapped)?['edit-standard']:[]),...(recastEnabled(mapped)?[RECAST_QUALITY]:[])],...(await workflowRuntime.available()?{cleanup:{enabled:true,version:'owner-cleanup-v1',quality:RECAST_QUALITY,maxDurationSeconds:15}}:{})});
+    const invitationLimits=await invitationRenderLimits(mapped.DB,trustedUserId);
+    return reply({enabled:true,funding,mode:'live',...(funding==='owner-provider'?{providerCurrency:'USD'}:{currency:'EUR'}),qualities:invitationLimits?['standard','pro']:['standard','pro',...(editEnabled(mapped)?['edit-standard']:[]),...(recastEnabled(mapped)?[RECAST_QUALITY]:[])],...(invitationLimits?{invitationLimits}:{}),...(!invitationLimits&&await workflowRuntime.available()?{cleanup:{enabled:true,version:'owner-cleanup-v1',quality:RECAST_QUALITY,maxDurationSeconds:15}}:{})});
    }
    if(url.pathname==='/api/estimate/fal'){
     if(req.method!=='GET')return reply({error:'Methode niet toegestaan.'},405);
@@ -56,10 +58,13 @@ export async function createProductionVideoService(env,{trustedUserId,lease,prov
     const recast=quality===RECAST_QUALITY,duration=Number(raw),billedSeconds=Math.ceil(duration),rate=Number(recast?mapped.RIG_PRICE_RECAST:quality==='edit-standard'?mapped.RIG_PRICE_EDIT:quality==='pro'?mapped.RIG_PRICE_PRO:mapped.RIG_PRICE_STANDARD);
     if(!Number.isFinite(duration)||duration<(recast?RECAST_MIN_DURATION:3)||duration>(recast?RECAST_MAX_DURATION:quality==='edit-standard'?15:30))return reply({error:'Kies een geldig fragment binnen de videolimiet.'},400);
     const policy=await loadProfitPolicy(mapped.DB);
+    const invitation=await invitationRenderLimits(mapped.DB,trustedUserId);
+    if(invitation&&(!['standard','pro'].includes(quality)||duration>10||invitation.remainingAttempts<1||!invitationPolicyPermitted(policy)))return reply({error:'Je gratis test biedt maximaal twee videopogingen van 3 tot 10 seconden.'},400);
     if(await d1Limit({env:mapped,category:'generation',userId:trustedUserId,method:'GET'})!==true)return reply({error:'Te veel aanvragen.'},429);
     const prices=await currentPrice(mapped.FAL_KEY,quality),providerRate=recast?recastPricePerSecond(prices):prices?.prices?.[quality];
     if(prices?.currency!=='USD'||prices?.unit!=='second'||!Number.isFinite(providerRate)||providerRate<=0||providerRate>1000)return unavailable();
     const rateUsdMicrosPerSecond=Math.ceil(providerRate*1e6),usdMicros=rateUsdMicrosPerSecond*billedSeconds;
+    if(invitation&&rateUsdMicrosPerSecond>(quality==='standard'?126000:168000))return unavailable();
     if(!Number.isSafeInteger(usdMicros)||usdMicros<=0)return unavailable();
     if(usdMicros>+mapped.RIG_CLOSED_VIDEO_MAX_USD_MICROS)return recast&&funding==='owner-provider'?reply({error:'Dit fragment valt buiten de ingestelde Fal-limiet per video. Kies een korter fragment.',code:'provider_limit_exceeded'},400):unavailable();
     const cents=retailPriceCents(policy,{quality,billedSeconds,rateCents:rate,providerEstimateUsdMicros:usdMicros,fundingKind:funding,maxPriceCents:+mapped.RIG_CLOSED_VIDEO_MAX_CENTS});

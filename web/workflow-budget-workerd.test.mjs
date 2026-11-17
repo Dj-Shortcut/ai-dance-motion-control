@@ -1,3 +1,4 @@
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import test from 'node:test';
 import {createProductionWorkflowStores,workflowPlanHash,workflowInitialSourceHash} from './production-workflow-stores.mjs';
 import {handleOwnerFinance} from './owner-finance.mjs';
@@ -15,6 +16,7 @@ async function fixture({flag='yes',oldSchema=false,daily=1400000}={}){
  const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:{DB:'test',PRODUCTION_DB:'production'}});
  const db=await mf.getD1Database('PRODUCTION_DB'),legacy=await mf.getD1Database('DB');
  const full=await readFile(new URL('./production-schema.sql',import.meta.url),'utf8'),sql=(oldSchema?full.split('-- Generation workflow foundation v2 (inactive until separately integrated).')[0]:full).replace(/^\s*--.*$/gm,'');for(const statement of sql.split(';').map(v=>v.trim()).filter(Boolean))await db.prepare(statement).run();
+ if(oldSchema){const customerMarker='-- Customer verification is separate from owner authority.',customer=full.slice(full.indexOf(customerMarker)).replace(/^\s*--.*$/gm,'');for(const statement of customer.split(';').map(v=>v.trim()).filter(Boolean))await db.prepare(statement).run();}
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('guard-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
  await db.prepare('UPDATE rig_finance_policy SET daily_provider_limit_usd_micros=? WHERE id=1').bind(daily).run();
@@ -26,7 +28,7 @@ async function fixture({flag='yes',oldSchema=false,daily=1400000}={}){
   const made=await stores.quotes.create({userId:user,model:'fal-ai/kling-video/o3/standard/video-to-video/edit',input:{data:{quality:'edit-standard'},providerEstimateUsdMicros:usd},priceCents:price,pricingVersion:'approved-prices-v1',durationSeconds:5});
   return stores.quotes.getOwned(user,made.id);
  }
- async function begin(q){const idempotencyKey=crypto.randomUUID(),payload={quoteId:q.id,idempotencyKey},verification=q.fundingKind==='owner-provider'?await verificationFor(db,q.userId,'owner-generation',payload,Date.now(),{env}):undefined;return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey,quote:q,verification,verificationPayload:payload});}
+ async function begin(q){const idempotencyKey=crypto.randomUUID(),payload={quoteId:q.id,idempotencyKey},verification=q.fundingKind==='owner-provider'?await verificationFor(db,q.userId,'owner-generation',payload,Date.now(),{env}):await verificationForCustomer(db,q.userId,payload,Date.now(),{env});return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey,quote:q,verification,verificationPayload:payload});}
  const balance=async(user=USERS[0])=>(await db.prepare('SELECT SUM(delta) amount FROM rig_ledger WHERE user_id=?').bind(user).first()).amount;
  const costs=async()=>(await db.prepare('SELECT * FROM rig_generation_costs').all()).results;
  async function report(){const response=await handleOwnerFinance(new Request(SITE+'/api/owner/finance'),env,{userId:USERS[0]});assert.equal(response.status,200,await response.clone().text());return response.json();}

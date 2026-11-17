@@ -4,6 +4,7 @@ import {isProviderInputUrl} from './rig-provider-inputs.mjs';
 import {isR2InputUrl} from './rig-r2-inputs.mjs';
 import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
 import {RECAST_QUALITY,RECAST_MODEL,RECAST_QUEUE_FAMILY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS,validRecastSettings,validRecastVideo} from './recast-contract.mjs';
+import {invitationRenderContract,validInvitationRenderContract,checkInvitationRate} from './invitation-render-budget.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -141,6 +142,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
       // durationSeconds MUST be obtained by an independent trusted server verifier,
       // not from a browser, file name or untrusted user-provided metadata.
       if (video.durationVerified!==true || !Number.isFinite(video.durationSeconds) || video.durationSeconds<3 || video.durationSeconds>30) return fail('De videoduur kon niet veilig worden vastgesteld.',400);
+      if(services.invitationLimits){try{invitationRenderContract({model:MODEL[data.quality],input:{data},durationSeconds:video.durationSeconds})}catch{return fail('Kies voor je gratis test een fragment van 3 tot 10 seconden en één foto, zonder extra close-up of hoeken.',400)}}
       if (data.quality==='edit-standard' && !validEditVideo(video)) return fail('Kies voor deze videobewerking 3 tot 15 seconden, minstens 720 pixels breed en hoog, met 23 tot 60 beelden per seconde.',400);
       if(data.quality===RECAST_QUALITY&&!validRecastVideo(video))return fail('Kies voor personen vervangen een voorbereid fragment van minstens 5 en maximaal 15 echte seconden. Bereid je video opnieuw voor; een fragment van 4,92 seconden is te kort.',400);
       if (data.quality==='edit-standard' && data.transferPolicy!==TEMPORARY_FAL_LINKS && services.inlineO3Owner===user.id && !inlineFiveSeconds(video.durationSeconds)) return fail('Kies voor deze privéproef een fragment van 5 seconden.',400);
@@ -259,7 +261,9 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
             providerInput={video_url:video.url,image_urls:[image.url],prompt:quote.input.prompt,keep_audio:selected.keepSound,enable_safety_checker:true};
           }
         }else{
-          providerInput={image_url:image.url,video_url:video.url,character_orientation:'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
+          const bounded=quote.input.invitationRender!==undefined;
+          if(bounded&&(!validInvitationRenderContract(quote)||rest.length||selected.faceId||selected.angleIds.length||!Number.isFinite(video.durationSeconds)||video.durationSeconds>10))throw Error('Invalid bounded invitation input');
+          providerInput={image_url:image.url,video_url:video.url,character_orientation:bounded?'image':'video',prompt:quote.input.prompt,keep_original_sound:selected.keepSound,enable_safety_checker:true};
           if(selected.faceId){providerInput.elements=[{frontal_image_url:rest[0].url,reference_image_urls:selected.angleIds.length?rest.slice(1).map(x=>x.url):[image.url]}];if(!providerInput.prompt.includes('@Element1'))providerInput.prompt+=' The person is @Element1.';}
         }
         // Inline bytes stay only in this authenticated server-to-provider body.
@@ -273,6 +277,7 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
           preparationFailure='De prijs moet opnieuw worden gecontroleerd. Vraag een nieuwe prijsopgave.';
           const current=await services.trialGuard.estimate(quote.input.data.quality,quote.durationSeconds);
           if(current>quote.input.providerEstimateUsdMicros)throw Error('Provider price increased during preparation');
+          if(quote.input.invitationRender!==undefined)checkInvitationRate(quote,current);
         }
       } catch {
         // No generation request has been sent yet. Release once, transactionally.

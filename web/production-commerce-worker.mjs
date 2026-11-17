@@ -12,6 +12,7 @@ import {handleProductionInvitation} from './production-invitation.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {handleOwnerFinance} from './owner-finance.mjs';
 import {handleOwnerSecurity} from './owner-security.mjs';
+import {handleCustomerSecurity} from './customer-security.mjs';
 import {handleOwnerAccounting,handleOwnedPaymentReceipt} from './accounting-export.mjs';
 import {handleOwnerRecovery} from './owner-recovery.mjs';
 import {handleCustomerSupport,ownerSupportCases} from './customer-support.mjs';
@@ -32,6 +33,12 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
+   if(u.pathname==='/api/security'||u.pathname.startsWith('/api/security/')){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowCustomerSecurity:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleCustomerSecurity(authenticated.request,env,{userId:authenticated.userId});
+   }
    if(u.pathname.startsWith('/api/owner/accounting')||u.pathname.startsWith('/api/owner/recovery')||u.pathname==='/api/owner/support'||u.pathname.startsWith('/api/owner/invoices')){
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowFinance:true});

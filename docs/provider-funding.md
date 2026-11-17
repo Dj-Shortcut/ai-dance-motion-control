@@ -171,6 +171,92 @@ de eigenaar vereisen. Deze grenzen bewaken RIG-toelatingen en ramingen: zij zijn
 geen bank- of kaartlimiet en dekken geen gebruik buiten RIG of onverwachte
 afwijkingen in de externe facturatie.
 
+## Begrensde uitnodiging voor de eerste tester
+
+De eenmalige productie-uitnodiging kent nog steeds precies **€5 RIG-tegoed**
+toe. Voor die ontvanger geldt daarnaast een afzonderlijk afnamecontract,
+`first-tester-bounded-v1`, geen herbruikbare algemene klantenraming:
+
+- Maximaal **twee blijvende toelatingen**, vóór de eerste bestandsuitvoer naar
+  Fal atomair vastgelegd in `rig_generation_costs`. Ook een voorbereiding die
+  daarna faalt verbruikt zo'n toelating. Een refund, nieuwe UTC-dag, lagere
+  prijs of bijkomende creditboeking heropent deze twee plaatsen niet.
+- Alleen de exacte Kling V3 Standard/Pro Motion Control-endpoints, één foto
+  en een geverifieerd fragment van **3–10 seconden**. De daadwerkelijke
+  providerinvoer gebruikt `character_orientation: image`; extra gezichts- of
+  hoekreferenties, Edit en verwerkingsketens zijn niet toegestaan.
+- Fal documenteert voor die stand maximaal tien uitvoerseconden. Per toelating
+  reserveert het afnamecontract conservatief **elf hele seconden tegen maximaal
+  US$0,168/seconde**: US$1,848, onafhankelijk van de kortere gekozen duur.
+  Over twee toelatingen is dat **US$3,696 netto modelverbruik**. Standard mag
+  maximaal US$0,126/seconde kosten, Pro US$0,168; actuele uitlezing boven die
+  plafonds weigert werk, ook bij de hercontrole na uploads vóór verzending.
+  Automatische providerherhaling en fallback blijven uitgeschakeld.
+- De vereiste beleidsreserve is maximaal €1 per US$1, maximaal 21% btw en
+  aanvullend 3% voor omrekening/kaartkosten. Dit geeft afgerond **€4,61**.
+  Een hogere geconfigureerde omreken- of btwreserve blokkeert de test.
+
+Dit is een afgedwongen grens op bestelde hoeveelheden onder Fals gepubliceerde
+model- en tariefcontract. Fal biedt hiermee geen afzonderlijke vaste
+eurofactuurlimiet of valutatermijncontract. Onverwachte afwijkingen van externe
+facturatie of omrekening zijn niet door software in RIG af te dwingen. Het
+gehele gedeelde Fal-account en automatische kaartaanvullingen zijn evenmin op
+€5 gezet; ander gebruik blijft buiten deze uitnodiging.
+
+Bronnen, gecontroleerd op 17 november 2026:
+[Pro-contract](https://fal.ai/models/fal-ai/kling-video/v3/pro/motion-control/api),
+[Pro-tarief](https://fal.ai/models/fal-ai/kling-video/v3/pro/motion-control),
+[Standard-tarief](https://fal.ai/models/fal-ai/kling-video/v3/standard/motion-control).
+
+De klant ziet de werkelijke resterende pogingen en duurgrens, zonder interne
+Fal-bedragen. Een proefje en het vervolg tellen ieder als één poging. Bij nul
+blijft herstel, afspelen en downloaden van een bestaande video beschikbaar.
+Nieuwe aankopen voor dit begrensde testaccount zijn vóór checkout geweigerd,
+zodat geen nieuw tegoed wordt verkocht dat de testlimiet niet kan leveren.
+Bestaande betalingen, webhooks en reconciliatie blijven bereikbaar.
+
+Vóór heractivering van een ingehouden uitnodiging: test zowel de normale
+renderroute met de begrensde providerinvoer als derde-pogingweigering,
+parallelle verzending, prijsstijging, refund/dagwissel en de klantweergave.
+Publiceer private backend én bijbehorende Site-weergave. Verander daarna alleen
+de exacte nog ongeclaimde uitnodiging; claim of crediteer nooit namens de tester.
+Lokale providerfixtures zijn geen nieuwe betaalde Fal-render.
+
+## Klantbevestiging vóór ieder videodebet
+
+Alle nieuwe productie-opdrachten met `funding_kind='credits'` vereisen een
+verse WebAuthn-passkeybevestiging met gebruikersverificatie. De eerste
+klantregistratie wordt pas actief na een echte, voor de aangemelde
+productie-identiteit gecontroleerde registratieceremonie. Zij verleent geen
+eigenaarrechten. De server bewaart alleen de publieke sleutel; een ingetrokken
+of bestaande klantpasskey kan niet met alleen een ingelogde sessie worden
+vervangen. Sleutelverlies vereist de afzonderlijke hulpprocedure.
+
+De bevestiging bindt klant, quote-ID, aanvraagcode, model, media-/optie-JSON,
+bedrag, duur, prijsversie, vervaldatum en eventuele overdrachtstoestemming.
+Challengeverbruik, sleutelteller, audit, tegoedreservering en nieuwe job staan
+in dezelfde D1-transactie. Annuleren of een ontbrekende/gewijzigde/verlopen
+bevestiging start geen Fal-werk. Instellen van een passkey start evenmin een
+video; de klant bevestigt daarna uitdrukkelijk de video opnieuw. Herstel van
+een reeds aanvaarde opdracht is een uitlezing en vraagt geen tweede betaalde
+inzending. De eigenaar behoudt zijn bestaande afzonderlijke verificatiepad.
+
+Pas eerst de additieve migratie `0016_customer_security.sql` toe, met beleid
+`enabled=0`. Zij maakt alleen aparte klantbeveiligingstabellen, indexen en de
+rollbacktrigger; bestaande geld-, klant- en eigenaarsregistraties blijven
+behouden. Publiceer daarna private backend, publieke relay en de bijbehorende
+Sites-client. Schakel pas na verificatie `rig_customer_security_policy.enabled`
+op 1: de trigger verhindert dan ook jobcreatie met oudere servercode zonder
+de exacte verbruikte klantbevestiging. Nieuwe code vereist de klantbevestiging
+zelfstandig, ook tijdens die uitrol vóór triggeractivering. Verse schema's
+vereisen naast `production-schema.sql` ook migratie 0016 voor de trigger.
+
+Dit beveiligt het verbruiken van RIG-tegoed. Een bank-/kaartbetaling voor nieuw
+tegoed blijft de afzonderlijke Mollie-checkout en bankbevestiging doorlopen.
+WebAuthn-cryptografietests met een softwareauthenticator bewijzen de
+servercontroles, niet een uitgevoerde Face ID- of Windows Hello-handeling door
+de echte tester. Die handeling gebeurt op zijn eigen apparaat.
+
 ## Bewijs voor de eerste verkoop
 
 Een volledige eerste **live** klantaankoop met automatische tegoedboeking,

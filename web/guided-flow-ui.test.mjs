@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {createHash,webcrypto} from 'node:crypto';
+import {enableVideoIfAvailable} from './frontend/multiuser/video-capability.mjs';
+import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 
 const source=name=>readFileSync(new URL(`./frontend/multiuser/${name}`,import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Guided RIG flow did not settle');};
@@ -13,9 +15,11 @@ function draftDto(store,quoteId){
  const request={imageId:row.imageId,videoId:row.fullVideoId,faceId:row.faceId,angleIds:row.angleIds,quality:row.quality,keepSound:row.keepSound,steadyCamera:row.steadyCamera??false,prompt:row.prompt,...(row.transferPolicy?{transferPolicy:row.transferPolicy}:{})};
  return {available:true,expiresAt:row.expiresAt,request,durationSeconds:store.assets.get(row.fullVideoId).meta.durationSeconds,selectedSeconds:row.selectedSeconds,originalStartSeconds:row.originalStartSeconds,cleanup:row.cleanup,assets:{image:descriptor(row.imageId),video:descriptor(row.fullVideoId),face:row.faceId?descriptor(row.faceId):null,angles:row.angleIds.map(descriptor)}};
 }
-function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',statusResponse,shareRead,recentJob=null,reconcileJob=null,storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,persistDrafts=false,serverStore=privateDraftStore(),savedDraftResponse,legacyDraftServer=false,saveDraftResponse,assetRead,restoredDurationOffset=0}={}){
+function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',invitationLimits=null,videoConfigRead,statusResponse,shareRead,recentJob=null,reconcileJob=null,storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,persistDrafts=false,serverStore=privateDraftStore(),savedDraftResponse,legacyDraftServer=false,saveDraftResponse,assetRead,restoredDurationOffset=0}={}){
  const dom=new JSDOM(source('index.html'),{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],prepared=[],shared=[],storage=savedStorage,restoredUrls=new Map();
  w.Blob=Blob;Object.defineProperty(w,'crypto',{configurable:true,value:webcrypto});w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding=funding;w.rigVideoMode='live';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
+ installCustomerVerificationStub(w);
+ if(invitationLimits){w.rigVideoInvitationLimits={...invitationLimits};w.rigVideoEnabled=invitationLimits.remainingAttempts>0;}
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
  if(savedDraftStorage)w.rigDraftStorage={getItem:key=>savedDraftStorage.get(key)??null,setItem:(key,value)=>savedDraftStorage.set(key,value),removeItem:key=>savedDraftStorage.delete(key)};
  w.URL.createObjectURL=blob=>{const url=`blob:rig-local-${Math.random()}`;if(persistDrafts&&blob?.type==='video/mp4'&&serverStore.drafts.size){const row=[...serverStore.drafts.values()].at(-1);restoredUrls.set(url,serverStore.assets.get(row?.fullVideoId)?.meta.durationSeconds+restoredDurationOffset);}return url;};w.URL.revokeObjectURL=()=>{};w.requestAnimationFrame=()=>1;w.cancelAnimationFrame=()=>{};w.HTMLElement.prototype.scrollIntoView=function(){};w.scrollTo=()=>{};w.HTMLCanvasElement.prototype.getContext=()=>({drawImage(){}});
@@ -30,6 +34,7 @@ function fixture({withGeneration=false,canShare=false,qualities=['standard','pro
  w.rigRequest=async(path,options={})=>{
   calls.push([path,options]);let data;
   if(path.startsWith('/api/generation-intents/')&&path.endsWith('/reconcile')&&reconcileJob)data=reconcileJob;
+  else if(path==='/api/video-config'){await videoConfigRead?.();data={enabled:true,funding,mode:'live',currency:'EUR',qualities,...(invitationLimits?{invitationLimits:{...invitationLimits,remainingAttempts:Math.max(0,invitationLimits.remainingAttempts-generations)}}:{})};}
   else if(path==='/api/generations/recent')data={job:recentJob};
   else if(path==='/api/payments/balance')data={mode:'live',currency:'EUR',balance:5000};
   else if(path.startsWith('/api/estimate/fal?')){const query=new URL(path,w.location.origin).searchParams,seconds=Number(query.get('duration'));data={quality:query.get('quality'),durationSeconds:seconds,customerProposal:{currency:'EUR',priceCents:Math.ceil(seconds)*40,binding:false}};}
@@ -61,6 +66,58 @@ async function finishTrial(f){
 async function confirmFullVideo(f){
  f.el('prepare').click();await settle(()=>f.el('briefDialog').open);f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await quoteReady(f);assert.equal(f.calls.filter(([path])=>path==='/api/generations').length,1,'the second price does not itself start another generation');f.el('confirmGeneration').click();
 }
+
+const boundedInvitation={version:'first-tester-bounded-v1',maxDurationSeconds:10,remainingAttempts:2,referenceImages:1,orientation:'image'};
+const enableInvitation=f=>enableVideoIfAvailable({binding:{isActive:()=>f.w.rigSessionActive(),request:f.w.rigRequest},window:f.w,document:f.d,loadScript:async()=>{}});
+
+test('a bounded invitation can explicitly approve a five-second trial and then its saved full clip within two attempts',async()=>{
+ const f=fixture({withGeneration:true,qualities:['standard','pro'],invitationLimits:boundedInvitation});try{
+  await enableInvitation(f);const files=f.make();f.change('duration',8);f.change('editPrompt','Mijn gekozen beweging, met dezelfde foto.','input');
+  assert.equal(f.el('duration').max,'10');assert.equal(f.w.rigGenerationQuality(),'pro');assert.equal(f.el('tryShortVideo').hidden,false);assert.equal(f.el('captureFace').disabled,true);assert.equal(f.el('anglesInput').disabled,true);assert.match(f.el('sourceCameraNote').textContent,/foto bepaalt het beeld/);assert.match(f.el('invitationAttemptNote').textContent,/2 videopogingen.*10 seconden/);assert.deepEqual(writePaths(f),[]);
+  f.el('tryShortVideo').click();f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().selectedSeconds,5);f.el('confirmUpload').click();await quoteReady(f);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);f.el('confirmGeneration').click();
+  await settle(()=>f.showing('result')&&!f.w.rigGenerationBusy()&&f.w.rigVideoInvitationLimits.remainingAttempts===1);assert.equal(f.el('prepare').textContent,'Volledige versie maken');assert.equal(f.el('export').hidden,false);assert.equal(f.el('tryShortVideo').hidden,true);
+  await confirmFullVideo(f);await settle(()=>f.showing('result')&&!f.w.rigGenerationBusy()&&f.w.rigVideoInvitationLimits.remainingAttempts===0);
+  assert.equal(f.w.rigVideoEnabled,false);assert.equal(f.el('newVideo').disabled,true);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('export').hidden,false);assert.equal(f.el('resultVideo').hidden,false);assert.equal(f.el('personInput').files[0],files.person);assert.equal(f.el('motionInput').files[0],files.motion);assert.equal(f.w.rigGenerationQuality(),'pro');assert.deepEqual(f.prepared.map(x=>x.duration),[8,5,8]);assert.equal(f.calls.filter(([p])=>p==='/api/generations').length,2);
+ }finally{f.close();}
+});
+
+test('one remaining invitation attempt offers the full chosen clip directly and a refunded failure does not reopen generation',async()=>{
+ const f=fixture({withGeneration:true,qualities:['standard','pro'],invitationLimits:{...boundedInvitation,remainingAttempts:1},statusResponse:async id=>({id,state:'failed',refundConfirmed:true})});try{
+  await enableInvitation(f);f.make();f.change('duration',8);assert.equal(f.el('tryShortVideo').hidden,true);assert.equal(f.el('chooseFullVideo').getAttribute('aria-pressed'),'true');assert.match(f.el('invitationAttemptNote').textContent,/1 videopoging.*mislukte poging/);
+  f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);assert.equal(f.w.rigPreparedMedia().selectedSeconds,8);assert.equal(f.w.rigPreparedMedia().trialToken,undefined);f.el('confirmUpload').click();await quoteReady(f);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);f.el('confirmGeneration').click();
+  await settle(()=>!f.w.rigGenerationBusy()&&f.w.rigVideoInvitationLimits.remainingAttempts===0);assert.equal(f.w.rigVideoEnabled,false);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('newVideo').disabled,true);assert.match(f.el('quoteMessage').textContent,/tegoed is teruggezet/);assert.equal(f.calls.filter(([p])=>p==='/api/generations').length,1);
+ }finally{f.close();}
+});
+
+for(const remaining of [1,0])test(`a stale trial price cannot submit after refreshed invitation availability falls to ${remaining}`,async()=>{
+ const limits={...boundedInvitation},f=fixture({withGeneration:true,qualities:['standard','pro'],invitationLimits:limits});try{
+  await enableInvitation(f);f.make();f.change('duration',8);f.el('tryShortVideo').click();f.el('confirmBrief').click();await settle(()=>f.el('uploadDialog').open);f.el('confirmUpload').click();await quoteReady(f);
+  limits.remainingAttempts=remaining;await f.w.rigRefreshVideoCapabilities();f.el('confirmGeneration').click();assert.equal(f.el('confirmGeneration').hidden,true);assert.equal(f.calls.some(([p])=>p==='/api/generations'),false);assert.match(f.el('quoteMessage').textContent,remaining===0?/videopogingen zijn gebruikt/:/nog één videopoging/);
+ }finally{f.close();}
+});
+
+test('an exhausted invitation can still recover and download its existing completed video without a new generation',async()=>{
+ const f=fixture({withGeneration:true,qualities:['standard','pro'],invitationLimits:{...boundedInvitation,remainingAttempts:0},recentJob:{id:'job-1',state:'completed'}});try{
+  await enableInvitation(f);assert.equal(f.el('prepare').disabled,true);await settle(()=>!f.el('recentVideo').hidden);f.el('recentVideo').click();await settle(()=>f.showing('result')&&!f.el('resultVideo').hidden&&!f.w.rigGenerationBusy());
+  assert.equal(f.el('export').hidden,false);assert.match(f.el('export').href,/blob:rig-private-job-1/);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('newVideo').disabled,true);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('a transient invitation configuration failure disables new work and focus safely refreshes the same account again',async()=>{
+ let fail=false;const f=fixture({withGeneration:true,qualities:['standard','pro'],invitationLimits:boundedInvitation,videoConfigRead:()=>{if(fail)throw Error('temporary network failure');}});try{
+  await enableInvitation(f);fail=true;await f.w.rigRefreshVideoCapabilities();assert.equal(f.w.rigVideoEnabled,false);assert.equal(f.w.rigVideoInvitationLimits,null);
+  fail=false;f.w.dispatchEvent(new f.w.Event('focus'));await settle(()=>f.w.rigVideoEnabled===true&&f.w.rigVideoInvitationLimits?.remainingAttempts===2);assert.deepEqual(writePaths(f),[]);
+ }finally{f.close();}
+});
+
+test('new invitation limits preserve a longer selection and existing references until the user changes them',async()=>{
+ const f=fixture({qualities:['standard','pro']});try{
+  f.el('prepare').click();const files=f.load();f.change('duration',18);f.d.querySelector('input[name="quality"][value="standard"]').click();f.file('faceInput','my-closeup.jpg','image/jpeg');await settle(()=>!f.el('faceReference').hidden);
+  f.w.rigVideoInvitationLimits={...boundedInvitation};f.d.dispatchEvent(new f.w.Event('rig-video-availability'));
+  assert.equal(f.el('duration').value,'18');assert.equal(f.el('duration').max,'10');assert.equal(f.el('duration').checkValidity(),false);assert.equal(f.w.rigGenerationQuality(),'standard');assert.equal(f.el('faceReference').hidden,false);assert.equal(f.el('captureFace').disabled,true);assert.equal(f.el('prepare').disabled,true);assert.equal(f.el('personInput').files[0],files.person);assert.equal(f.el('motionInput').files[0],files.motion);assert.deepEqual(writePaths(f),[]);
+  f.el('removeFace').click();f.change('duration',8);assert.equal(f.el('faceReference').hidden,true);assert.equal(f.el('duration').checkValidity(),true);assert.equal(f.el('prepare').disabled,false);assert.equal(f.w.rigGenerationQuality(),'standard');
+ }finally{f.close();}
+});
 
 test('the guided studio begins with one start action and only the current screen, without example tiles',()=>{
  const f=fixture();try{

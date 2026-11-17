@@ -1,3 +1,4 @@
+import {verificationForCustomer,beginCustomerForTest} from './customer-security-test-helper.mjs';
 // Ephemeral D1 and injected provider responses only. No credentials or network.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,7 +29,7 @@ async function fixture({owner=false,response=refusal}={}){
  const handler=createGenerationHandler(services,async(url,init)=>{assert.equal(url,'https://queue.fal.run/fal-ai/kling-video/v3/pro/motion-control');assert.equal(init.method,'POST');assert.equal(init.redirect,'manual');calls.push(url);return response()});
  const post=(path,data)=>handler(new Request(SITE+path,{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}));
  async function quote(){const r=await post('/api/generation-quotes',{imageId:'image',videoId:'video',quality:'pro',prompt:'Move naturally',keepSound:true});assert.equal(r.status,201,await r.clone().text());return r.json()}
- async function submit(q,key=crypto.randomUUID()){const payload={quoteId:q.id,idempotencyKey:key},verification=owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):undefined;return post('/api/generations',{...payload,...(verification?{verification}:{})})}
+ async function submit(q,key=crypto.randomUUID()){const payload={quoteId:q.id,idempotencyKey:key},prior=await stores.jobs.getByIdempotency(USER,key),verification=prior?undefined:owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):await verificationForCustomer(db,USER,payload,Date.now(),{env});return post('/api/generations',{...payload,...(verification?{verification}:{})})}
  const balance=async()=>(await db.prepare('SELECT SUM(delta) amount FROM rig_ledger WHERE user_id=?').bind(USER).first()).amount;
  const entries=async id=>(await db.prepare('SELECT event_id,delta FROM rig_ledger WHERE event_id IN (?,?,?) ORDER BY event_id').bind('reserve:'+id,'release:'+id,'settle:'+id).all()).results;
  const proof=jobId=>providerBillingRejection(refusal(),{userId:USER,jobId});
@@ -55,7 +56,7 @@ test('generic 402, incomplete 403, accepted IDs and network failure remain unkno
 });
 test('D1 rejection proof cannot be forged or applied to another owner or dispatch, and concurrent finalization releases once',async()=>{
  const f=await fixture();try{
-  const q=await f.quote(),stored=await f.stores.quotes.getOwned(USER,q.id),job=(await f.stores.jobs.begin({userId:USER,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:stored})).job;
+  const q=await f.quote(),stored=await f.stores.quotes.getOwned(USER,q.id),job=(await beginCustomerForTest(f.db,f.stores,{userId:USER,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:stored})).job;
   assert.equal(await f.stores.jobs.authorizeDispatch(USER,job.id),true);const proof=await f.proof(job.id);
   await assert.rejects(f.stores.jobs.markSubmissionRejected(USER,job.id,{...proof}));await assert.rejects(f.stores.jobs.markSubmissionRejected(OTHER,job.id,proof));await assert.rejects(f.stores.jobs.markSubmissionRejected(USER,crypto.randomUUID(),proof));
   assert.equal(await f.balance(),250);const outcomes=await Promise.all(Array.from({length:16},()=>f.stores.jobs.markSubmissionRejected(USER,job.id,proof)));assert.ok(outcomes.every(x=>x.state==='failed'));assert.equal(await f.balance(),500);
@@ -64,7 +65,7 @@ test('D1 rejection proof cannot be forged or applied to another owner or dispatc
 });
 test('even a genuine refusal proof cannot release an accepted, unknown or not-yet-authorized dispatch',async()=>{
  for(const state of ['queued','unknown','unsubmitted']){const f=await fixture();try{
-  const q=await f.quote(),stored=await f.stores.quotes.getOwned(USER,q.id),job=(await f.stores.jobs.begin({userId:USER,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:stored})).job;
+  const q=await f.quote(),stored=await f.stores.quotes.getOwned(USER,q.id),job=(await beginCustomerForTest(f.db,f.stores,{userId:USER,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:stored})).job;
   if(state!=='unsubmitted')assert.equal(await f.stores.jobs.authorizeDispatch(USER,job.id),true);
   if(state==='queued')await f.stores.jobs.markSubmitted(USER,job.id,'known-provider-id');else if(state==='unknown')await f.stores.jobs.markUnknown(USER,job.id);
   await assert.rejects(f.stores.jobs.markSubmissionRejected(USER,job.id,await f.proof(job.id)));assert.equal(await f.balance(),250);assert.deepEqual((await f.entries(job.id)).map(x=>x.delta),[-250]);

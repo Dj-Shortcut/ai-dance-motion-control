@@ -33,12 +33,14 @@ const preferredEditQuality=()=>availableQualities().includes('human-recast')?'hu
 const selectedQuality=()=>editing()?(selectedEditQuality??'edit-standard'):document.querySelector('input[name="quality"]:checked')?.value;
 const recasting=()=>editing()&&selectedQuality()==='human-recast';
 const modeKey=()=>recasting()?'human-recast':videoMode;
-const durationLimit=()=>editing()?15:30;
+const invitationLimits=()=>window.rigVideoInvitationLimits?.version==='first-tester-bounded-v1'?window.rigVideoInvitationLimits:null;
+const invitationExhausted=()=>invitationLimits()?.remainingAttempts===0;
+const durationLimit=()=>invitationLimits()?.maxDurationSeconds??(editing()?15:30);
 const durationMinimum=()=>recasting()?6:3;
 const trialSeconds=()=>recasting()?6:5;
 const recastFrameHint='Kies een beeld van jezelf en zet het vast als hoofdbeeld.';
 const needsRecastFrame=()=>recasting()&&personFile?.type.startsWith('video/')&&!mainReferenceBlob;
-const angleLimit=()=>editing()?2:3;
+const angleLimit=()=>invitationLimits()?0:editing()?2:3;
 window.rigVideoMode=()=>videoMode;
 window.rigGenerationQuality=selectedQuality;
 // References are local snapshots until the user confirms a generation.
@@ -46,21 +48,22 @@ let mainReferenceSelection=null;
 let mainReferenceBlob=null, faceReferenceBlob=null, angleReferenceBlobs=[], referenceRevision=0;const referenceWork={capture:null,face:null,angles:null},thumbBlobs={};
 const referencesBusy=()=>Object.values(referenceWork).some(Boolean);
 const missingAngleCloseup=()=>!recasting()&&angleReferenceBlobs.length>0&&!faceReferenceBlob;
+const invitationReferenceMismatch=()=>!!invitationLimits()&&!!(faceReferenceBlob||angleReferenceBlobs.length);
 function referenceThumb(id,blob){const angle=id.startsWith('angle'),item=$(angle?'angleReference'+id.slice(5):id+'Reference'),img=$(angle?'angleThumb'+id.slice(5):id+'Thumb');item.hidden=!blob;if(thumbBlobs[id]===blob)return;thumbBlobs[id]=blob;if(blob)img.src=setURL('ref-'+id,blob);else {if(typeof img.removeAttribute==='function')img.removeAttribute('src');else img.src='';if(urls['ref-'+id]){URL.revokeObjectURL(urls['ref-'+id]);delete urls['ref-'+id]}}}
 function renderReferences(){
- const recast=recasting(),limit=angleLimit();$('referencePanel').hidden=!personFile;$('moreOptions').hidden=$('referencePanel').hidden;
- $('referenceOptionsTitle').textContent=recast?'Hoofdbeeld kiezen':'Meer opties: close-up en hoeken';$('referenceFiles').hidden=recast;$('recastReferenceNote').hidden=!recast;
+ const recast=recasting(),single=!!invitationLimits(),limit=angleLimit();$('referencePanel').hidden=!personFile;$('moreOptions').hidden=$('referencePanel').hidden;
+ $('referenceOptionsTitle').textContent=recast||single?'Hoofdbeeld kiezen':'Meer opties: close-up en hoeken';$('referenceFiles').hidden=recast||single;$('recastReferenceNote').hidden=!recast;
  referenceThumb('main',mainReferenceBlob);referenceThumb('face',faceReferenceBlob);for(let i=0;i<3;i++)referenceThumb('angle'+i,angleReferenceBlobs[i]||null);
  if(recast){$('faceReference').hidden=true;for(let i=0;i<3;i++)$('angleReference'+i).hidden=true;}
- $('captureFace').hidden=recast;$('captureAngle').hidden=recast;
+ $('captureFace').hidden=recast||single;$('captureAngle').hidden=recast||single;$('faceInput').disabled=recast||single||busy||referencesBusy();
  $('captureAngle').disabled=recast||busy||referencesBusy()||!imageSource||!faceReferenceBlob||angleReferenceBlobs.length>=limit;
- $('anglesInput').disabled=recast||busy||referencesBusy()||!faceReferenceBlob||angleReferenceBlobs.length>=limit;$('anglesChooseLabel').setAttribute?.('aria-disabled',String($('anglesInput').disabled));$('anglesChooseLabel').textContent=faceReferenceBlob?'Kies hoeken':'Voeg eerst een close-up toe';$('anglesChooseLabel').style.opacity=$('anglesInput').disabled?'.55':'1';
- $('captureMain').disabled=busy||referencesBusy()||!imageSource;$('captureFace').disabled=recast||busy||referencesBusy()||!imageSource;
- $('referenceHint').textContent=recast?'Alleen je hoofdbeeld wordt gebruikt.':!personFile?.type.startsWith('video/')?'Voeg een close-up en andere hoeken toe.':!mainReferenceBlob?'Kies een beeld en zet het vast als hoofdbeeld.':!faceReferenceBlob?(angleReferenceBlobs.length?'Voeg opnieuw een close-up toe; je hoeken blijven bewaard.':'Kies een close-up met de schuif.'):angleReferenceBlobs.length>limit?`Kies maximaal ${limit} hoeken voor deze bewerking.`:angleReferenceBlobs.length<limit?`Kies maximaal ${limit} hoeken met de schuif.`:'Referenties klaar.';
+ $('anglesInput').disabled=recast||single||busy||referencesBusy()||!faceReferenceBlob||angleReferenceBlobs.length>=limit;$('anglesChooseLabel').setAttribute?.('aria-disabled',String($('anglesInput').disabled));$('anglesChooseLabel').textContent=faceReferenceBlob?'Kies hoeken':'Voeg eerst een close-up toe';$('anglesChooseLabel').style.opacity=$('anglesInput').disabled?'.55':'1';
+ $('captureMain').disabled=busy||referencesBusy()||!imageSource;$('captureFace').disabled=recast||single||busy||referencesBusy()||!imageSource;
+ $('referenceHint').textContent=single?(invitationReferenceMismatch()?'Deze uitnodiging gebruikt één foto. Verwijder de close-up en hoeken.':'Alleen je foto of vastgezette hoofdbeeld wordt gebruikt.'):recast?'Alleen je hoofdbeeld wordt gebruikt.':!personFile?.type.startsWith('video/')?'Voeg een close-up en andere hoeken toe.':!mainReferenceBlob?'Kies een beeld en zet het vast als hoofdbeeld.':!faceReferenceBlob?(angleReferenceBlobs.length?'Voeg opnieuw een close-up toe; je hoeken blijven bewaard.':'Kies een close-up met de schuif.'):angleReferenceBlobs.length>limit?`Kies maximaal ${limit} hoeken voor deze bewerking.`:angleReferenceBlobs.length<limit?`Kies maximaal ${limit} hoeken met de schuif.`:'Referenties klaar.';
 }
 function clearReferences(){referenceRevision++;for(const key of Object.keys(referenceWork))referenceWork[key]=null;mainReferenceBlob=null;mainReferenceSelection=null;faceReferenceBlob=null;angleReferenceBlobs=[];$('faceInput').value='';$('anglesInput').value='';renderReferences();$('referenceStatus').textContent=''}
 async function captureReference(kind){
- if(!imageSource||busy||referencesBusy()||recasting()&&kind!=='main'||kind==='angle'&&(!faceReferenceBlob||angleReferenceBlobs.length>=angleLimit()))return;
+ if(!imageSource||busy||referencesBusy()||(recasting()||invitationLimits())&&kind!=='main'||kind==='angle'&&(!faceReferenceBlob||angleReferenceBlobs.length>=angleLimit()))return;
  const token={};referenceWork.capture=token;invalidate();renderReferences();
  const revision=referenceRevision,source=imageSource,crop={...crops.person},selectionTime=personFile?.type.startsWith('video/')?source.currentTime:null;
  try{
@@ -73,7 +76,7 @@ async function captureReference(kind){
  finally{if(referenceWork.capture===token)referenceWork.capture=null;renderReferences();refreshButton();}
 }
 async function importReferences(kind,files){
- if(busy||recasting()||!files.length)return;
+ if(busy||recasting()||invitationLimits()||!files.length)return;
  const input=$(kind==='face'?'faceInput':'anglesInput');
  if(files.some(file=>rejectMedia(input,file,'image','referenceStatus')))return;
  if(kind==='angles'&&files.length+angleReferenceBlobs.length>angleLimit()){input.value='';$('referenceStatus').textContent=`Kies maximaal ${angleLimit()} hoeken`;return;}
@@ -140,7 +143,7 @@ function choicePreparationCapability({trial=false}={}){
  return !trial&&reusableSavedVideo()?{supported:true}:localPreparationCapability();
 }
 function refreshButton(){
- const capability=choicePreparationCapability(),enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality()),ready=enabled&&capability.supported;
+ const capability=choicePreparationCapability(),enabled=window.rigVideoEnabled===true&&window.rigSessionActive?.()===true&&availableQualities().includes(selectedQuality()),boundedDuration=Number($('duration').value),invitationReady=!invitationLimits()||!invitationExhausted()&&!invitationReferenceMismatch()&&Number.isInteger(boundedDuration)&&boundedDuration>=3&&boundedDuration<=durationLimit(),ready=enabled&&capability.supported&&invitationReady;
  let note=$('preparationBrowserNote');if(!note){note=document.createElement('small');note.id='preparationBrowserNote';note.setAttribute('role','status');$('videoAvailabilityNote').after(note);}note.hidden=capability.supported||window.rigSessionActive?.()!==true;note.textContent=capability.supported?'':capability.message;
  const promptReady=$('editPrompt').value.trim().length>0,continuing=continuationAvailable()||resultRecoveryAvailable();
  $('prepare').disabled=continuing?continuationBlocked():!ready||continuationBlocked()||missingAngleCloseup()||!imageSource||!motionFile;
@@ -149,17 +152,18 @@ function refreshButton(){
  $('confirmBrief').textContent=cleanupReview?(cleanupReview.mask?'Gebruik masker en bekijk prijs':'Zoek tekst en toon masker'):cleanupAvailable()&&$('cleanupEnabled').checked?'Controleer tekst en overlays':prepared?'Verder':'Bekijk de prijs';
  $('cleanupOption').hidden=!cleanupAvailable();$('cleanupEnabled').disabled=busy||cleanupWork||!cleanupAvailable();$('briefCrop').disabled=busy||cleanupWork||!motionFile;
  const start=Number($('start').value),remaining=$('motionVideo').duration-start,hasTrial=!!motionFile&&Number.isFinite(start)&&start>=0&&Number.isFinite(remaining)&&remaining>=trialSeconds()-1e-7;
- $('tryShortVideo').hidden=reviewingFull;$('tryShortVideo').disabled=!enabled||!localPreparationCapability().supported||busy||cleanupWork||!!cleanupReview||referencesBusy()||missingAngleCloseup()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=reviewingFull||!motionFile||hasTrial;$('recastTrialNote').hidden=reviewingFull||!recasting();
+ $('tryShortVideo').hidden=reviewingFull||!!invitationLimits()&&invitationLimits().remainingAttempts<2;$('tryShortVideo').disabled=!ready||!!invitationLimits()&&invitationLimits().remainingAttempts<2||!localPreparationCapability().supported||busy||cleanupWork||!!cleanupReview||referencesBusy()||missingAngleCloseup()||!imageSource||!promptReady||!hasTrial;$('shortTrialHint').hidden=reviewingFull||!motionFile||hasTrial;$('recastTrialNote').hidden=reviewingFull||!recasting();
  $('motionModeButton').disabled=busy||!availableQualities().some(q=>q==='standard'||q==='pro');$('editModeButton').disabled=busy||!editAvailable();
- window.rigFlow?.refresh({ready:!$('prepare').disabled,inputsReady:!continuationBlocked()&&!!imageSource&&!!motionFile,lockedChoice:!!cleanupReview||cleanupWork,continuation:continuing,continuationLabel:continuationAvailable()?'Volledige versie maken':'Verder met deze video'});
+ window.rigFlow?.refresh({ready:!$('prepare').disabled,inputsReady:invitationReady&&!continuationBlocked()&&!!imageSource&&!!motionFile,lockedChoice:!!cleanupReview||cleanupWork,continuation:continuing,continuationLabel:continuationAvailable()?'Volledige versie maken':'Verder met deze video'});
 }
 function updateModeUi(){
- const edit=editing(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'In de video':'Op je foto';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
+ const edit=editing(),bounded=!!invitationLimits(),showModes=edit||editAvailable();$('sourceCameraNote').hidden=!edit&&!bounded;$('videoModePanel').hidden=!showModes;$('videoModeTabs').hidden=!showModes;$('briefTitle').textContent=edit?'In de video':'Op je foto';$('motionModeButton').setAttribute('aria-pressed',String(!edit));$('editModeButton').setAttribute('aria-pressed',String(edit));
  $('videoModeHint').textContent=edit?(availableQualities().includes(selectedQuality())?(recasting()?'Vervang een persoon met één portret. Begin met een korte proef.':'Vervang een persoon of dier met je foto. Controleer het resultaat met een korte proef.'):editUnavailableMessage):'Werkt het best met een duidelijk zichtbaar lichaam.';
  $('editPromptPanel').hidden=false;$('editPrompt').required=true;$('promptLabel').textContent=edit?'Wat wil je veranderen?':'Wat wil je maken?';$('editPrompt').placeholder=edit?'Vervang de zanger door het personage op mijn foto.':'Beschrijf het resultaat dat je wilt.';$('motionQualitySettings').hidden=edit;$('steadyOption').hidden=edit;$('backgroundOption').hidden=true;$('settingsNote').hidden=true;
  $('personChooseText').textContent='Kies een foto of video';$('personRole').textContent='Foto';$('motionChooseText').textContent='Kies een video';$('motionRole').textContent='Video';$('soundLabel').textContent=edit?'Geluid van de bronvideo behouden':'Geluid van de bewegingsvideo behouden';
- $('personInput').accept='image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm';$('duration').min=String(durationMinimum());$('trialDurationNote').textContent=recasting()?'(6–15 s · proefje: 6 s)':edit?'(3–15 s · begin met 5 s)':'(3–30 s)';
- if($('flowTrialDuration'))$('flowTrialDuration').textContent=`${trialSeconds()} s · kort proefje`;else $('tryShortVideo').textContent=`Eerst een proefje · ${trialSeconds()} s`;$('shortTrialHint').textContent=`Kies een start met nog minstens ${trialSeconds()} seconden video.`;$('recastTrialNote').hidden=!recasting();$('personTip').textContent=recasting()?'Kies één duidelijke portretfoto van een persoon.':'Tip: een duidelijke foto, liefst met het hele lichaam.';$('sourceCameraNote').textContent=recasting()?'Gebruikt je video en één portret.':'Camera: uit de bronvideo';
+ $('personInput').accept='image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm';$('duration').min=String(durationMinimum());$('trialDurationNote').textContent=bounded?'(3–10 s · maximaal 2 pogingen)':recasting()?'(6–15 s · proefje: 6 s)':edit?'(3–15 s · begin met 5 s)':'(3–30 s)';
+ if($('flowTrialDuration'))$('flowTrialDuration').textContent=`${trialSeconds()} s · kort proefje`;else $('tryShortVideo').textContent=`Eerst een proefje · ${trialSeconds()} s`;$('shortTrialHint').textContent=`Kies een start met nog minstens ${trialSeconds()} seconden video.`;$('recastTrialNote').hidden=!recasting();$('personTip').textContent=recasting()?'Kies één duidelijke portretfoto van een persoon.':bounded?'Gebruik één duidelijke foto of een gekozen videobeeld.':'Tip: een duidelijke foto, liefst met het hele lichaam.';$('sourceCameraNote').textContent=bounded?'Je foto bepaalt het beeld; de video levert de beweging.':recasting()?'Gebruikt je video en één portret.':'Camera: uit de bronvideo';
+ let attempts=$('invitationAttemptNote');if(!attempts){attempts=document.createElement('p');attempts.id='invitationAttemptNote';attempts.className='brief-camera';attempts.setAttribute('role','status');$('sourceCameraNote').after(attempts);}attempts.hidden=!bounded;attempts.textContent=bounded?window.rigVideoAvailabilityMessage??`Nog ${invitationLimits().remainingAttempts} videopogingen van maximaal 10 seconden. Een mislukte poging kan meetellen, ook als je tegoed terugkrijgt.`:'';
  $('sound').disabled=busy||recasting();$('recastSoundNote').hidden=!recasting();if(recasting()){$('sound').checked=true;$('soundLabel').textContent='Origineel geluid blijft behouden';}
  $('settingsNote').textContent=edit?'Gebruik een duidelijke referentiefoto. Beoordeel eerst een korte proef.':'Referenties worden pas na je bevestiging naar fal.ai gestuurd. Achtergrond vervangen is nog niet beschikbaar in de webversie.';
  if($('status').textContent===editUnavailableMessage&&(!edit||editAvailable()))showError('Kies een foto en een video.');
@@ -185,6 +189,8 @@ function updateCapabilities(){
  // default Pro capability must not silently downgrade a new draft.
  if(!editing()&&selected?.disabled&&availableQualities().some(q=>q==='standard'||q==='pro'))showError(qualityUnavailableMessage);else if($('status').textContent===qualityUnavailableMessage)showError(personFile&&motionFile?'Klaar om verder te gaan.':'Kies een foto en een video.');
  if(editing()&&!availableQualities().includes(selectedQuality())){invalidate({automatic:true});showError(editUnavailableMessage);}
+ $('duration').max=String(motionFile?Math.min(durationLimit(),Math.floor($('motionVideo').duration)):durationLimit());
+ if(invitationLimits()&&Number($('duration').value)>durationLimit()){const message='Deze uitnodiging gebruikt fragmenten van 3 tot 10 seconden. Kies je gewenste lengte.';$('duration').setCustomValidity(message);showError(message);}
  updateModeUi();
 }
 $('motionModeButton').addEventListener('click',()=>setMode('motion'));$('editModeButton').addEventListener('click',()=>setMode('edit'));
@@ -305,7 +311,8 @@ async function prepareWithPrompt({trial=false}={}){
  if(window.rigVideoEnabled!==true||window.rigSessionActive?.()!==true||busy||referencesBusy()||!imageSource||!motionFile)return;
  clearBriefFeedback();
  const capability=choicePreparationCapability({trial});if(!capability.supported){refreshButton();briefFeedback(capability.message);return;}
- const edit=editing(),quality=selectedQuality(),prompt=$('editPrompt').value.trim(),start=Number($('start').value),duration=cleanupReview?cleanupReview.base.selectedSeconds:trial?trialSeconds():Number($('duration').value),limit=edit?15:30,max=availableBriefDuration();
+ const edit=editing(),quality=selectedQuality(),prompt=$('editPrompt').value.trim(),start=Number($('start').value),duration=cleanupReview?cleanupReview.base.selectedSeconds:trial?trialSeconds():Number($('duration').value),limit=durationLimit(),max=availableBriefDuration();
+ if(invitationLimits()&&(invitationReferenceMismatch()||trial&&invitationLimits().remainingAttempts<2)){briefFeedback(invitationReferenceMismatch()?'Deze uitnodiging gebruikt één foto. Verwijder de close-up en hoeken.':'Je hebt nog één videopoging. Kies meteen je volledige fragment.');return;}
  if(!availableQualities().includes(quality)){briefFeedback('Deze videobewerking is momenteel niet beschikbaar.');return;}
  if(recasting()&&!$('sound').checked){briefFeedback('Deze bewerking behoudt het originele geluid. Kies de bewerking opnieuw.');return;}
  if(!prompt){briefFeedback(edit?'Beschrijf wat je in de video wilt veranderen.':'Beschrijf wat je wilt maken.');$('editPrompt').reportValidity?.();$('editPrompt').focus();return;}
@@ -397,7 +404,7 @@ function readTrialContinuation(){
  if(window.rigDraftStorage){persistTrialContinuation();}
  }catch{}
 }
-function continuationBlocked(){try{return busy||referencesBusy()||window.rigSessionActive?.()!==true||window.rigGenerationBusy?.()===true||!!window.rigScopedStorage?.getItem('rig-generation-pending')||!!window.rigScopedStorage?.getItem('rig-generation-job');}catch{return true;}}
+function continuationBlocked(){try{return invitationExhausted()||busy||referencesBusy()||window.rigSessionActive?.()!==true||window.rigGenerationBusy?.()===true||!!window.rigScopedStorage?.getItem('rig-generation-pending')||!!window.rigScopedStorage?.getItem('rig-generation-job');}catch{return true;}}
 function continuationAvailable(){return continuationOffer&&!!lastCompletedResult&&!nonTrialJobs.has(lastCompletedResult)&&(savedFullDraft?.jobId===lastCompletedResult||trialContinuation?.jobId===lastCompletedResult&&trialContinuation.state==='completed');}
 function resultRecoveryAvailable(){return resultRecovery&&!!lastCompletedResult;}
 function reselectingOriginals(){const d=trialContinuation?.draft;return !!d&&!d.personFile&&!d.motionFile&&(!personFile||sameFile(personFile,d.person))&&(!motionLoadingFile||sameFile(motionLoadingFile,d.motion))&&(!motionFile||sameFile(motionFile,d.motion));}

@@ -582,3 +582,73 @@ CREATE TABLE rig_generation_workflow_client_processing (
  CHECK(state='awaiting_client_processing' OR (output_key IS NOT NULL AND length(output_sha256)=64 AND output_size BETWEEN 32 AND 16777216 AND output_metadata_json IS NOT NULL)),
  CHECK((state='advanced' AND advance_key IS NOT NULL AND advanced_at IS NOT NULL) OR (state<>'advanced' AND advance_key IS NULL AND advanced_at IS NULL))
 );
+
+-- Customer verification is separate from owner authority. Keep enrolled rows
+-- after revocation: a signed-in session cannot replace an existing passkey.
+CREATE TABLE IF NOT EXISTS rig_customer_credentials (
+ credential_id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL UNIQUE CHECK(length(user_id)=38),
+ public_key TEXT NOT NULL,
+ user_handle TEXT NOT NULL,
+ counter INTEGER NOT NULL CHECK(counter BETWEEN 0 AND 9007199254740991),
+ device_type TEXT NOT NULL CHECK(device_type IN ('singleDevice','multiDevice')),
+ backed_up INTEGER NOT NULL CHECK(backed_up IN (0,1)),
+ transports_json TEXT NOT NULL,
+ label TEXT NOT NULL,
+ fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+ state TEXT NOT NULL CHECK(state IN ('active','revoked')),
+ created_at INTEGER NOT NULL,
+ activated_at INTEGER NOT NULL,
+ last_verified_at INTEGER,
+ revoked_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS rig_customer_security_challenges (
+ id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL CHECK(length(user_id)=38),
+ operation TEXT NOT NULL CHECK(operation IN ('registration','customer-generation')),
+ challenge TEXT NOT NULL UNIQUE,
+ payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
+ payload_json TEXT NOT NULL,
+ quote_id TEXT,
+ idempotency_key TEXT,
+ quote_model TEXT,
+ quote_input_json TEXT,
+ quote_price_cents INTEGER,
+ quote_pricing_version TEXT,
+ quote_duration_seconds REAL,
+ quote_expires_at INTEGER,
+ label TEXT,
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL CHECK(expires_at>created_at),
+ attempted_at INTEGER,
+ used_at INTEGER,
+ use_token TEXT UNIQUE,
+ credential_id TEXT,
+ verified_counter INTEGER,
+ CHECK(operation='registration' OR (
+  quote_id IS NOT NULL AND idempotency_key IS NOT NULL AND quote_model IS NOT NULL
+  AND quote_input_json IS NOT NULL AND quote_price_cents>0
+  AND quote_pricing_version IS NOT NULL AND quote_duration_seconds BETWEEN 3 AND 30
+  AND quote_expires_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS rig_customer_security_challenges_expiry ON rig_customer_security_challenges(user_id,expires_at);
+CREATE TABLE IF NOT EXISTS rig_customer_security_audit (
+ id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ event TEXT NOT NULL,
+ operation TEXT NOT NULL,
+ payload_hash TEXT,
+ credential_id TEXT,
+ challenge_id TEXT,
+ created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rig_customer_security_audit_user ON rig_customer_security_audit(user_id,created_at);
+-- Rollout: install schema, deploy backend and client, verify them, then enable.
+-- Once enabled the migration's trigger also blocks an older backend rollback.
+CREATE TABLE IF NOT EXISTS rig_customer_security_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ enabled INTEGER NOT NULL CHECK(enabled IN (0,1))
+);
+INSERT OR IGNORE INTO rig_customer_security_policy(id,enabled) VALUES(1,0);
+-- Apply production-migrations/0016_customer_security.sql for the rollback guard
+-- trigger too, including when provisioning from this combined schema.

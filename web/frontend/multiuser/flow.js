@@ -11,9 +11,11 @@
  const on=(target,type,handler,options={})=>target?.addEventListener(type,handler,{...options,signal:controller.signal});
  const source=()=>el('motionVideo'),seconds=()=>Number(el('duration').value),minimum=()=>Number(el('duration').min)||3;
  const trialSeconds=()=>window.rigGenerationQuality?.()==='human-recast'?6:5;
+ const invitation=()=>window.rigVideoInvitationLimits?.version==='first-tester-bounded-v1'?window.rigVideoInvitationLimits:null;
+ const exhausted=()=>invitation()?.remainingAttempts===0;
  const euro=cents=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(cents/100);
  const decimal=value=>new Intl.NumberFormat('nl-BE',{maximumFractionDigits:1}).format(value);
- const trialAllowed=()=>!fullReview&&seconds()>trialSeconds()&&Number.isFinite(source().duration)&&source().duration-Number(el('start').value)>=trialSeconds();
+ const trialAllowed=()=>!fullReview&&(!invitation()||invitation().remainingAttempts>=2)&&seconds()>trialSeconds()&&Number.isFinite(source().duration)&&source().duration-Number(el('start').value)>=trialSeconds();
  function show(next,{focus=true}={}){
   if(!current())return dispose();
   view=next;render();
@@ -58,8 +60,8 @@
   el('flowTitle').textContent=view==='files'?'Kies je foto en video':'Waar moet het gebeuren?';
   for(const [index,bar] of [...el('flowProgress').children].entries())bar.dataset.complete=String(index<step);
   primary.hidden=view==='make'||view==='result'&&!continuation;
-  if(view==='start'){primary.textContent='Probeer met je eigen foto';primary.disabled=false;}
-  else if(view==='files'){primary.textContent='Verder';primary.disabled=!inputsReady;}
+  if(view==='start'){primary.textContent=exhausted()?'Je videopogingen zijn gebruikt':'Probeer met je eigen foto';primary.disabled=exhausted();}
+  else if(view==='files'){primary.textContent='Verder';primary.disabled=exhausted()||!inputsReady;}
   else if(view==='where'){
    primary.textContent='Verder';primary.disabled=!ready;
    const qualities=Array.isArray(window.rigVideoQualities)?window.rigVideoQualities:[];
@@ -73,7 +75,7 @@
   el('newVideo').hidden=view!=='result'||processing;
   if(view==='result'){
    if(processing)el('resultTitle').textContent='Je video wordt gemaakt';
-   el('newVideo').disabled=window.rigGenerationBusy?.()===true||!!window.rigScopedStorage?.getItem('rig-generation-job')||!!window.rigScopedStorage?.getItem('rig-generation-pending');
+   el('newVideo').disabled=exhausted()||window.rigGenerationBusy?.()===true||!!window.rigScopedStorage?.getItem('rig-generation-job')||!!window.rigScopedStorage?.getItem('rig-generation-pending');
   }
   updateClip();renderPlans();
  }
@@ -93,7 +95,7 @@
  }
  async function loadPrices(sequence){
   const quality=window.rigGenerationQuality?.(),full=seconds(),trial=trialSeconds();
-  if(!current()||!quality||!Number.isInteger(full))return;
+  if(!current()||!quality||!Number.isInteger(full)||exhausted()||invitation()&&full>invitation().maxDurationSeconds)return;
   if(el('cleanupEnabled')?.checked){for(const id of ['flowTrialPrice','flowFullPrice'])el(id).textContent='Na maskercontrole';return;}
   await Promise.allSettled([['flowTrialPrice',trial],['flowFullPrice',full]].map(async([id,duration])=>{
    if(id==='flowTrialPrice'&&!trialAllowed())return;
@@ -172,6 +174,7 @@
  on(el('newVideo'),'click',()=>{if(window.rigNewDraft?.()!==false){fullReview=false;fullIntent=false;shareSequence++;shareFile=null;show('start');}});
  on(el('shareResult'),'click',async()=>{if(!current()||!shareFile)return;try{await navigator.share({files:[shareFile],title:'Mijn RIG-video'});}catch(error){if(error.name!=='AbortError')el('status').textContent='Delen lukte niet. Je kunt de video bewaren.';}});
  on(document,'rig-generation-mode-change',()=>{drawPreviews();if(view==='make')schedulePrices();});
+ on(document,'rig-video-availability',()=>{render();if(view==='make')schedulePrices();});
  // Closing an unpaid preparation/price pop-out returns to the same make
  // screen. Queue this check so an upload-to-quote transition stays intact.
  for(const id of ['uploadDialog','quoteDialog'])on(el(id),'close',()=>queueMicrotask(()=>{

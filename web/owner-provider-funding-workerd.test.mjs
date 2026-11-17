@@ -1,3 +1,4 @@
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -26,6 +27,7 @@ async function fixture(){
  const begin=async(q,key=crypto.randomUUID(),adapter=stores,proof)=>{
   const payload={quoteId:q.id,idempotencyKey:key};let verification=proof;
   if(q.fundingKind==='owner-provider'&&verification===undefined){try{verification=await verificationFor(db,OWNER,'owner-generation',payload,Date.now(),{env});}catch(error){if(![400,409].includes(error.status))throw error;}}
+  if(q.fundingKind==='credits'&&q.userId!==env.RIG_PRODUCTION_OWNER_USER_ID&&verification===undefined&&!await adapter.jobs.getByIdempotency(q.userId,key))verification=await verificationForCustomer(db,q.userId,payload,Date.now(),{env});
   return adapter.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey:key,quote:q,verification,verificationPayload:payload});
  };
  const ledger=()=>db.prepare('SELECT * FROM rig_ledger ORDER BY event_id').all().then(r=>r.results);

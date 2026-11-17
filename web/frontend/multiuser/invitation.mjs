@@ -54,7 +54,7 @@ export function mountSponsorInvitation({invitation,binding,document,onRedeemed}=
  element.className='sponsor-invitation';element.setAttribute('aria-label','Gratis testtegoed');
  element.style.cssText='margin-top:18px;padding:14px 16px;border:1px solid #40685a;border-radius:10px;background:#192a23';
  message.setAttribute('role','status');message.style.cssText='margin:0 0 10px;line-height:1.5';
- message.textContent='Je bent uitgenodigd om RIG te proberen. Je krijgt gratis €5 testtegoed om je video te maken.';
+ message.textContent='Je krijgt €5 RIG-tegoed voor maximaal 2 videopogingen van 3 tot 10 seconden, met één foto. Een mislukte poging kan meetellen, ook als je tegoed terugkrijgt.';
  button.type='button';button.className='primary';button.textContent='Activeer gratis €5 testtegoed';
  element.append(message,button);studio.insertBefore(element,main);
  let busy=false,finished=false,disposed=false;
@@ -77,7 +77,7 @@ export function mountSponsorInvitation({invitation,binding,document,onRedeemed}=
    if(response.ok && body?.state==='redeemed' && body.amountCents===500){
     clearStored(storage,bound);finished=true;button.hidden=true;
     if(disposed || !active())return;
-    message.textContent='Je gratis €5 testtegoed is actief. Je kunt nu je video maken.';
+    message.textContent='Je €5 RIG-tegoed is actief: maximaal 2 videopogingen van 3 tot 10 seconden, met één foto. Een mislukte poging kan meetellen, ook als je tegoed terugkrijgt.';
     document.dispatchEvent(new document.defaultView.Event('rig-balance-changed'));
     if(typeof onRedeemed==='function'){try{await onRedeemed()}catch{}}
    }else if(response.ok && body?.state==='owner'){

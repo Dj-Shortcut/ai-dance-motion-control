@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {JSDOM} from 'jsdom';
 import {createHash,webcrypto} from 'node:crypto';
+import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 const media=readFileSync(new URL('./frontend/multiuser/media.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
@@ -94,6 +95,7 @@ async function savedPlaybackFixture({mp4=false,audio=false}={}){
  const descriptor=(assetId,kind)=>({id:assetId,mime:kind==='video'?'video/mp4':'image/jpeg',sha256:createHash('sha256').update(bytes[kind]).digest('hex'),size:bytes[kind].length,width:1280,height:720,path:`/api/video-drafts/${quote}/assets/${assetId}`,...(kind==='video'?{durationSeconds:17.94}:{})});
  const saved={available:true,expiresAt:Date.now()+86400000,request:{imageId,videoId,faceId:null,angleIds:[],quality:'pro',keepSound:true,steadyCamera:false,prompt:'Mijn oorspronkelijke volledige scène.'},durationSeconds:17.94,selectedSeconds:18,originalStartSeconds:2.5,cleanup:false,assets:{image:descriptor(imageId,'image'),video:descriptor(videoId,'video'),face:null,angles:[]}};
  w.Blob=Blob;w.File=File;Object.defineProperty(w,'crypto',{configurable:true,value:webcrypto});w.rigVideoEnabled=true;w.rigVideoQualities=['standard','pro','human-recast'];w.rigNativeSite=true;w.rigVideoFunding='credits';w.rigSessionActive=()=>true;
+ installCustomerVerificationStub(w);
  const storage=new Map();w.rigScopedStorage={getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};w.rigDraftStorage={getItem:()=>null,setItem(){},removeItem(){}};
  w.MediaRecorder=class{constructor(){resources.push('recorder');throw Error('No encoder is permitted');}static isTypeSupported(){return mp4;}};
  w.HTMLCanvasElement.prototype.captureStream=()=>{resources.push('canvas-stream');throw Error('No stream is permitted');};

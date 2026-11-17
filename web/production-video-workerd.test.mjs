@@ -10,6 +10,7 @@ import {createD1GenerationStores} from './d1.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import {RECAST_BILLING} from './price-preflight.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
@@ -26,7 +27,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_TESTPROFILE',BRIDGE+'/api/payments/webhook').run();
  await legacy.prepare('INSERT INTO rig_ledger(event_id,user_id,delta) VALUES(?,?,1000)').bind('legacy-only',ALICE).run();
  const image=new Uint8Array(await readFile(new URL('./test/fixtures/input.jpg',import.meta.url))),video=new Uint8Array(await readFile(new URL('./test/fixtures/silent.mp4',import.meta.url)));
- const assets=new Map(),cdn=new Map(),temporaryCdn=new Set(),priceReads=[];let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null,temporaryResult=false,recastPricing={provider:'fal',currency:'USD',unit:'second',prices:{'human-recast':RECAST_BILLING.usdMicrosPerSecond/1e6},billingContracts:{'human-recast':{...RECAST_BILLING}}};
+ const assets=new Map(),cdn=new Map(),temporaryCdn=new Set(),priceReads=[],queueInputs=[];let mediaCalls=0,dispatches=0,providerOutcome='complete',priceRate=.1,uploadPrice=null,temporaryResult=false,recastPricing={provider:'fal',currency:'USD',unit:'second',prices:{'human-recast':RECAST_BILLING.usdMicrosPerSecond/1e6},billingContracts:{'human-recast':{...RECAST_BILLING}}};
  async function source(kind,owner=ALICE){const bytes=kind==='image'?image:video,id=crypto.randomUUID(),sha256=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');assets.set(id,{id,kind,bytes,owner,sha256});return id}
  const imageId=await source('image'),videoId=await source('video');
  const media={async fetch(req){mediaCalls++;const u=new URL(req.url);if(req.headers.get('authorization')!=='Bearer '+'x'.repeat(40))return new Response(null,{status:401});
@@ -44,7 +45,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   if(u.origin==='https://v3b.fal.media'&&temporaryCdn.has(u.origin+u.pathname)&&!u.search){const c=cdn.get(u.origin+u.pathname);if(!c)throw Error('missing temporary CDN input');return new Response(c.bytes.slice(),{headers:{'content-type':c.mime,'content-length':String(c.bytes.length)}})}
   if(u.origin==='https://v3b.fal.media'&&u.pathname==='/files/b/fixture/result.mp4'&&(h.get('authorization')==='Bearer fixture-token'||temporaryResult))return new Response(video.slice(),{headers:{'content-type':'video/mp4','content-length':String(video.length)}});
   if(u.origin==='https://v3b.fal.media')return new Response(null,{status:403});
-  if(u.origin==='https://queue.fal.run'&&init.method==='POST'){dispatches++;temporaryResult=temporaryCdn.has(JSON.parse(init.body).video_url);if(providerOutcome==='unknown')throw Error('Lost response after submission');return Response.json({request_id:'provider-request-'+dispatches})}
+  if(u.origin==='https://queue.fal.run'&&init.method==='POST'){dispatches++;queueInputs.push({body:JSON.parse(init.body),headers:Object.fromEntries(h)});temporaryResult=temporaryCdn.has(JSON.parse(init.body).video_url);if(providerOutcome==='unknown')throw Error('Lost response after submission');return Response.json({request_id:'provider-request-'+dispatches})}
   if(u.origin==='https://queue.fal.run'&&u.pathname.endsWith('/status'))return Response.json({status:'COMPLETED',request_id:'provider-request-'+dispatches,...(providerOutcome==='failure'?{error:'Fixture terminal failure'}:{})});
   if(u.origin==='https://queue.fal.run')return Response.json({video:{url:'https://v3b.fal.media/files/b/fixture/result.mp4'}});
   throw Error('Unexpected provider destination');
@@ -57,6 +58,11 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
    const prior=await db.prepare('SELECT id FROM rig_generation_jobs WHERE user_id=? AND idempotency_key=?').bind(ALICE,data.idempotencyKey).first();
    if(q?.funding_kind==='owner-provider'&&!prior)data={...data,verification:await verificationFor(db,ALICE,'owner-generation',data,Date.now(),{env})};
   }
+  if(path==='/api/generations'&&data&&!data.verification){
+   const q=await db.prepare('SELECT user_id,funding_kind FROM rig_generation_quotes WHERE id=?').bind(data.quoteId).first();
+   const prior=q&&await db.prepare('SELECT id FROM rig_generation_jobs WHERE user_id=? AND idempotency_key=?').bind(q.user_id,data.idempotencyKey).first();
+   if(q?.funding_kind==='credits'&&!prior&&q.user_id!==env.RIG_PRODUCTION_OWNER_USER_ID){const payload={quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(data.transferConsent?{transferConsent:data.transferConsent}:{})};data={...data,verification:await verificationForCustomer(db,q.user_id,payload,Date.now(),{env})};}
+  }
   return handler(new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{origin:SITE,'content-type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})}));
  };
  const balance=async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) AS cents FROM rig_ledger WHERE user_id=?').bind(ALICE).first()).cents;
@@ -65,8 +71,89 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   const payments=createProductionPayment({...testCheckoutFunding,transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
   for(let i=0;i<2;i++)assert.equal((await payments.webhook(new Request(env.RIG_PRODUCTION_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'id='+payment.id}),env)).status,200);
  }
- return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
+ return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,queueInputs,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
 }
+
+async function beginCustomer(db,stores,args){
+ const payload={quoteId:args.quoteId,idempotencyKey:args.idempotencyKey,...(args.quote?.input?.data?.transferPolicy==='fal-temporary-links-v1'?{transferConsent:'fal-temporary-links-v1'}:{})};
+ return stores.jobs.begin({...args,verificationPayload:payload,verification:await verificationForCustomer(db,args.userId,payload)});
+}
+
+async function seedFirstTester(f){
+ const now=Date.now();
+ await f.db.prepare('INSERT OR IGNORE INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES(?,?,?,?)').bind(f.env.RIG_PRODUCTION_SITE_ID,'f'.repeat(64),ALICE,now).run();
+ await f.db.prepare("INSERT INTO rig_production_invitation VALUES(1,?,500,?,?,'rig-public-test-v1',1,?,?,?)").bind('a'.repeat(64),now-10,now+86400000,now-20,ALICE,now).run();
+ await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES('promo:rig-first-tester-v1',?,NULL,500)").bind(ALICE).run();
+}
+
+test('first tester uses the normal private video path with image orientation and a permanent two-attempt ceiling',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);f.setPrice(.168);const h=await f.service();
+  const config=await(await f.call(h,'/api/video-config')).json();assert.deepEqual(config.qualities,['standard','pro']);assert.deepEqual(config.invitationLimits,{version:'first-tester-bounded-v1',maxDurationSeconds:10,remainingAttempts:2,referenceImages:1,orientation:'image'});
+  const select={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
+  for(let attempt=1;attempt<=2;attempt++){
+   const response=await f.call(h,'/api/generation-quotes',select);assert.equal(response.status,201,await response.clone().text());const quote=await response.json();
+   const saved=JSON.parse((await f.db.prepare('SELECT input_json FROM rig_generation_quotes WHERE id=?').bind(quote.id).first()).input_json);assert.equal(saved.invitationRender.reservedUsdMicros,1848000);
+   const r=await f.call(h,'/api/generations',{quoteId:quote.id,idempotencyKey:'bounded-'+attempt});assert.equal(r.status,202,await r.clone().text());const job=await r.json();assert.equal(job.state,'queued');
+   const input=f.queueInputs.at(-1);assert.equal(input.body.character_orientation,'image');assert.equal(input.body.elements,undefined);assert.equal(input.headers['x-fal-no-retry'],'1');assert.equal(input.headers['x-app-fal-disable-fallback'],'true');
+   const finished=await f.call(h,'/api/generations/'+job.id);assert.equal((await finished.json()).state,'completed');assert.equal((await f.call(h,'/api/generations/'+job.id+'/video')).status,200);
+  }
+  assert.equal(f.stats().dispatches,2);assert.equal((await(await f.call(h,'/api/video-config')).json()).invitationLimits.remainingAttempts,0);
+  const stopped=await f.call(h,'/api/generation-quotes',select);assert.equal(stopped.status,400);assert.equal(f.stats().dispatches,2);
+ }finally{await f.mf.dispose()}
+});
+
+test('customer login, quote approval and funded credit alone cannot reserve or dispatch a video without fresh passkey proof',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);const h=await f.service(),selection={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
+  const q=await(await f.call(h,'/api/generation-quotes',selection)).json(),payload={quoteId:q.id,idempotencyKey:'customer-raw-proof'};
+  const raw=data=>h(new Request(SITE+'/api/generations',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}));
+  let response=await raw(payload);assert.equal(response.status,428);assert.equal((await response.json()).code,'security_setup_required');
+  assert.equal(await f.balance(),500);assert.equal(f.providerUploads(),0);assert.equal(f.stats().dispatches,0);
+  const verification=await verificationForCustomer(f.db,ALICE,payload,Date.now(),{env:f.env});
+  response=await raw(payload);assert.equal(response.status,428);assert.equal((await response.json()).code,'step_up_required');
+  response=await raw({...payload,idempotencyKey:'changed-operation',verification});assert.equal(response.status,428);assert.equal(await f.balance(),500);
+  response=await raw({...payload,verification});assert.equal(response.status,202,await response.clone().text());const job=await response.json();assert.equal(job.state,'queued');assert.equal(f.stats().dispatches,1);
+  const replay=await raw({...payload,verification});assert.equal(replay.status,200);assert.equal((await replay.json()).id,job.id);assert.equal(f.stats().dispatches,1);
+ }finally{await f.mf.dispose()}
+});
+
+test('first tester rejects extra identity, price increases and expensive modes before provider work',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);const h=await f.service();const select={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
+  const faceId=await f.source('image');assert.equal((await f.call(h,'/api/generation-quotes',{...select,faceId})).status,400);
+  assert.equal((await f.call(h,'/api/generation-quotes',{...select,quality:'edit-standard',transferPolicy:'fal-temporary-links-v1'})).status,400);
+  f.setPrice(.169);assert.equal((await f.call(h,'/api/generation-quotes',select)).status,503);
+  assert.equal(f.stats().dispatches,0);assert.equal(f.providerUploads(),0);assert.equal(await f.balance(),500);
+  f.setPrice(.168);const q=await(await f.call(h,'/api/generation-quotes',select)).json();f.setPriceDuringUpload(.169);
+  const r=await f.call(h,'/api/generations',{quoteId:q.id,idempotencyKey:'price-changed-during-preparation'});assert.equal((await r.json()).state,'failed');assert.equal(f.stats().dispatches,0);assert.equal(await f.balance(),500);
+  assert.equal((await(await f.call(h,'/api/video-config')).json()).invitationLimits.remainingAttempts,1);
+ }finally{await f.mf.dispose()}
+});
+
+test('first tester refunds, new paid credits and UTC rollover never reopen its maximum purchase quantity',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);const context=await createProductionGenerationContext(f.env),stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:context});
+  const args={userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:125,pricingVersion:'bounded',durationSeconds:4,input:{data:{quality:'pro',faceId:null,angleIds:[]},refs:[{id:f.imageId,kind:'image',sha256:'a'.repeat(64)},{id:f.videoId,kind:'video',sha256:'b'.repeat(64)}],providerEstimateUsdMicros:400000}};
+  for(let n=0;n<3;n++){
+   const made=await stores.quotes.create(args),quote=await stores.quotes.getOwned(ALICE,made.id),started=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:made.id,idempotencyKey:'permanent-'+n,quote});assert.equal(started.kind,'created');
+   assert.equal(await stores.jobs.admitProviderWork(ALICE,started.job.id),n<2);await stores.jobs.markPreparationFailed(ALICE,started.job.id);assert.equal(await f.balance(),n===2?1000:500);
+   await f.db.prepare("UPDATE rig_generation_costs SET budget_day='2000-01-01'").run();
+   if(n===1)await seedVerifiedPaidCredit(f.db,ALICE,500);
+   if(n===2)assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,2);
+  }
+ }finally{await f.mf.dispose()}
+});
+
+test('bounded tester cannot be sold extra credit that its immutable attempt limit would block',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);let calls=0;
+  const payments=createProductionPayment({...testCheckoutFunding,transport:async()=>{calls++;throw Error('Must not create a payment')}});
+  const request=new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})});
+  assert.equal((await payments.user(request,f.env,ALICE)).status,409);assert.equal(calls,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_orders').first()).n,0);assert.equal(await f.balance(),500);
+ }finally{await f.mf.dispose()}
+});
 
 test('fresh paid wallet: verified purchase, owned quote, one reserve, private result and isolated test balance',async()=>{
  const f=await fixture();try{
@@ -115,11 +202,11 @@ test('production capability cannot be forged or moved to test storage; live rele
   const lease=createDurableMediaLease(f.db,{mode:'live',productionContext:context}),claim=await lease.acquire(ALICE);assert.equal(claim.state,'acquired');assert.equal((await lease.acquire(BOB)).state,'busy');await lease.complete(claim.token,'settled');
   assert.equal((await f.legacy.prepare('SELECT COUNT(*) n FROM rig_media_work_lock').first()).n,0);
   await f.fund();const stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:context}),q=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote=await stores.quotes.getOwned(ALICE,q.id);
-  const first=await stores.jobs.begin({userId:ALICE,quoteId:q.id,idempotencyKey:'prepare-refund',quote});assert.equal(first.kind,'created');assert.equal(await f.balance(),400);
+  const first=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q.id,idempotencyKey:'prepare-refund',quote});assert.equal(first.kind,'created');assert.equal(await f.balance(),400);
   await stores.jobs.markPreparationFailed(ALICE,first.job.id);await stores.jobs.markPreparationFailed(ALICE,first.job.id);assert.equal(await f.balance(),500);assert.equal(await stores.jobs.confirmFailureRefund(ALICE,first.job.id),true);assert.equal(await stores.jobs.confirmFailureRefund(BOB,first.job.id),false);
-  const q2=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote2=await stores.quotes.getOwned(ALICE,q2.id),second=await stores.jobs.begin({userId:ALICE,quoteId:q2.id,idempotencyKey:'provider-refund',quote:quote2});assert.equal(second.kind,'created');assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),true);assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),false);await stores.jobs.markSubmitted(ALICE,second.job.id,'known-request');
+  const q2=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote2=await stores.quotes.getOwned(ALICE,q2.id),second=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q2.id,idempotencyKey:'provider-refund',quote:quote2});assert.equal(second.kind,'created');assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),true);assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),false);await stores.jobs.markSubmitted(ALICE,second.job.id,'known-request');
   const poll=await stores.jobs.claimPoll(ALICE,second.job.id);assert.equal(poll.kind,'acquired');await stores.jobs.markProviderFailed(ALICE,second.job.id,'known-request',poll.token);assert.equal(await f.balance(),500);assert.equal(await stores.jobs.confirmFailureRefund(ALICE,second.job.id,'known-request'),true);
-  const q3=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote3=await stores.quotes.getOwned(ALICE,q3.id),unknown=await stores.jobs.begin({userId:ALICE,quoteId:q3.id,idempotencyKey:'unknown-held',quote:quote3});await stores.jobs.authorizeDispatch(ALICE,unknown.job.id);await stores.jobs.markUnknown(ALICE,unknown.job.id);assert.equal(await f.balance(),400);await assert.rejects(stores.jobs.markPreparationFailed(ALICE,unknown.job.id));assert.equal(await stores.jobs.confirmFailureRefund(ALICE,unknown.job.id),false);assert.equal(await f.balance(),400);
+  const q3=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote3=await stores.quotes.getOwned(ALICE,q3.id),unknown=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q3.id,idempotencyKey:'unknown-held',quote:quote3});await stores.jobs.authorizeDispatch(ALICE,unknown.job.id);await stores.jobs.markUnknown(ALICE,unknown.job.id);assert.equal(await f.balance(),400);await assert.rejects(stores.jobs.markPreparationFailed(ALICE,unknown.job.id));assert.equal(await stores.jobs.confirmFailureRefund(ALICE,unknown.job.id),false);assert.equal(await f.balance(),400);
  }finally{await f.mf.dispose()}
 });
 
@@ -377,7 +464,13 @@ async function failedMotionAttempt(f,h,key){
  // Advance only the existing minute-rate fixture windows. Lifetime financial
  // admissions must remain counted despite quiet minutes and later UTC days.
  await f.db.prepare('UPDATE rig_rate_limits SET window_start=0').run();
- const quoted=await f.call(h,'/api/generation-quotes',motionSelection(f));assert.equal(quoted.status,201,await quoted.clone().text());const quote=await quoted.json();
+ const quoted=await f.call(h,'/api/generation-quotes',motionSelection(f));
+ if(quoted.status===400){
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_production_invitation WHERE redeemed_by=?').bind(ALICE).first()).n,1);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs WHERE user_id=?').bind(ALICE).first()).n,2);
+  return {dispatched:false,quoteRejected:true};
+ }
+ assert.equal(quoted.status,201,await quoted.clone().text());const quote=await quoted.json();
  const submitted=await f.call(h,'/api/generations',{quoteId:quote.id,idempotencyKey:key});assert.ok(submitted.ok,await submitted.clone().text());const job=await submitted.json();
  if(job.state==='queued'){
   const status=await(await f.call(h,'/api/generations/'+job.id)).json();assert.equal(status.state,'failed');assert.equal(status.refundConfirmed,true);
@@ -400,15 +493,16 @@ for(const promotional of [true,false])test((promotional?'gift':'paid')+' credit 
  const f=await fixture();try{
   if(promotional)await grantPromotionalCredit(f);else await f.fund();
   f.setOutcome('failure');const h=await f.service();
-  for(let i=0;i<6;i++){assert.equal((await failedMotionAttempt(f,h,'lifetime-'+i)).dispatched,i<5);assert.equal(await f.balance(),500);}
-  assert.equal(f.stats().dispatches,5);assert.equal(f.providerUploads(),10);
-  const costs=await f.db.prepare('SELECT COUNT(*) n,SUM(provider_estimate_usd_micros) usd FROM rig_generation_costs').first();assert.deepEqual(costs,{n:5,usd:2000000});
+  const limit=promotional?2:5;
+  for(let i=0;i<6;i++){assert.equal((await failedMotionAttempt(f,h,'lifetime-'+i)).dispatched,i<limit);assert.equal(await f.balance(),500);}
+  assert.equal(f.stats().dispatches,limit);assert.equal(f.providerUploads(),limit*2);
+  const costs=await f.db.prepare('SELECT COUNT(*) n,SUM(provider_estimate_usd_micros) usd FROM rig_generation_costs').first();assert.deepEqual(costs,{n:limit,usd:limit*400000});
  }finally{await f.mf.dispose()}
 });
 
-test('arbitrary ledger increases never back provider work; an exact paid issuance extends gift allowance only proportionally',async()=>{
+test('arbitrary ledger increases never back provider work; an exact paid issuance extends purchased allowance only proportionally',async()=>{
  const f=await fixture();try{
-  await grantPromotionalCredit(f);await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('unproved-bonus',?,100000)").bind(ALICE).run();
+  await seedVerifiedPaidCredit(f.db,ALICE,500);await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('unproved-bonus',?,100000)").bind(ALICE).run();
   f.setOutcome('failure');const h=await f.service();
   for(let i=0;i<6;i++)assert.equal((await failedMotionAttempt(f,h,'mixed-initial-'+i)).dispatched,i<5);
   const order=await seedVerifiedPaidCredit(f.db,ALICE,100);
@@ -422,7 +516,7 @@ test('arbitrary ledger increases never back provider work; an exact paid issuanc
 
 test('the permanent 20-attempt allowance bounds exports even when provider rates become tiny',async()=>{
  const f=await fixture();try{
-  await grantPromotionalCredit(f);f.setPrice(.000001);f.setOutcome('failure');const h=await f.service();
+  await seedVerifiedPaidCredit(f.db,ALICE,500);f.setPrice(.000001);f.setOutcome('failure');const h=await f.service();
   for(let i=0;i<21;i++)assert.equal((await failedMotionAttempt(f,h,'tiny-rate-'+i)).dispatched,i<20);
   assert.equal(f.stats().dispatches,20);assert.equal(f.providerUploads(),40);assert.equal(await f.balance(),500);
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,20);

@@ -39,3 +39,21 @@ test('cleanup UI is enabled only by the exact owner Recast capability and is cle
  }
  const f=fixture(Response.json(base));try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),true);assert.deepEqual(f.dom.window.rigVideoCleanup,cleanup);assert.ok(Object.isFrozen(f.dom.window.rigVideoCleanup));f.binding.request=async()=>Response.json({enabled:false});await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript});assert.equal(f.dom.window.rigVideoCleanup,null);}finally{f.dom.window.close()}
 });
+
+const boundedInvitation={version:'first-tester-bounded-v1',maxDurationSeconds:10,remainingAttempts:2,referenceImages:1,orientation:'image'};
+const boundedConfig=limits=>({enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro'],invitationLimits:limits});
+test('bounded invitation capability shows real remaining attempts and keeps history UI loaded after exhaustion',async()=>{
+ const f=fixture(Response.json(boundedConfig(boundedInvitation))),w=f.dom.window,document=w.document;
+ try{
+  assert.equal(await enableVideoIfAvailable({binding:f.binding,window:w,document,loadScript:f.loadScript}),true);assert.deepEqual(w.rigVideoInvitationLimits,boundedInvitation);assert.ok(Object.isFrozen(w.rigVideoInvitationLimits));
+  assert.match(document.getElementById('videoAvailabilityNote').textContent,/€5 RIG-tegoed.*2 videopogingen.*10 seconden.*mislukte poging/);assert.doesNotMatch(document.getElementById('videoAvailabilityNote').textContent,/Fal|USD/);
+  f.binding.request=async()=>Response.json(boundedConfig({...boundedInvitation,remainingAttempts:1}));assert.equal(await w.rigRefreshVideoCapabilities(),true);assert.match(document.getElementById('videoAvailabilityNote').textContent,/1 videopoging/);
+  f.binding.request=async()=>Response.json(boundedConfig({...boundedInvitation,remainingAttempts:0}));assert.equal(await w.rigRefreshVideoCapabilities(),false);assert.equal(w.rigVideoEnabled,false);assert.equal(f.loaded(),1);assert.deepEqual(w.rigVideoQualities,['standard','pro']);assert.equal(w.rigVideoInvitationLimits.remainingAttempts,0);assert.match(document.getElementById('videoAvailabilityNote').textContent,/bestaande video’s blijven beschikbaar/);
+ }finally{f.dom.window.close()}
+});
+test('an exhausted invitation loads recovery directly and malformed limits never enable new generation',async()=>{
+ const exhausted=fixture(Response.json(boundedConfig({...boundedInvitation,remainingAttempts:0})));try{assert.equal(await enableVideoIfAvailable({binding:exhausted.binding,window:exhausted.dom.window,document:exhausted.dom.window.document,loadScript:exhausted.loadScript}),false);assert.equal(exhausted.loaded(),1);}finally{exhausted.dom.window.close()}
+ for(const limits of [null,{...boundedInvitation,version:'future'},{...boundedInvitation,remainingAttempts:-1},{...boundedInvitation,remainingAttempts:3},{...boundedInvitation,remainingAttempts:'2'},{...boundedInvitation,maxDurationSeconds:30},{...boundedInvitation,referenceImages:2},{...boundedInvitation,orientation:'video'}]){
+  const f=fixture(Response.json(boundedConfig(limits)));try{assert.equal(await enableVideoIfAvailable({binding:f.binding,window:f.dom.window,document:f.dom.window.document,loadScript:f.loadScript}),false);assert.equal(f.loaded(),0);assert.equal(f.dom.window.rigVideoInvitationLimits,null);}finally{f.dom.window.close()}
+ }
+});

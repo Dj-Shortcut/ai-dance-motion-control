@@ -6,6 +6,7 @@ import {handleProductionInvitation} from './production-invitation.mjs';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
 import {createD1GenerationStores} from './d1.mjs';
 import {createSponsoredInvitationStore} from './sponsored-invitation.mjs';
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 const OWNER='u-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ALICE='u-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',BOB='u-cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -90,7 +91,7 @@ test('free-credit indicator ignores purchases, follows generation reservations/r
   await f.db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES(?,?,?,1000)').bind('credit:'+order,ALICE,order).run();
   assert.equal(await f.balance(ALICE),1500);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:500});
   const stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:f.context});
-  const reserve=async amount=>{const made=await stores.quotes.create({userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:amount,pricingVersion:'fixture',durationSeconds:4,input:{data:{quality:'pro'},providerEstimateUsdMicros:400000}}),q=await stores.quotes.getOwned(ALICE,made.id);return stores.jobs.begin({userId:ALICE,quoteId:q.id,idempotencyKey:crypto.randomUUID(),quote:q})};
+  const reserve=async amount=>{const made=await stores.quotes.create({userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:amount,pricingVersion:'fixture',durationSeconds:4,input:{data:{quality:'pro'},providerEstimateUsdMicros:400000}}),q=await stores.quotes.getOwned(ALICE,made.id),payload={quoteId:q.id,idempotencyKey:crypto.randomUUID()};return stores.jobs.begin({userId:ALICE,...payload,quote:q,verificationPayload:payload,verification:await verificationForCustomer(f.db,ALICE,payload)})};
   let job=await reserve(200);assert.equal(job.kind,'created');assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:300});
   await stores.jobs.markPreparationFailed(ALICE,job.job.id);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:500});
   job=await reserve(800);assert.equal(job.kind,'created');assert.equal(await f.balance(ALICE),700);assert.deepEqual(await(await f.call(ALICE)).json(),{state:'eligible',remainingCents:0});

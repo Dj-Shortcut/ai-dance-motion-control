@@ -1,3 +1,4 @@
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -15,9 +16,10 @@ async function fixture({owner=false,preclean=false,postcleanup=true,schemaUpgrad
  const db=await mf.getD1Database('PRODUCTION_DB'),legacy=await mf.getD1Database('DB');
  const schema=await readFile(new URL('./production-schema.sql',import.meta.url),'utf8'),migration=await readFile(new URL('./production-migrations/0014_generation_workflows.sql',import.meta.url),'utf8');
  const marker='-- Generation workflow foundation v2 (inactive until separately integrated).';
- assert.equal(schema.split(marker)[1].trim(),migration.trim());
+ const customerMarker='-- Customer verification is separate from owner authority.';
+ assert.equal(schema.split(marker)[1].split(customerMarker)[0].trim(),migration.trim());
  async function apply(sql){for(const statement of sql.replace(/^\s*--.*$/gm,'').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();}
- if(schemaUpgrade){await apply(schema.split(marker)[0]);await db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('preexisting-income',?,123)").bind(OTHER).run();await apply(migration);}else await apply(schema);
+ if(schemaUpgrade){await apply(schema.split(marker)[0]);await db.prepare("INSERT INTO rig_ledger(event_id,user_id,delta) VALUES('preexisting-income',?,123)").bind(OTHER).run();await apply(migration);await apply(customerMarker+schema.split(customerMarker)[1]);}else await apply(schema);
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();
  await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('workflow-fixture','live','appgprj_6aeec13b50448191b88da670dac8aa98',SITE,BRIDGE,'pfl_FIXTURE',BRIDGE+'/api/payments/webhook').run();
  await seedVerifiedPaidCredit(db,USER,2000);
@@ -31,7 +33,7 @@ async function fixture({owner=false,preclean=false,postcleanup=true,schemaUpgrad
  const plan={version:'rig-workflow-v2',planHash:'',baseStepId:'base',baseRetailCents:300+(preclean?75:0),cleanupRetailCents:postcleanup?100:0,steps:[...(preclean?[pre]:[]),base,...(postcleanup?[post]:[])]};plan.planHash=await workflowPlanHash(plan);
  const usd=plan.steps.reduce((n,s)=>n+s.providerEstimateUsdMicros,0),totalRetail=plan.baseRetailCents+plan.cleanupRetailCents;
  const made=await parents.quotes.create({userId:USER,model:'fixture/base',input:{data:{quality:'pro',prompt:'fixture'},refs:[{id:'image',sha256:HASH}],workflow:plan,providerEstimateUsdMicros:usd},priceCents:totalRetail,pricingVersion:'fixture-v1',durationSeconds:6});
- const quote=await parents.quotes.getOwned(USER,made.id),key=crypto.randomUUID(),payload={quoteId:quote.id,idempotencyKey:key},verification=owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):undefined;
+ const quote=await parents.quotes.getOwned(USER,made.id),key=crypto.randomUUID(),payload={quoteId:quote.id,idempotencyKey:key},verification=owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):await verificationForCustomer(db,USER,payload,Date.now(),{env});
  const begun=await parents.jobs.begin({userId:USER,quoteId:quote.id,idempotencyKey:key,quote,verification,verificationPayload:payload});assert.equal(begun.kind,'created');
  const job=begun.job,identity={userId:USER,jobId:job.id},args=(stepId,more={})=>({...identity,stepId,...more});
  const init=()=>workflow.initialize({...identity,quote});
