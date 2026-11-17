@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {createHash,webcrypto} from 'node:crypto';
 import {enableVideoIfAvailable} from './frontend/multiuser/video-capability.mjs';
+import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 
 const source=name=>readFileSync(new URL(`./frontend/multiuser/${name}`,import.meta.url),'utf8');
 const settle=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Guided RIG flow did not settle');};
@@ -17,6 +18,7 @@ function draftDto(store,quoteId){
 function fixture({withGeneration=false,canShare=false,qualities=['standard','pro','edit-standard'],funding='credits',invitationLimits=null,videoConfigRead,statusResponse,shareRead,recentJob=null,reconcileJob=null,storage:savedStorage=new Map(),draftStorage:savedDraftStorage=null,persistDrafts=false,serverStore=privateDraftStore(),savedDraftResponse,legacyDraftServer=false,saveDraftResponse,assetRead,restoredDurationOffset=0}={}){
  const dom=new JSDOM(source('index.html'),{url:'https://rig.example.chatgpt.site/',runScripts:'outside-only'}),w=dom.window,d=w.document,el=id=>d.getElementById(id),calls=[],prepared=[],shared=[],storage=savedStorage,restoredUrls=new Map();
  w.Blob=Blob;Object.defineProperty(w,'crypto',{configurable:true,value:webcrypto});w.rigNativeSite=true;w.rigVideoEnabled=true;w.rigVideoFunding=funding;w.rigVideoMode='live';w.rigVideoQualities=qualities;w.rigSessionActive=()=>true;
+ installCustomerVerificationStub(w);
  if(invitationLimits){w.rigVideoInvitationLimits={...invitationLimits};w.rigVideoEnabled=invitationLimits.remainingAttempts>0;}
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
  if(savedDraftStorage)w.rigDraftStorage={getItem:key=>savedDraftStorage.get(key)??null,setItem:(key,value)=>savedDraftStorage.set(key,value),removeItem:key=>savedDraftStorage.delete(key)};

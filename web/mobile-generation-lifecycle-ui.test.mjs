@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
+import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8'),source=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const settle=async fn=>{for(let i=0;i<200;i++){if(fn())return;await new Promise(resolve=>setTimeout(resolve,2));}throw Error('Mobile generation did not settle');};
@@ -14,6 +15,7 @@ function fixture({owner=false,recast=false,submit,status,reconcile,draft,storage
  w.rigScopedStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
  const media={image:{blob:new Blob(['jpeg'],{type:'image/jpeg'})},video:{blob:new Blob(['mp4'],{type:'video/mp4'})},selectedSeconds:recast?6:5,face:null,angles:[],quality:recast?'human-recast':'pro',keepSound:true,steady:false,prompt:'Mijn eigen beweging.'};w.rigPreparedMedia=()=>media;w.rigGenerationQuality=()=>media.quality;
  w.rigOwnerVerification={prepare:async()=>{proofs++;return {proof:'explicit-device-proof'};},cancel:()=>{cancels++;}};
+ installCustomerVerificationStub(w);
  for(const name of ['intent','accepted','tracking','completed','failed','not-started'])d.addEventListener('rig-generation-'+name,event=>events.push([name,event.detail]));
  let assets=0;
  // This request boundary models the separately tested native binding: an old
