@@ -83,12 +83,15 @@ test('one-use D1 gate rejects concurrent replay, revoked key and counter race wh
  }finally{await f.mf.dispose();}
 });
 
-test('only a pure daily-limit decrease skips verification; summaries expose every changed safeguard and exact quote',async()=>{
+test('every finance-policy change requires verification; summaries expose every changed safeguard and exact quote',async()=>{
  const f=await fixture();try{
   const policy=await loadProfitPolicy(f.db),{version,...values}=policy,payload={expectedVersion:version,...values,dailyProviderLimitUsdMicros:values.dailyProviderLimitUsdMicros-100000};
-  const decrease=await f.call('/api/owner/security/verification/options',{operation:'finance-policy',payload});assert.equal(decrease.status,200);assert.deepEqual(await decrease.json(),{required:false});
+  const missing=await f.call('/api/owner/security/verification/options',{operation:'finance-policy',payload});assert.equal(missing.status,428);assert.equal((await missing.json()).code,'security_setup_required');
+  const unconfigured=await prepareOwnerMutation(f.db,{ownerId:OWNER,operation:'finance-policy',payload,now:NOW});assert.equal(unconfigured.ok,false);assert.equal((await unconfigured.response.json()).code,'security_setup_required');
   const weakened={...payload,minMarginBps:payload.minMarginBps-1};assert.equal((await f.call('/api/owner/security/verification/options',{operation:'finance-policy',payload:weakened})).status,428);
-  await installTestOwnerCredential(f.db,OWNER,{now:NOW});const changed=await f.options('finance-policy',weakened);assert.match(changed.summary,/Daglimiet Fal:/);assert.match(changed.summary,/Minimummarge:/);
+  await installTestOwnerCredential(f.db,OWNER,{now:NOW});const decrease=await f.options('finance-policy',payload);assert.equal(decrease.required,true);assert.match(decrease.summary,/Daglimiet Fal:/);
+  const unverified=await prepareOwnerMutation(f.db,{ownerId:OWNER,operation:'finance-policy',payload,now:NOW});assert.equal(unverified.ok,false);assert.equal((await unverified.response.json()).code,'step_up_required');
+  const changed=await f.options('finance-policy',weakened);assert.match(changed.summary,/Daglimiet Fal:/);assert.match(changed.summary,/Minimummarge:/);
   const quoteId=crypto.randomUUID(),generation={quoteId,idempotencyKey:crypto.randomUUID(),transferConsent:'fal-temporary-links-v1'};
   assert.equal((await f.call('/api/owner/security/verification/options',{operation:'owner-generation',payload:generation})).status,409);
   await f.db.prepare('INSERT INTO rig_generation_quotes(id,user_id,model,input_json,funding_kind,price_cents,pricing_version,duration_seconds,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(quoteId,OWNER,'fal-ai/kling-video/o3/standard/video-to-video/edit',JSON.stringify({providerEstimateUsdMicros:700000}),'owner-provider',100,'test',5,NOW+600000,NOW).run();

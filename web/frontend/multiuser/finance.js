@@ -201,7 +201,7 @@
   async function verifiedWrite(operation,path,payload){
     if(typeof window.rigOwnerVerification?.prepare!=='function')throw Error('Vernieuw RIG om deze handeling veilig te bevestigen.');
     const verification=await window.rigOwnerVerification.prepare(operation,payload);if(!current())return false;
-    if(operation!=='finance-policy'&&!verification)throw Error('De beveiligingscontrole is niet afgerond. Er is niets gewijzigd.');
+    if(!verification)throw Error('De beveiligingscontrole is niet afgerond. Er is niets gewijzigd.');
     if(operation==='finance-policy'&&data?.policy.version!==payload.expectedVersion){const error=Error('De aannames zijn ondertussen gewijzigd. Controleer ze opnieuw.');error.status=409;throw error;}
     await request(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...payload,...(verification?{verification}:{})})});return true;
   }

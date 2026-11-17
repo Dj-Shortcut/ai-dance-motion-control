@@ -46,6 +46,6 @@ export async function verificationFor(db,ownerId,operation,payload,now=Date.now(
  const request=new Request(OWNER_ORIGIN+'/api/owner/security/verification/options',{method:'POST',headers:{origin:OWNER_ORIGIN,'content-type':'application/json'},body:JSON.stringify({operation,payload})});
  const response=await handleOwnerSecurity(request,environment,{userId:ownerId,now}),options=await response.json();
  if(!response.ok)throw Object.assign(Error('Test security options rejected: '+JSON.stringify(options)),{status:response.status});
- if(options.required===false)return null;
+ if(options.required!==true)throw Error('Test security options did not require verification');
  return {challengeId:options.challengeId,credential:authenticator.assertion(options.publicKey)};
 }

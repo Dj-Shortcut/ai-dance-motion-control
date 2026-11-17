@@ -203,10 +203,10 @@ test('a new policy version loaded during verification discards the obsolete acti
  }finally{f.close();}
 });
 
-test('a safe decrease classified by the server sends the unchanged original policy without proof',async()=>{
+test('a missing assertion blocks a daily-limit decrease before any policy write',async()=>{
  const f=await ready(fixture({verificationHandler:()=>null}));try{
-  f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='5';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>f.calls.some(([,init])=>init.method==='POST'));
-  const body=JSON.parse(f.calls.find(([,init])=>init.method==='POST')[1].body);assert.deepEqual(body,f.verifications[0].payload);assert.equal(Object.hasOwn(body,'verification'),false);assert.equal(body.dailyProviderLimitUsdMicros,5000000);
+  f.d.getElementById('financePolicy-dailyProviderLimitUsdMicros').value='5';const form=f.d.getElementById('financePolicy-eurPerUsdMicros').form;form.id='policyForm';submit(f,'policyForm');await waitFor(()=>!form.querySelector('button').disabled);
+  assert.equal(f.calls.some(([,init])=>init.method==='POST'),false);assert.equal(f.verifications[0].payload.dailyProviderLimitUsdMicros,5000000);assert.match(f.d.getElementById('financeStatus').textContent,/beveiligingscontrole is niet afgerond/);
  }finally{f.close();}
 });
 
