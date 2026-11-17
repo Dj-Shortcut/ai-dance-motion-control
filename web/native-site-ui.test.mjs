@@ -98,6 +98,18 @@ test('native boot reuses the studio, keeps native sign-in anchors and mounts the
   listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(generationDisposed,1);started.dispose();assert.equal(generationDisposed,1);
  }finally{started.dispose();dom.window.close();}
 });
+for(const remainingAttempts of [2,0])test(`native boot retains the bounded invitation offer at ${remainingAttempts} remaining attempts`,async()=>{
+ const {dom,w,d}=page(),loaded=[];
+ const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:()=>()=>{},dispose(){},api:async path=>{
+  if(path==='/api/session')return Response.json({userId:alice});
+  if(path==='/api/video-config')return Response.json({enabled:true,funding:'credits',mode:'live',currency:'EUR',qualities:['standard','pro'],invitationLimits:{version:'first-tester-bounded-v1',maxDurationSeconds:10,remainingAttempts,referenceImages:1,orientation:'image'}});
+  throw Error('Unexpected request');
+ }};
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async name=>loaded.push(name)});try{
+  assert.equal(w.rigVideoEnabled,remainingAttempts>0);assert.equal(loaded.filter(name=>name==='generation-ui.js').length,1);assert.equal(w.rigVideoInvitationLimits.remainingAttempts,remainingAttempts);
+  assert.match(d.getElementById('videoAvailabilityNote').textContent,remainingAttempts?/€5 RIG-tegoed.*2 videopogingen.*10 seconden.*mislukte poging/:/2 videopogingen zijn gebruikt.*bestaande video’s blijven beschikbaar/);assert.doesNotMatch(d.getElementById('videoAvailabilityNote').textContent,/Fal|USD/);
+ }finally{app.dispose();dom.window.close();}
+});
 test('native explicit logout clears only the current account persisted trial slot before ending its binding',async()=>{
  const {dom,w,d}=page();
  const auth={currentSession:async()=>true,sessionSubject:async()=>alice,watchSession:()=>()=>{},dispose(){},api:async path=>Response.json(path==='/api/session'?{userId:alice}:{enabled:false})};

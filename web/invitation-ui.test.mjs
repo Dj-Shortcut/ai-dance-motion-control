@@ -67,7 +67,7 @@ test('successful explicit activation uses an authenticated JSON POST, clears the
   assert.deepEqual(JSON.parse(calls[0].options.body),{code});
   assert.equal(p.browser.location.href.includes(code),false);assert.equal(ui.element.textContent.includes(code),false);
   assert.equal(p.browser.sessionStorage.getItem(storageKey),null);assert.equal(refreshed,1);
-  assert.equal(button.hidden,true);assert.match(ui.element.textContent,/testtegoed is actief/);
+  assert.equal(button.hidden,true);assert.match(ui.element.textContent,/€5 RIG-tegoed is actief.*maximaal 2 videopogingen van 3 tot 10 seconden.*mislukte poging kan meetellen/);
  }finally{p.close()}
 });
 
@@ -116,7 +116,7 @@ test('a lost response preserves the first verified account across reloads and re
    const pending=captureSponsorInvitation({browser:retry.browser});
    const ui=mountSponsorInvitation({invitation:pending,binding:bind(async()=>{calls++;return Response.json({state:'redeemed',amountCents:500})}),document:retry.document});
    ui.element.querySelector('button').click();await waitFor(()=>storage.getItem(storageKey)===null);
-   assert.equal(calls,2);assert.match(ui.element.textContent,/testtegoed is actief/);
+   assert.equal(calls,2);assert.match(ui.element.textContent,/€5 RIG-tegoed is actief.*maximaal 2 videopogingen/);
   }finally{retry.close()}
  }finally{first.close()}
 });
