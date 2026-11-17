@@ -7,6 +7,7 @@ import {d1Limit} from './router.mjs';
 import {ensurePendingInvoices} from './invoice-store.mjs';
 import {prepareCommercialCheckout,commercialPackageData} from './commercial-checkout.mjs';
 import {prepareFundingAdmission,readFundingCoverage} from './funding-coverage.mjs';
+import {invitationRenderLimits} from './invitation-render-budget.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail=()=>Response.json({error:'Betalen is tijdelijk niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 class PreDispatchFailure extends Error {}
@@ -79,6 +80,7 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
    try{
     if(await d1Limit({env:mapped,category:url.pathname==='/api/session'?'session':'payment',userId:trustedUserId,method:req.method})!==true)return Response.json({error:'Te veel aanvragen.'},{status:429});
     if(url.pathname==='/api/payments/readiness'){
+     if(await invitationRenderLimits(mapped.DB,trustedUserId))return readinessReply({ready:false,reason:'invitation_limit',methods:[]});
      if(await d1Limit({env:mapped,category:'readiness',userId:null,method:'GET'})!==true)return readinessReply({ready:false,reason:'rate_limited',methods:[]},429);
      const result=await readiness(mapped,transport),value=await result.json();
      if(!value.ready)return readinessReply(value,result.status);
@@ -94,12 +96,17 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
      return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:false,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
     if(req.method==='POST'&&url.pathname==='/api/payments/create'){
+     // This bounded tester must never buy additional wallet credit while its
+     // two-attempt contract would prevent delivery. Existing orders/webhooks
+     // remain recoverable, and no checkout or billing document is created.
+     if(await invitationRenderLimits(mapped.DB,trustedUserId))return readinessReply({error:'Dit account gebruikt de begrensde gratis test. Extra tegoed kopen is hiervoor niet beschikbaar.'},409);
      const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;
     }
     const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit})(req,mapped,trustedUserId)||new Response(null,{status:404});
     if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
      const value=await response.json();
      const stock=await coverage(mapped),packages=url.pathname==='/api/payments/packages'?value.packages:configuredPackages(mapped);
+     if(await invitationRenderLimits(mapped.DB,trustedUserId))return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:{...commercialPackageData(env),packages:packages.map(pkg=>({...pkg,available:false}))}),currency:'EUR',mode:'live',purchasesEnabled:false,purchasePauseReason:'invitation_limit'},{status:response.status,headers:response.headers});
      return Response.json({...value,...(url.pathname==='/api/payments/balance'?{frozen:value.frozen===1||value.frozen===true}:{...commercialPackageData(env),packages:packages.map(pkg=>({...pkg,available:pkg.credits<=capacity(stock)}))}),currency:'EUR',mode:'live',purchasesEnabled:maySell(stock,packages),...(maySell(stock,packages)?{}:{purchasePauseReason:'funding_unavailable'})},{status:response.status,headers:response.headers});
     }
     // A document outage must never hide a verified payment or cause a retry

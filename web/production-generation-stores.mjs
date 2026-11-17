@@ -6,6 +6,7 @@ import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
 import {isProviderBillingRejection} from './provider-response.mjs';
 import {prepareOwnerFundingAdmission,fundingCoverageCoefficient} from './funding-coverage.mjs';
 import {issuedCreditCentsSQL} from './credit-backing.mjs';
+import {invitationRenderLimits,invitationRenderContract,validInvitationRenderContract,checkInvitationRate,invitationPolicyPermitted,invitationAdmissionPredicate} from './invitation-render-budget.mjs';
 
 const requestId=/^[A-Za-z0-9_-]{1,100}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -27,7 +28,7 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
  const ownerFor=user=>productionFundingKind(productionContext,user)==='owner-provider'?user:'';
  const mode="EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')";
  const pendingProviderBudget=workflowProviderBudgetPredicate({enabled:productionContext.env.RIG_OWNER_CLEANUP_VALIDATION_ENABLED==='yes'});
- const jobSelect='SELECT j.*,q.funding_kind,q.input_json FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents';
+ const jobSelect='SELECT j.*,q.funding_kind,q.input_json,q.model,q.duration_seconds FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id AND q.price_cents=j.price_cents';
  const getJob=(user,id)=>db.prepare(jobSelect+' WHERE j.user_id=? AND j.id=?').bind(user,id).first();
  const getByKey=(user,key)=>db.prepare(jobSelect+' WHERE j.user_id=? AND j.idempotency_key=?').bind(user,key).first();
  const ownerProof=(j,state='authorized')=>`EXISTS(SELECT 1 FROM rig_generation_quotes fq JOIN rig_owner_provider_usage u ON u.quote_id=fq.id AND u.user_id=fq.user_id
@@ -86,6 +87,14 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
    if(!profitable(profitSnapshot))throw Error('Insufficient contribution margin');
    // Ignore any caller-supplied snapshot; costs and funding are server-owned.
    input={...input,profitSnapshot};
+   // The first tester has a separate full-output purchase limit. The caller
+   // cannot insert a contract, and ordinary paid/owner work cannot opt into it.
+   delete input.invitationRender;
+   if(await invitationRenderLimits(db,userId)){
+    if(!invitationPolicyPermitted(policy))throw Error('Invitation conversion reserve unavailable');
+    input.invitationRender=invitationRenderContract({model,input,durationSeconds});
+    checkInvitationRate({model,input,durationSeconds},providerEstimateUsdMicros);
+   }
    const id=crypto.randomUUID(),now=Date.now(),expiresAt=now+600000;
    const result=await db.prepare(`INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at,funding_kind)
     SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${mode}`).bind(id,userId,model,JSON.stringify(input),priceCents,pricingVersion,durationSeconds,expiresAt,now,fundingKind).run();
@@ -154,6 +163,10 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
    if(!row||row.state!=='submitting'||row.fal_request_id!==null||row.poll_token!==null)return false;
    const input=JSON.parse(row.input_json),snapshot=input.profitSnapshot;
    if(!validProfitSnapshot(snapshot,{policy,fundingKind:row.funding_kind,retailPriceCents:row.price_cents,providerEstimateUsdMicros:input.providerEstimateUsdMicros})||!profitable(snapshot))return false;
+   if(await invitationRenderLimits(db,user)){
+    if(!invitationPolicyPermitted(policy)||!validInvitationRenderContract({model:row.model,input,durationSeconds:row.duration_seconds}))return false;
+    try{checkInvitationRate({model:row.model,input,durationSeconds:row.duration_seconds},input.providerEstimateUsdMicros)}catch{return false}
+   }
    const now=Date.now(),day=new Date(now).toISOString().slice(0,10),usd=snapshot.providerEstimateUsdMicros;
    const eligible=await db.prepare(`SELECT 1 AS allowed FROM rig_generation_jobs j JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id
     WHERE j.id=? AND j.user_id=? AND j.state='submitting' AND j.fal_request_id IS NULL AND j.poll_token IS NULL AND q.expires_at>?
@@ -175,6 +188,7 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
       AND min_margin_bps=? AND min_price_cents=? AND min_pro_price_cents=?)
      AND NOT EXISTS(SELECT 1 FROM rig_generation_costs WHERE job_id=j.id)
      AND COALESCE((SELECT SUM(c.provider_estimate_usd_micros) FROM rig_generation_costs c JOIN rig_generation_jobs pending ON pending.id=c.job_id WHERE ${pendingProviderBudget}),0)+?<=?
+     AND (${invitationAdmissionPredicate()})
      AND (${lifetime.sql})`)
     .bind(usd,day,now,JSON.stringify(snapshot),user,id,row.input_json,row.funding_kind,now,ownerFor(user),policy.version,policy.dailyProviderLimitUsdMicros,
      policy.eurPerUsdMicros,policy.providerVatBps,policy.paymentFeeBps,policy.failureBufferBps,policy.preparationCents,policy.minMarginBps,policy.minPriceCents,policy.minProPriceCents,day,usd,policy.dailyProviderLimitUsdMicros,...lifetime.params);
