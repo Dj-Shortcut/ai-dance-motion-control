@@ -160,3 +160,10 @@ body.guided-flow{--mint:#8fe3b8;--muted:#a9b3b0;background:#101416;color:#eef2f0
 .guided-flow main:has(.result:not([hidden])) footer .actions{display:flex;align-items:center;justify-content:space-between;width:100%;gap:16px}
 .guided-flow main:has(.result:not([hidden])) #prepare{flex:none;width:auto}
 .guided-flow main:has(.result:not([hidden])) #newVideo{flex:none;margin-left:auto;align-self:auto}
+
+.customer-security-panel{margin:16px 0;padding:14px 16px;border:1px solid #40685a;border-radius:10px;background:#192a23}
+.customer-security-panel p{margin:0 0 12px;line-height:1.5}
+.customer-security-panel button{width:100%;min-height:44px;padding:12px 16px;border:1px solid #78a58b;border-radius:8px;background:#9ac5a8;color:#111b16;font:inherit;font-weight:650;cursor:pointer}
+.customer-security-panel button:disabled{opacity:.55;cursor:default}
+.customer-security-panel button:focus-visible{outline:2px solid #c3e7d1;outline-offset:3px}
+.customer-verification-summary{overflow-wrap:anywhere}
