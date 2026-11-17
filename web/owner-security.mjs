@@ -40,11 +40,6 @@ function canonical(operation,payload){
  return JSON.stringify(out);
 }
 export async function ownerMutationDigest(operation,payload){return ownerSecurityHash(operation+'\0'+canonical(operation,payload));}
-async function safeDecrease(db,operation,payload){
- if(operation!=='finance-policy')return false;
- const row=await db.prepare('SELECT * FROM rig_finance_policy WHERE id=1').first();
- return Boolean(row&&row.version===payload.expectedVersion&&Number.isSafeInteger(payload.dailyProviderLimitUsdMicros)&&payload.dailyProviderLimitUsdMicros>=100000&&payload.dailyProviderLimitUsdMicros<row.daily_provider_limit_usd_micros&&policyNames.slice(1).every((name,i)=>name==='dailyProviderLimitUsdMicros'||payload[name]===row[policyColumns[i]]));
-}
 function validClientData(credential,type){
  if(!credential||typeof credential!=='object'||Array.isArray(credential)||credential.type!=='public-key'||!B64.test(credential.id||'')||credential.rawId!==credential.id)return false;
  const encoded=credential.response?.clientDataJSON;if(!B64.test(encoded||''))return false;
@@ -84,7 +79,6 @@ async function operationSummary(db,ownerId,operation,payload,now){
 export async function prepareOwnerMutation(db,{ownerId,operation,payload,verification,now=Date.now()}={}){
  if(!USER.test(ownerId||'')||!Number.isSafeInteger(now))return fail('verification_invalid','Bevestiging is niet beschikbaar.');
  let digest;try{digest=await ownerMutationDigest(operation,payload);}catch{return fail('verification_invalid','Controleer de beheerwijziging.',400);}
- if(await safeDecrease(db,operation,payload))return {ok:true,before:[],gate:{sql:'1',params:[]},required:false};
  const keys=await active(db,ownerId);if(!keys.length)return fail('security_setup_required','Stel eerst je beheerderspasskey in.');
  if(!exact(verification,['challengeId','credential'])||!UUID.test(verification.challengeId||''))return fail('step_up_required','Bevestig deze wijziging met je passkey.');
  const challenge=await db.prepare('SELECT * FROM rig_owner_security_challenges_v2 WHERE id=? AND owner_id=?').bind(verification.challengeId,ownerId).first();
@@ -158,7 +152,6 @@ export async function handleOwnerSecurity(req,env,{userId,now=Date.now()}={}){
   if(url.pathname==='/api/owner/security/verification/options'){
    if(!exact(data,['operation','payload']))return json({error:'Controleer de beheerwijziging.'},400);
    let payload,digest;try{payload=canonical(data.operation,data.payload);digest=await ownerMutationDigest(data.operation,data.payload);}catch{return json({error:'Controleer de beheerwijziging.'},400);}
-   if(await safeDecrease(db,data.operation,data.payload))return json({required:false});
    const keys=await active(db,userId);if(!keys.length)return fail('security_setup_required','Stel eerst je beheerderspasskey in.').response;
    let summary;try{summary=await operationSummary(db,userId,data.operation,data.payload,now);}catch{return json({error:'Deze opdracht of beheerinstelling is niet meer beschikbaar. Vernieuw en probeer opnieuw.'},409);}
    const count=await db.prepare("SELECT COUNT(*) n FROM rig_owner_security_challenges_v2 WHERE owner_id=? AND operation<>'registration' AND expires_at>? AND used_at IS NULL AND attempted_at IS NULL").bind(userId,now).first();if(count.n>=5)return json({error:'Er staan al bevestigingen klaar. Wacht even en probeer opnieuw.'},429);

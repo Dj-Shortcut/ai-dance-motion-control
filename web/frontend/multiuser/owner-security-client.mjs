@@ -66,8 +66,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   try{
    const options=await call('/api/owner/security/verification/options',{operation,payload:frozen});
    if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
-   if(operation==='finance-policy'&&options?.required===false&&!options.challengeId&&!options.publicKey)return null;
-   if(!identifier(options?.challengeId)||!options.publicKey||!Number.isFinite(options.expiresAt)||options.expiresAt<=Date.now())throw failure('Vraag een nieuwe beveiligingscontrole aan.','verification_expired');
+   if(options?.required!==true||!identifier(options.challengeId)||!options.publicKey||!Number.isFinite(options.expiresAt)||options.expiresAt<=Date.now())throw failure('Vraag een nieuwe beveiligingscontrole aan.','verification_expired');
    if(!supported())throw failure('Bevestigen op je apparaat is hier niet beschikbaar. Open RIG in Chrome of Safari.','browser_unsupported');
    await confirm(options.summary);check();if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
    const credential=await webauthn.startAuthentication({optionsJSON:options.publicKey});check();

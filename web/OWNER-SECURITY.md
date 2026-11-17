@@ -1,6 +1,6 @@
 # RIG owner verification
 
-Customer purchases keep the existing account and payment checks. Reading the owner's financial report does not prompt for a passkey. Changing financial records or cost policy requires a fresh device-verified passkey assertion for that exact request. The only exception is lowering the daily Fal limit while keeping every other policy field unchanged; the server classifies this and the policy version is checked again by the write.
+Customer purchases keep the existing account and payment checks. Reading the owner's financial report does not prompt for a passkey. Every change to financial records or cost policy, including lowering the daily Fal limit, requires a fresh device-verified passkey assertion for that exact request.
 
 Direct owner-funded generation also requires a fresh assertion for its quote and request key. Customer-funded generation retains the prepaid ledger and shared provider-cost ceiling. No payment-provider payout operation is exposed by these features.
 

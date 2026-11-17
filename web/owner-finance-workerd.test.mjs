@@ -53,13 +53,21 @@ async function fixture(){
 }
 const expense=(options={})=>({idempotencyKey:crypto.randomUUID(),category:'hosting',date:'2026-11-09',amountCents:500,note:'Invoice including non-deductible purchase tax',...options});
 
-test('an owner session without a fresh device proof cannot increase spend or create an expense',async()=>{
+test('an owner session without a fresh device proof cannot change the provider budget or create an expense',async()=>{
  const f=await fixture();try{
   const before=await f.report(),{version,updatedAt,...values}=before.policy;
-  for(const [path,payload]of [['/api/owner/finance/expenses',expense()],['/api/owner/finance/policy',{expectedVersion:version,...values,dailyProviderLimitUsdMicros:values.dailyProviderLimitUsdMicros+1000000}]]){
+  for(const [path,payload]of [['/api/owner/finance/expenses',expense()],['/api/owner/finance/policy',{expectedVersion:version,...values,dailyProviderLimitUsdMicros:values.dailyProviderLimitUsdMicros+1000000}],['/api/owner/finance/policy',{expectedVersion:version,...values,dailyProviderLimitUsdMicros:values.dailyProviderLimitUsdMicros-100000}]]){
    const response=await handleOwnerFinance(f.request(path,payload),f.env,{userId:OWNER,now:NOW});assert.equal(response.status,428,await response.clone().text());assert.match((await response.json()).code,/security_setup_required|step_up_required/);
   }
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_expenses').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_policy_history').first()).n,0);assert.equal((await loadProfitPolicy(f.db)).version,version);
+ }finally{await f.mf.dispose();}
+});
+
+test('a passkey-authorized daily provider limit decrease remains available',async()=>{
+ const f=await fixture();try{
+  const before=await f.report(),{version,updatedAt,...values}=before.policy,limit=values.dailyProviderLimitUsdMicros-100000;
+  const response=await f.call('/api/owner/finance/policy',{expectedVersion:version,...values,dailyProviderLimitUsdMicros:limit});assert.equal(response.status,200,await response.clone().text());const saved=await response.json();
+  assert.equal(saved.policy.dailyProviderLimitUsdMicros,limit);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_finance_policy_history').first()).n,1);assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_owner_security_audit WHERE event='verification-consumed' AND operation='finance-policy'").first()).n,1);
  }finally{await f.mf.dispose();}
 });
 
