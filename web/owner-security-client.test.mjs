@@ -6,7 +6,7 @@ import {createOwnerVerification} from './frontend/multiuser/owner-security-clien
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
 const waitFor=async fn=>{for(let i=0;i<200;i++){if(fn())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('Security UI did not settle');};
 const candidateId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const options=(number=1)=>({challengeId:'11111111-1111-4111-8111-'+String(number).padStart(12,'0'),expiresAt:Date.now()+60000,publicKey:{challenge:'test-only-challenge-'+number,userVerification:'required'},summary:'Daglimiet Fal: US$10 → US$15'});
+const options=(number=1)=>({required:true,challengeId:'11111111-1111-4111-8111-'+String(number).padStart(12,'0'),expiresAt:Date.now()+60000,publicKey:{challenge:'test-only-challenge-'+number,userVerification:'required'},summary:'Daglimiet Fal: US$10 → US$15'});
 function fixture({handler,supported=true,authenticate,register}={}){
  const dom=new JSDOM('<button id="authLogout">Afmelden</button><section id="security"></section>',{url:'https://rig.example.chatgpt.site/'}),win=dom.window,d=win.document,calls=[],authCalls=[],registerCalls=[],timers=new Map();
  win.HTMLDialogElement.prototype.showModal=function(){this.open=true;};win.HTMLDialogElement.prototype.close=function(){this.open=false;};
@@ -77,7 +77,7 @@ test('every operation rejects authorization-free or malformed verification optio
  for(const operation of ['finance-policy','finance-expense','owner-generation']){
   const unexpected=fixture({handler:()=>Response.json({required:false})});try{await assert.rejects(unexpected.client.prepare(operation,{}),{code:'verification_expired'});assert.equal(unexpected.authCalls.length,0);}finally{unexpected.close();}
  }
- for(const invalid of [{},{...options(),required:false},{required:true,publicKey:{}}]){
+ for(const invalid of [{},Object.fromEntries(Object.entries(options()).filter(([key])=>key!=='required')),{...options(),required:false},{...options(),required:'true'},{required:true,publicKey:{}}]){
   const malformed=fixture({handler:()=>Response.json(invalid)});try{await assert.rejects(malformed.client.prepare('finance-policy',{}),{code:'verification_expired'});assert.equal(malformed.authCalls.length,0);}finally{malformed.close();}
  }
 });
