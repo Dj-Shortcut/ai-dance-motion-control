@@ -10,6 +10,7 @@ import {createD1GenerationStores} from './d1.mjs';
 import {createDurableMediaLease} from './durable-media-lease.mjs';
 import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import {RECAST_BILLING} from './price-preflight.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
@@ -57,6 +58,11 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
    const prior=await db.prepare('SELECT id FROM rig_generation_jobs WHERE user_id=? AND idempotency_key=?').bind(ALICE,data.idempotencyKey).first();
    if(q?.funding_kind==='owner-provider'&&!prior)data={...data,verification:await verificationFor(db,ALICE,'owner-generation',data,Date.now(),{env})};
   }
+  if(path==='/api/generations'&&data&&!data.verification){
+   const q=await db.prepare('SELECT user_id,funding_kind FROM rig_generation_quotes WHERE id=?').bind(data.quoteId).first();
+   const prior=q&&await db.prepare('SELECT id FROM rig_generation_jobs WHERE user_id=? AND idempotency_key=?').bind(q.user_id,data.idempotencyKey).first();
+   if(q?.funding_kind==='credits'&&!prior&&q.user_id!==env.RIG_PRODUCTION_OWNER_USER_ID){const payload={quoteId:data.quoteId,idempotencyKey:data.idempotencyKey,...(data.transferConsent?{transferConsent:data.transferConsent}:{})};data={...data,verification:await verificationForCustomer(db,q.user_id,payload,Date.now(),{env})};}
+  }
   return handler(new Request(SITE+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{origin:SITE,'content-type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})}));
  };
  const balance=async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) AS cents FROM rig_ledger WHERE user_id=?').bind(ALICE).first()).cents;
@@ -68,8 +74,14 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
  return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,queueInputs,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
 }
 
+async function beginCustomer(db,stores,args){
+ const payload={quoteId:args.quoteId,idempotencyKey:args.idempotencyKey,...(args.quote?.input?.data?.transferPolicy==='fal-temporary-links-v1'?{transferConsent:'fal-temporary-links-v1'}:{})};
+ return stores.jobs.begin({...args,verificationPayload:payload,verification:await verificationForCustomer(db,args.userId,payload)});
+}
+
 async function seedFirstTester(f){
  const now=Date.now();
+ await f.db.prepare('INSERT OR IGNORE INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES(?,?,?,?)').bind(f.env.RIG_PRODUCTION_SITE_ID,'f'.repeat(64),ALICE,now).run();
  await f.db.prepare("INSERT INTO rig_production_invitation VALUES(1,?,500,?,?,'rig-public-test-v1',1,?,?,?)").bind('a'.repeat(64),now-10,now+86400000,now-20,ALICE,now).run();
  await f.db.prepare("INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES('promo:rig-first-tester-v1',?,NULL,500)").bind(ALICE).run();
 }
@@ -91,6 +103,21 @@ test('first tester uses the normal private video path with image orientation and
  }finally{await f.mf.dispose()}
 });
 
+test('customer login, quote approval and funded credit alone cannot reserve or dispatch a video without fresh passkey proof',async()=>{
+ const f=await fixture();try{
+  await seedFirstTester(f);const h=await f.service(),selection={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
+  const q=await(await f.call(h,'/api/generation-quotes',selection)).json(),payload={quoteId:q.id,idempotencyKey:'customer-raw-proof'};
+  const raw=data=>h(new Request(SITE+'/api/generations',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}));
+  let response=await raw(payload);assert.equal(response.status,428);assert.equal((await response.json()).code,'security_setup_required');
+  assert.equal(await f.balance(),500);assert.equal(f.providerUploads(),0);assert.equal(f.stats().dispatches,0);
+  const verification=await verificationForCustomer(f.db,ALICE,payload,Date.now(),{env:f.env});
+  response=await raw(payload);assert.equal(response.status,428);assert.equal((await response.json()).code,'step_up_required');
+  response=await raw({...payload,idempotencyKey:'changed-operation',verification});assert.equal(response.status,428);assert.equal(await f.balance(),500);
+  response=await raw({...payload,verification});assert.equal(response.status,202,await response.clone().text());const job=await response.json();assert.equal(job.state,'queued');assert.equal(f.stats().dispatches,1);
+  const replay=await raw({...payload,verification});assert.equal(replay.status,200);assert.equal((await replay.json()).id,job.id);assert.equal(f.stats().dispatches,1);
+ }finally{await f.mf.dispose()}
+});
+
 test('first tester rejects extra identity, price increases and expensive modes before provider work',async()=>{
  const f=await fixture();try{
   await seedFirstTester(f);const h=await f.service();const select={imageId:f.imageId,videoId:f.videoId,quality:'pro',keepSound:false,steadyCamera:false};
@@ -109,7 +136,7 @@ test('first tester refunds, new paid credits and UTC rollover never reopen its m
   await seedFirstTester(f);const context=await createProductionGenerationContext(f.env),stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:context});
   const args={userId:ALICE,model:'fal-ai/kling-video/v3/pro/motion-control',priceCents:125,pricingVersion:'bounded',durationSeconds:4,input:{data:{quality:'pro',faceId:null,angleIds:[]},refs:[{id:f.imageId,kind:'image',sha256:'a'.repeat(64)},{id:f.videoId,kind:'video',sha256:'b'.repeat(64)}],providerEstimateUsdMicros:400000}};
   for(let n=0;n<3;n++){
-   const made=await stores.quotes.create(args),quote=await stores.quotes.getOwned(ALICE,made.id),started=await stores.jobs.begin({userId:ALICE,quoteId:made.id,idempotencyKey:'permanent-'+n,quote});assert.equal(started.kind,'created');
+   const made=await stores.quotes.create(args),quote=await stores.quotes.getOwned(ALICE,made.id),started=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:made.id,idempotencyKey:'permanent-'+n,quote});assert.equal(started.kind,'created');
    assert.equal(await stores.jobs.admitProviderWork(ALICE,started.job.id),n<2);await stores.jobs.markPreparationFailed(ALICE,started.job.id);assert.equal(await f.balance(),n===2?1000:500);
    await f.db.prepare("UPDATE rig_generation_costs SET budget_day='2000-01-01'").run();
    if(n===1)await seedVerifiedPaidCredit(f.db,ALICE,500);
@@ -175,11 +202,11 @@ test('production capability cannot be forged or moved to test storage; live rele
   const lease=createDurableMediaLease(f.db,{mode:'live',productionContext:context}),claim=await lease.acquire(ALICE);assert.equal(claim.state,'acquired');assert.equal((await lease.acquire(BOB)).state,'busy');await lease.complete(claim.token,'settled');
   assert.equal((await f.legacy.prepare('SELECT COUNT(*) n FROM rig_media_work_lock').first()).n,0);
   await f.fund();const stores=createD1GenerationStores(f.db,{mode:'live',dispatchMode:'paid',productionContext:context}),q=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote=await stores.quotes.getOwned(ALICE,q.id);
-  const first=await stores.jobs.begin({userId:ALICE,quoteId:q.id,idempotencyKey:'prepare-refund',quote});assert.equal(first.kind,'created');assert.equal(await f.balance(),400);
+  const first=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q.id,idempotencyKey:'prepare-refund',quote});assert.equal(first.kind,'created');assert.equal(await f.balance(),400);
   await stores.jobs.markPreparationFailed(ALICE,first.job.id);await stores.jobs.markPreparationFailed(ALICE,first.job.id);assert.equal(await f.balance(),500);assert.equal(await stores.jobs.confirmFailureRefund(ALICE,first.job.id),true);assert.equal(await stores.jobs.confirmFailureRefund(BOB,first.job.id),false);
-  const q2=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote2=await stores.quotes.getOwned(ALICE,q2.id),second=await stores.jobs.begin({userId:ALICE,quoteId:q2.id,idempotencyKey:'provider-refund',quote:quote2});assert.equal(second.kind,'created');assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),true);assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),false);await stores.jobs.markSubmitted(ALICE,second.job.id,'known-request');
+  const q2=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote2=await stores.quotes.getOwned(ALICE,q2.id),second=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q2.id,idempotencyKey:'provider-refund',quote:quote2});assert.equal(second.kind,'created');assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),true);assert.equal(await stores.jobs.authorizeDispatch(ALICE,second.job.id),false);await stores.jobs.markSubmitted(ALICE,second.job.id,'known-request');
   const poll=await stores.jobs.claimPoll(ALICE,second.job.id);assert.equal(poll.kind,'acquired');await stores.jobs.markProviderFailed(ALICE,second.job.id,'known-request',poll.token);assert.equal(await f.balance(),500);assert.equal(await stores.jobs.confirmFailureRefund(ALICE,second.job.id,'known-request'),true);
-  const q3=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote3=await stores.quotes.getOwned(ALICE,q3.id),unknown=await stores.jobs.begin({userId:ALICE,quoteId:q3.id,idempotencyKey:'unknown-held',quote:quote3});await stores.jobs.authorizeDispatch(ALICE,unknown.job.id);await stores.jobs.markUnknown(ALICE,unknown.job.id);assert.equal(await f.balance(),400);await assert.rejects(stores.jobs.markPreparationFailed(ALICE,unknown.job.id));assert.equal(await stores.jobs.confirmFailureRefund(ALICE,unknown.job.id),false);assert.equal(await f.balance(),400);
+  const q3=await stores.quotes.create({...quoteArgs,userId:ALICE}),quote3=await stores.quotes.getOwned(ALICE,q3.id),unknown=await beginCustomer(f.db,stores,{userId:ALICE,quoteId:q3.id,idempotencyKey:'unknown-held',quote:quote3});await stores.jobs.authorizeDispatch(ALICE,unknown.job.id);await stores.jobs.markUnknown(ALICE,unknown.job.id);assert.equal(await f.balance(),400);await assert.rejects(stores.jobs.markPreparationFailed(ALICE,unknown.job.id));assert.equal(await stores.jobs.confirmFailureRefund(ALICE,unknown.job.id),false);assert.equal(await f.balance(),400);
  }finally{await f.mf.dispose()}
 });
 

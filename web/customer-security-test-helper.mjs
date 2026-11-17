@@ -7,12 +7,16 @@ import {RECAST_MODEL} from './recast-contract.mjs';
 const installed=new WeakMap(),encoded=value=>Buffer.from(value).toString('base64url');
 export async function installTestCustomerCredential(db,userId,{now=Date.now()}={}){
  let users=installed.get(db);if(!users){users=new Map();installed.set(db,users);}if(users.has(userId))return users.get(userId);
+ const pending=(async()=>{
  const tenant=await db.prepare('SELECT * FROM rig_production_tenant WHERE id=1').first();if(!tenant)throw Error('Test tenant is required');
  await db.prepare('INSERT OR IGNORE INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES(?,?,?,?)').bind(tenant.site_id,await customerSecurityHash('TEST ONLY customer:'+userId),userId,now).run();
  const authenticator=createTestAuthenticator({userHandle:encoded(userId)}),publicKey=encoded(authenticator.publicKey),fingerprint=await customerSecurityHash(authenticator.credentialId+'\0'+publicKey);
  await db.prepare(`INSERT INTO rig_customer_credentials(credential_id,user_id,public_key,user_handle,counter,device_type,backed_up,transports_json,label,fingerprint,state,created_at,activated_at)
   VALUES(?,?,?,?,0,'singleDevice',0,'["internal"]','TEST ONLY software authenticator',?,'active',?,?)`).bind(authenticator.credentialId,userId,publicKey,authenticator.userHandle,fingerprint,now,now).run();
- const value={...authenticator,fingerprint};users.set(userId,value);return value;
+ return {...authenticator,fingerprint};
+ })();
+ users.set(userId,pending);
+ try{return await pending}catch(error){if(users.get(userId)===pending)users.delete(userId);throw error}
 }
 async function fixtureEnvironment(db){
  const row=await db.prepare('SELECT * FROM rig_production_tenant WHERE id=1').first();if(!row)throw Error('Test tenant is required');

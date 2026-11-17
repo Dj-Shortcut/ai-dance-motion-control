@@ -1,3 +1,4 @@
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -23,7 +24,7 @@ async function fixture({owner=false,daily=1000000}={}){
   const made=await stores.quotes.create({userId:user,model:'fal-ai/kling-video/o3/standard/video-to-video/edit',input:{data:{quality:'edit-standard'},providerEstimateUsdMicros:usd},priceCents:price,pricingVersion:'approved-prices-v1',durationSeconds:5});
   return stores.quotes.getOwned(user,made.id);
  }
- async function begin(q){const idempotencyKey=crypto.randomUUID(),payload={quoteId:q.id,idempotencyKey},verification=q.fundingKind==='owner-provider'?await verificationFor(db,q.userId,'owner-generation',payload,Date.now(),{env}):undefined;return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey,quote:q,verification,verificationPayload:payload});}
+ async function begin(q){const idempotencyKey=crypto.randomUUID(),payload={quoteId:q.id,idempotencyKey},verification=q.fundingKind==='owner-provider'?await verificationFor(db,q.userId,'owner-generation',payload,Date.now(),{env}):await verificationForCustomer(db,q.userId,payload,Date.now(),{env});return stores.jobs.begin({userId:q.userId,quoteId:q.id,idempotencyKey,quote:q,verification,verificationPayload:payload});}
  const balance=async(user=USERS[0])=>(await db.prepare('SELECT SUM(delta) amount FROM rig_ledger WHERE user_id=?').bind(user).first()).amount;
  const costs=async()=>(await db.prepare('SELECT * FROM rig_generation_costs').all()).results;
  return {mf,db,env,stores,quote,begin,balance,costs};

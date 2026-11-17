@@ -222,6 +222,41 @@ Publiceer private backend én bijbehorende Site-weergave. Verander daarna alleen
 de exacte nog ongeclaimde uitnodiging; claim of crediteer nooit namens de tester.
 Lokale providerfixtures zijn geen nieuwe betaalde Fal-render.
 
+## Klantbevestiging vóór ieder videodebet
+
+Alle nieuwe productie-opdrachten met `funding_kind='credits'` vereisen een
+verse WebAuthn-passkeybevestiging met gebruikersverificatie. De eerste
+klantregistratie wordt pas actief na een echte, voor de aangemelde
+productie-identiteit gecontroleerde registratieceremonie. Zij verleent geen
+eigenaarrechten. De server bewaart alleen de publieke sleutel; een ingetrokken
+of bestaande klantpasskey kan niet met alleen een ingelogde sessie worden
+vervangen. Sleutelverlies vereist de afzonderlijke hulpprocedure.
+
+De bevestiging bindt klant, quote-ID, aanvraagcode, model, media-/optie-JSON,
+bedrag, duur, prijsversie, vervaldatum en eventuele overdrachtstoestemming.
+Challengeverbruik, sleutelteller, audit, tegoedreservering en nieuwe job staan
+in dezelfde D1-transactie. Annuleren of een ontbrekende/gewijzigde/verlopen
+bevestiging start geen Fal-werk. Instellen van een passkey start evenmin een
+video; de klant bevestigt daarna uitdrukkelijk de video opnieuw. Herstel van
+een reeds aanvaarde opdracht is een uitlezing en vraagt geen tweede betaalde
+inzending. De eigenaar behoudt zijn bestaande afzonderlijke verificatiepad.
+
+Pas eerst de additieve migratie `0016_customer_security.sql` toe, met beleid
+`enabled=0`. Zij maakt alleen aparte klantbeveiligingstabellen, indexen en de
+rollbacktrigger; bestaande geld-, klant- en eigenaarsregistraties blijven
+behouden. Publiceer daarna private backend, publieke relay en de bijbehorende
+Sites-client. Schakel pas na verificatie `rig_customer_security_policy.enabled`
+op 1: de trigger verhindert dan ook jobcreatie met oudere servercode zonder
+de exacte verbruikte klantbevestiging. Nieuwe code vereist de klantbevestiging
+zelfstandig, ook tijdens die uitrol vóór triggeractivering. Verse schema's
+vereisen naast `production-schema.sql` ook migratie 0016 voor de trigger.
+
+Dit beveiligt het verbruiken van RIG-tegoed. Een bank-/kaartbetaling voor nieuw
+tegoed blijft de afzonderlijke Mollie-checkout en bankbevestiging doorlopen.
+WebAuthn-cryptografietests met een softwareauthenticator bewijzen de
+servercontroles, niet een uitgevoerde Face ID- of Windows Hello-handeling door
+de echte tester. Die handeling gebeurt op zijn eigen apparaat.
+
 ## Bewijs voor de eerste verkoop
 
 Een volledige eerste **live** klantaankoop met automatische tegoedboeking,

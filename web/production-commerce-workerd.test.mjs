@@ -6,6 +6,7 @@ import {build} from 'esbuild';
 import {Miniflare} from 'miniflare';
 import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 import {signSitesBridgeRequest} from './sites-bridge-protocol.mjs';
+import {createTestAuthenticator} from './owner-security-test-helper.mjs';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ac'.repeat(32);
 async function setup(){
  const dir=await mkdtemp(join(process.cwd(),'.rig-commerce-test-'));let mf;
@@ -26,6 +27,23 @@ async function seeded(f){await f.db.prepare("INSERT INTO rig_payment_environment
 const headers=(subject,user)=>({'oai-authenticated-user-id':subject,...(user?{'x-rig-expected-user':user}:{}),origin:SITE,'content-type':'application/json'});
 async function stats(f){return(await f.privateService.fetch('https://fixture.invalid/fixture/stats')).json()}
 const signed=async(subject,path,options={})=>{const request=await signSitesBridgeRequest({env:{RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_SITES_BRIDGE_ORIGIN:BRIDGE,RIG_SITES_BRIDGE_KEY:KEY},subject,path,...options});request.headers.set('cf-connecting-ip','192.0.2.20');return request};
+
+test('native Site → relay → private customer passkey enrollment uses the bound account and grants no owner access',async()=>{
+ const f=await setup();try{
+  await seeded(f);const alice=await(await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).json();
+  const request=(path,data,subject='alice',user=alice.userId)=>f.site.fetch(SITE+path,{method:data===undefined?'GET':'POST',headers:headers(subject,user),...(data===undefined?{}:{body:JSON.stringify(data)})});
+  const state=await(await request('/api/security')).json();assert.equal(state.configured,false);assert.equal(state.required,true);
+  const optionsResponse=await request('/api/security/registration/options',{label:'Test device'});assert.equal(optionsResponse.status,201,await optionsResponse.clone().text());const options=await optionsResponse.json();
+  assert.equal(options.publicKey.rp.id,new URL(SITE).hostname);assert.equal(options.publicKey.authenticatorSelection.userVerification,'required');
+  const authenticator=createTestAuthenticator({userHandle:Buffer.from(alice.userId).toString('base64url')});
+  const registered=await request('/api/security/registration/verify',{challengeId:options.challengeId,credential:authenticator.registration(options.publicKey)});assert.equal(registered.status,201,await registered.clone().text());assert.equal((await registered.json()).status,'active');
+  assert.equal((await(await request('/api/security')).json()).configured,true);
+  const bob=await(await f.site.fetch(SITE+'/api/session',{headers:headers('bob')})).json();assert.equal((await(await request('/api/security',undefined,'bob',bob.userId)).json()).configured,false);
+  assert.equal((await request('/api/security/registration/options',{label:'Spoof'},'bob',alice.userId)).status,403);
+  assert.equal((await request('/api/owner/security')).status,403);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_orders').first()).n,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);assert.equal((await stats(f)).dispatches,0);assert.equal((await stats(f)).providerReads,0);
+ }finally{await f.dispose()}
+});
 
 test('native Site → production relay → Mollie credits are owned, verified and credited exactly once',async()=>{
  const f=await setup();

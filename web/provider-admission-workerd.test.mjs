@@ -1,3 +1,4 @@
+import {beginCustomerForTest} from './customer-security-test-helper.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -23,7 +24,7 @@ async function fixture({loseAdmissionReceipt=false}={}){
  const productionContext=await createProductionGenerationContext(env),stores=createD1GenerationStores(db,{mode:'live',dispatchMode:'paid',productionContext});
  async function begin(){
   const made=await stores.quotes.create({userId:USER,model:'fal-ai/kling-video/v3/pro/motion-control',input:{data:{quality:'pro'},providerEstimateUsdMicros:400000},priceCents:125,pricingVersion:'admission-fixture',durationSeconds:4});
-  const quote=await stores.quotes.getOwned(USER,made.id),result=await stores.jobs.begin({userId:USER,quoteId:quote.id,idempotencyKey:crypto.randomUUID(),quote});assert.equal(result.kind,'created');return result.job;
+  const quote=await stores.quotes.getOwned(USER,made.id),result=await beginCustomerForTest(db,stores,{userId:USER,quoteId:quote.id,idempotencyKey:crypto.randomUUID(),quote});assert.equal(result.kind,'created');return result.job;
  }
  const costs=()=>db.prepare('SELECT * FROM rig_generation_costs').all().then(r=>r.results);
  const balance=()=>db.prepare('SELECT SUM(delta) balance FROM rig_ledger WHERE user_id=?').bind(USER).first().then(r=>r.balance);

@@ -1,5 +1,6 @@
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {prepareOwnerMutation} from './owner-security.mjs';
+import {prepareCustomerGeneration} from './customer-security.mjs';
 import {loadProfitPolicy,createProfitSnapshot,validProfitSnapshot,profitable} from './profit-policy.mjs';
 import {RECAST_QUALITY} from './recast-contract.mjs';
 import {workflowProviderBudgetPredicate} from './workflow-finance.mjs';
@@ -120,7 +121,7 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
   async begin({userId,quoteId,idempotencyKey,quote,verification,verificationPayload}){
    const prior=await getByKey(userId,idempotencyKey);if(prior)return {kind:prior.quote_id===quoteId?'existing':'conflict',job:jobFrom(prior)};
    if(!quote||quote.id!==quoteId||quote.userId!==userId||!['credits','owner-provider'].includes(quote.fundingKind))throw Error('Invalid funding quote');
-   if(quote.fundingKind==='owner-provider'){
+   {
     const payload=verificationPayload??{quoteId,idempotencyKey};
     const temporary=['edit-standard',RECAST_QUALITY].includes(quote.input?.data?.quality)&&quote.input.data.transferPolicy==='fal-temporary-links-v1';
     if(!payload||payload.quoteId!==quoteId||payload.idempotencyKey!==idempotencyKey||(temporary?payload.transferConsent!=='fal-temporary-links-v1':Object.hasOwn(payload,'transferConsent')))throw Error('Verification operation does not match generation');
@@ -128,7 +129,7 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
    const policy=await loadProfitPolicy(db);
    if(!validProfitSnapshot(quote.input?.profitSnapshot,{policy,fundingKind:quote.fundingKind,retailPriceCents:quote.priceCents,providerEstimateUsdMicros:quote.input?.providerEstimateUsdMicros})||!profitable(quote.input.profitSnapshot))return {kind:'pricing'};
    const id=crypto.randomUUID(),now=Date.now();
-   const security=quote.fundingKind==='owner-provider'?await prepareOwnerMutation(db,{ownerId:userId,operation:'owner-generation',payload:verificationPayload??{quoteId,idempotencyKey},verification,now}):{ok:true,before:[],gate:{sql:'1',params:[]}};
+   const security=quote.fundingKind==='owner-provider'?await prepareOwnerMutation(db,{ownerId:userId,operation:'owner-generation',payload:verificationPayload??{quoteId,idempotencyKey},verification,now}):await prepareCustomerGeneration(db,{userId,payload:verificationPayload??{quoteId,idempotencyKey},verification,now});
    if(!security.ok)return {kind:'verification',response:security.response};
    const ownerFunding=quote.fundingKind==='owner-provider'?await prepareOwnerFundingAdmission(productionContext.env,{userId,jobId:id,quoteId,providerEstimateUsdMicros:quote.providerEstimateUsdMicros,network:fundingNetwork,now}):{before:[],gate:{sql:'1',params:[]}};
    const eligible=`q.id=? AND q.user_id=? AND q.expires_at>? AND q.price_cents=? AND q.model=? AND q.pricing_version=? AND q.duration_seconds=? AND q.funding_kind=? AND q.input_json=?
@@ -139,15 +140,15 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
     AND (q.model NOT IN ('fal-ai/kling-video/v3/standard/motion-control','fal-ai/kling-video/v3/pro/motion-control') OR NOT EXISTS(${subjectMatch('q.user_id',"CASE WHEN json_valid(q.input_json) THEN json_extract(q.input_json,'$.refs[0].sha256') END")}))`;
    const args=[quoteId,userId,now,quote.priceCents,quote.model,quote.pricingVersion,quote.durationSeconds,quote.fundingKind,JSON.stringify(quote.input),idempotencyKey,idempotencyKey];
    const reserve=db.prepare(`INSERT INTO rig_ledger(event_id,user_id,order_id,delta) SELECT ?,q.user_id,NULL,-q.price_cents FROM rig_generation_quotes q
-    WHERE ${eligible} AND q.funding_kind='credits' AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents`).bind(`reserve:${id}`,...args);
+    WHERE ${eligible} AND (${security.gate.sql}) AND q.funding_kind='credits' AND COALESCE((SELECT SUM(delta) FROM rig_ledger WHERE user_id=q.user_id),0)>=q.price_cents`).bind(`reserve:${id}`,...args,...security.gate.params);
    const authorize=db.prepare(`INSERT INTO rig_owner_provider_usage(job_id,quote_id,user_id,estimated_usd_micros,state,created_at)
     SELECT ?,q.id,q.user_id,${estimate('q')},'authorized',? FROM rig_generation_quotes q WHERE ${eligible}
      AND (${security.gate.sql}) AND (${ownerFunding.gate.sql}) AND q.funding_kind='owner-provider' AND q.user_id=? AND ${estimate('q')}=? AND ${estimate('q')}>0`).bind(id,now,...args,...security.gate.params,...ownerFunding.gate.params,ownerFor(userId),positive(quote.providerEstimateUsdMicros)?quote.providerEstimateUsdMicros:0);
    const create=db.prepare(`INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,created_at)
-    SELECT ?,q.user_id,q.id,?,q.price_cents,'submitting',? FROM rig_generation_quotes q WHERE q.id=? AND q.user_id=?
+    SELECT ?,q.user_id,q.id,?,q.price_cents,'submitting',? FROM rig_generation_quotes q WHERE q.id=? AND q.user_id=? AND (${security.gate.sql})
      AND ((q.funding_kind='credits' AND EXISTS(SELECT 1 FROM rig_ledger l WHERE l.event_id=? AND l.user_id=q.user_id AND l.order_id IS NULL AND l.delta=-q.price_cents))
       OR(q.funding_kind='owner-provider' AND EXISTS(SELECT 1 FROM rig_owner_provider_usage u WHERE u.job_id=? AND u.quote_id=q.id AND u.user_id=q.user_id AND u.estimated_usd_micros=${estimate('q')} AND u.state='authorized')))`)
-    .bind(id,idempotencyKey,now,quoteId,userId,`reserve:${id}`,id);
+    .bind(id,idempotencyKey,now,quoteId,userId,...security.gate.params,`reserve:${id}`,id);
    const result=await db.batch([...security.before,...ownerFunding.before,reserve,authorize,create]),reserved=result.at(-3)?.meta?.changes,authorized=result.at(-2)?.meta?.changes,created=result.at(-1)?.meta?.changes;
    if(reserved+authorized===1&&created===1)return {kind:'created',job:jobFrom(await getJob(userId,id))};
    if(reserved!==0||authorized!==0||created!==0)throw Error('Funding outcome requires reconciliation');

@@ -1,3 +1,4 @@
+import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import test,{before,after} from 'node:test';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -35,7 +36,7 @@ async function fixture({owner=false,preclean=true,postcleanup=false,client=true,
  const plan={version:'rig-workflow-v2',planHash:'',baseStepId:'base',baseRetailCents:300+(preclean?75:0),cleanupRetailCents:postcleanup?100:0,steps:[...(preclean?[pre]:[]),base,...(postcleanup?[post]:[])]};if(client)plan.clientProcessing={id:'compose',contract:WORKFLOW_CLIENT_CONTRACT,beforeStepId:'base',cleanFromStepId:'preclean',source:{id:'source',sha256:clips.source.meta.sha256},mask:{id:'mask',sha256:clips.mask.meta.sha256},media:workflowClientMedia(clips.source.meta)};plan.planHash=await workflowPlanHash(plan);
  const usd=plan.steps.reduce((n,s)=>n+s.providerEstimateUsdMicros,0),totalRetail=plan.baseRetailCents+plan.cleanupRetailCents;
  const made=await parents.quotes.create({userId:USER,model:'fixture/base',input:{data:{quality:'pro',prompt:'fixture'},refs:[{id:'source',sha256:clips.source.meta.sha256},{id:'mask',sha256:clips.mask.meta.sha256}],workflow:plan,providerEstimateUsdMicros:usd},priceCents:totalRetail,pricingVersion:'fixture-v1',durationSeconds:6});
- const quote=await parents.quotes.getOwned(USER,made.id),key=crypto.randomUUID(),payload={quoteId:quote.id,idempotencyKey:key},verification=owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):undefined;
+ const quote=await parents.quotes.getOwned(USER,made.id),key=crypto.randomUUID(),payload={quoteId:quote.id,idempotencyKey:key},verification=owner?await verificationFor(db,USER,'owner-generation',payload,Date.now(),{env}):await verificationForCustomer(db,USER,payload,Date.now(),{env});
  const begun=await parents.jobs.begin({userId:USER,quoteId:quote.id,idempotencyKey:key,quote,verification,verificationPayload:payload});assert.equal(begun.kind,'created');
  const job=begun.job,identity={userId:USER,jobId:job.id},args=(stepId,more={})=>({...identity,stepId,...more});
  const init=()=>workflow.initialize({...identity,quote});

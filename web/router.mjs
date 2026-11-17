@@ -108,7 +108,7 @@ export function createRouter({identity=sitesIdentity,limit,makeGenerationService
 // Atomic fixed-window limiter. D1 schema must be provisioned via migrations, not
 // at request time. Reject on missing DB/SQL error. Caller chooses short limits.
 export async function d1Limit({env,category,userId,method}) {
-  if (!env.DB || !['payment','generation','webhook','asset','session','readiness','finance','owner-security'].includes(category)) throw Error('Missing limiter');
+  if (!env.DB || !['payment','generation','webhook','asset','session','readiness','finance','owner-security','customer-security'].includes(category)) throw Error('Missing limiter');
   const now = Math.floor(Date.now()/1000);
   const limit = category==='readiness'?20:category==='session'?360:category === 'webhook' ? 120 : (method === 'GET' ? 60 : 12);
   const shared=['payment','generation','asset'].includes(category);
@@ -126,6 +126,6 @@ export async function d1Limit({env,category,userId,method}) {
   // writes must not increase the overall sixty-request allowance. Each UPSERT
   // is atomic and both checks must succeed; failures only consume capacity.
   if(shared&&await count(base)>60)return false;
-  const bucket=base+(shared||['finance','owner-security'].includes(category)?':'+method:'');
+  const bucket=base+(shared||['finance','owner-security','customer-security'].includes(category)?':'+method:'');
   return await count(bucket)<=limit;
 }
