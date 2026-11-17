@@ -4,6 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {build} from 'esbuild';
 import {Miniflare} from 'miniflare';
+import {seedVerifiedPaidCredit} from './funding-test-support.mjs';
 import {signSitesBridgeRequest} from './sites-bridge-protocol.mjs';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ac'.repeat(32);
 async function setup(){
@@ -135,4 +136,19 @@ for(const videoFlag of ['no','absent'])test(`payment sessions and owned recovery
   assert.equal((await stats(f)).created,1);assert.equal((await stats(f)).dispatches,0);
   const testDb=await f.mf.getD1Database('DB','private');assert.equal((await testDb.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name='rig_ledger'").first()).n,0);
  }finally{await f.dispose()}
+});
+
+test('held preparation lock returns a resource conflict through the Site without signing out or dispatching',async()=>{
+ const f=await setup();try{
+  await seeded(f);const session=await(await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).json();
+  await seedVerifiedPaidCredit(f.db,session.userId,500);
+  const token=crypto.randomUUID(),now=Date.now();
+  await f.db.prepare("INSERT INTO rig_media_work_lock(id,token,user_id,state,created_at,updated_at) VALUES(1,?,?,'uncertain',?,?)").bind(token,session.userId,now,now).run();
+  const before=await stats(f);
+  const response=await f.site.fetch(SITE+'/api/assets',{method:'POST',headers:{...headers('alice',session.userId),'content-type':'image/jpeg','x-rig-asset-kind':'image'},body:'fixture-bytes'});
+  assert.equal(response.status,409,await response.clone().text());assert.equal((await response.json()).code,'media_preparation_busy');
+  assert.equal((await f.db.prepare('SELECT token FROM rig_media_work_lock WHERE id=1').first()).token,token);
+  const after=await stats(f);assert.equal(after.videoCalls,before.videoCalls);assert.equal(after.dispatches,before.dispatches);
+  const current=await f.site.fetch(SITE+'/api/session',{headers:headers('alice')});assert.equal(current.status,200);assert.equal((await current.json()).userId,session.userId);
+ }finally{await f.dispose();}
 });

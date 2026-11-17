@@ -94,3 +94,17 @@ test('workflow binary writes use the same signed identity, cumulative preparatio
  assert.equal(acquired,3);assert.equal(completed,3);
  for(const [path,method] of [[`/api/workflow-inputs/${id}/mask`,'GET'],[`/api/generations/${id}/client/advance`,'GET'],['/api/workflow-inputs/source?owner=1','POST'],[`/api/generations/${id}/client/clean?url=https://evil.invalid`,'GET'],['/api/workflow-inputs/../payments/balance','POST']])assert.equal(sitesPath(path,method),false);
 });
+
+// A held media lock is not a missing or expired Sites identity.
+test('busy media preparation preserves identity and never buffers or releases another lease',async()=>{
+ const env=await environment();env.RIG_PRODUCTION_VIDEO_ENABLED='yes';
+ const who=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/session',method:'GET'}),env);
+ env.RIG_PRODUCTION_OWNER_USER_ID=who.userId;const productionContext=await createProductionGenerationContext(env);
+ let reads=0,releases=0;
+ const signed=await sign(env,crypto.randomUUID().replaceAll('-',''),'abc',{path:'/api/assets'});
+ const stream=new ReadableStream({pull(){reads++;throw Error('Busy uploads must not be buffered');}},{highWaterMark:0});
+ const result=await authenticateProductionSites(new Request(signed,{body:stream,duplex:'half'}),env,{allowGeneration:true,productionContext,leaseFactory:()=>({acquire:async()=>({state:'busy'}),complete:async()=>{releases++;}})});
+ assert.equal(result?.deniedResponse?.status,409);assert.equal((await result.deniedResponse.json()).code,'media_preparation_busy');
+ assert.equal(reads,0);assert.equal(releases,0);
+ const session=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/session',method:'GET'}),env);assert.equal(session.userId,who.userId);
+});

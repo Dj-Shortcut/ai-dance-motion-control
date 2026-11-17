@@ -51,7 +51,10 @@ export async function authenticateProductionSites(req,env,options={}){
    if(budget.state!=='reserved')return {deniedResponse:preparationDeniedResponse(budget.state)};
    preparationReservation=budget.reservation;
    lease=leaseFactory(mapped.DB);claim=await lease.acquire(userId);
-   if(claim?.state!=='acquired'||typeof claim.token!=='string')return null;
+   // Identity is already verified. A held/uncertain transformation lock must
+   // never masquerade as sign-out or release somebody else's active work.
+   if(claim?.state==='busy')return {deniedResponse:Response.json({code:'media_preparation_busy',error:'Bestandsvoorbereiding is nog bezig of moet worden nagekeken. Je bent nog aangemeld. Probeer later opnieuw of neem contact op via Hulp.'},{status:409,headers:{'cache-control':'no-store'}})};
+   if(claim?.state!=='acquired'||typeof claim.token!=='string')throw Error('Invalid media lease');
   }
   const body=await bytes(req,sitesRequestBodyLimit(path,req.method));
   if(await sitesDigest(body)!==v.digest)return null;
@@ -60,5 +63,5 @@ export async function authenticateProductionSites(req,env,options={}){
   const reservedLease=claim?{async acquire(id){if(taken||id!==userId)return {state:'busy'};taken=true;return claim},complete:async(token,outcome)=>lease.complete(token,outcome)}:null;
   transferred=true;
   return {userId,siteId:v.site,subjectHash:v.subject,preparationReservation,lease:reservedLease,releaseUnused:async()=>{if(claim&&!taken)await lease.complete(claim.token,'settled')},request:new Request(mapped.RIG_PUBLIC_ORIGIN+path,{method:req.method,headers,redirect:'manual',...(body.length?{body,duplex:'half'}:{})})};
- }catch{return null}finally{if(claim&&!transferred)try{await lease.complete(claim.token,'settled')}catch{}}
+ }catch{return null}finally{if(claim?.state==='acquired'&&typeof claim.token==='string'&&!transferred)try{await lease.complete(claim.token,'settled')}catch{}}
 }
