@@ -5,4 +5,3 @@
     <string name="web_manifest_url" translatable="false">https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/android/manifest.webmanifest</string>
     <string name="asset_statements" translatable="false">[{\"relation\":[\"delegate_permission/common.handle_all_urls\"],\"target\":{\"namespace\":\"web\",\"site\":\"https://rig-motion-studio.shortcutcomputerguy.chatgpt.site\"}}]</string>
 </resources>
-

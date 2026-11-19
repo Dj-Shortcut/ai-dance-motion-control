@@ -86,4 +86,3 @@ public final class MethodDataAccountBindingTest {
         assertNull(MethodData.fromJson("{\"obfuscatedAccountId\":\"" + ACCOUNT + "\"}"));
     }
 }
-

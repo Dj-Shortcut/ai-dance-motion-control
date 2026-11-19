@@ -18,4 +18,3 @@ rootProject.name = 'RIG'
 include ':app'
 include ':rigPlayBilling'
 project(':rigPlayBilling').projectDir = file('third_party/android-browser-helper-playbilling')
-

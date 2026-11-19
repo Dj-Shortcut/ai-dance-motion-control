@@ -11,4 +11,3 @@ public final class RigBillingDelegationService extends DelegationService {
         registerExtraCommandHandler(new DigitalGoodsRequestHandler(getApplicationContext()));
     }
 }
-

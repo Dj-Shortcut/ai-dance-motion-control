@@ -52,4 +52,3 @@ public final class RigLauncherActivity extends LauncherActivity {
         return TwaLauncher.CCT_FALLBACK_STRATEGY;
     }
 }
-
