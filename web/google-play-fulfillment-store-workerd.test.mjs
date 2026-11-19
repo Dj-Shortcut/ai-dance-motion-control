@@ -2,7 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {purchaseForGooglePlayProof} from './google-play-purchases.mjs';
+import {createGooglePlayPublisherClient,orderForGooglePlayProof} from './google-play-publisher.mjs';
 import {googlePlayFulfillmentFixture,USER,OTHER,sealedToken,financial} from './google-play-fulfillment-fixture.mjs';
+async function orphanOrder({token='fixture-orphan-token-1234567890',now=Date.now(),state='PROCESSED'}={}){
+ const total={currencyCode:'EUR',units:'9',nanos:0},orderId='GPA.1234-5678-9012-34567';
+ const publisher=createGooglePlayPublisherClient({enabled:true,mode:'live',now:()=>now,getAccessToken:async()=> 'fixture_orphan_google_access_123456789',network:async()=>Response.json({orderId,purchaseToken:token,state,createTime:new Date(now-1000).toISOString(),lastEventTime:new Date(now).toISOString(),total,tax:{currencyCode:'EUR',units:'1',nanos:0},developerRevenueInBuyerCurrency:{currencyCode:'EUR',units:'6',nanos:0},lineItems:[{productId:'rig_credit_5',total,oneTimePurchaseDetails:{quantity:1}}]})});
+ return publisher.getOrder({orderId});
+}
 
 test('0018 preserves existing objects/data and only extends payable exposure with Google obligations',async()=>{
  const f=await googlePlayFulfillmentFixture();try{
@@ -138,6 +144,23 @@ test('encrypted notification inbox is durable/idempotent and does not credit on 
   const descriptor={messageId:'notice1',kind:'product',tokenHash:'a'.repeat(64),productId:'rig_credit_5',orderId:null,mode:'live',packageName:'dev.andyarijs.rig'};
   assert.equal(await f.store.noteNotification({descriptor,sealedToken}),true);assert.equal(await f.store.noteNotification({descriptor,sealedToken}),false);await assert.rejects(f.store.noteNotification({descriptor:{...descriptor,tokenHash:'b'.repeat(64)},sealedToken}),{code:'play_notification_conflict'});
   const due=await f.store.due();assert.equal(due.notifications.length,1);assert.equal(due.notifications[0].sealed_token,sealedToken);assert.equal((await f.counts()).ledger,0);await f.store.finishNotification({messageId:'notice1'});assert.equal((await f.store.due()).notifications.length,0);
+ }finally{await f.mf.dispose()}
+});
+test('orphan refund requires a fresh matching private Google order proof and durable per-inspection/cooldown marker',async()=>{
+ const f=await googlePlayFulfillmentFixture();try{
+  const now=Date.now(),proof=await orphanOrder({now}),order=orderForGooglePlayProof(proof),descriptor={messageId:'orphan_notice',kind:'product',tokenHash:order.tokenHash,productId:'rig_credit_5',orderId:order.orderId,mode:'live',packageName:'dev.andyarijs.rig'};
+  await f.store.noteNotification({descriptor,sealedToken,now});await assert.rejects(f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:JSON.parse(JSON.stringify(proof)),now}));
+  assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:proof,now}),true);assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:proof,now}),false);
+  const secondRead=await orphanOrder({now:now+1000});assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:secondRead,now:now+1000}),false,'a fresh read cannot bypass the uncertain-write cooldown');
+  const late=now+600001,afterCooldown=await orphanOrder({now:late});assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:afterCooldown,now:late}),true);
+  const row=await f.store.getNotification(descriptor.messageId);assert.equal(row.refund_attempt_inspection,orderForGooglePlayProof(afterCooldown).inspectionId);assert.equal(row.state,'queued');assert.equal((await f.counts()).ledger,0);
+ }finally{await f.mf.dispose()}
+});
+test('orphan refund cannot target a mismatched token or an existing owned receipt/entitlement',async()=>{
+ const f=await googlePlayFulfillmentFixture();try{
+  const proof=await orphanOrder(),order=orderForGooglePlayProof(proof),descriptor={messageId:'orphan_notice2',kind:'product',tokenHash:order.tokenHash,productId:'rig_credit_5',orderId:order.orderId,mode:'live',packageName:'dev.andyarijs.rig'};await f.store.noteNotification({descriptor,sealedToken});
+  await assert.rejects(f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:await orphanOrder({token:'other-orphan-token-1234567890'})}),{code:'play_orphan_refund_binding'});
+  const i=await f.prepare(),paid=await f.inspect({token:'fixture-orphan-token-1234567890'});await f.grant(i.intentId,paid.proof);assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:proof}),false);assert.equal((await f.db.prepare('SELECT SUM(delta) n FROM rig_ledger').first()).n,500);
  }finally{await f.mf.dispose()}
 });
 test('voided catchup cursor never advances on unfinished page or backwards; leases exclude concurrent workers',async()=>{
