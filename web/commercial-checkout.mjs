@@ -69,26 +69,27 @@ export async function prepareCommercialCheckout(req,env,{userId,now=Date.now()}=
   if(!pkg)return failed('Dit tegoedpakket is niet beschikbaar.',400);
   const seller=JSON.stringify(merchant),terms=await commerceDocument('/voorwaarden').text();
   const digest=await hash(JSON.stringify({packageId:pkg.id,amountCents:pkg.amountCents,credits:pkg.credits,currency:'EUR',country:consent.country,customerType:consent.customerType,version:consent.version,accepted:true,seller,terms,...(invoiceRequired?{billing,invoiceConsent:BILLING_ELECTRONIC_DELIVERY}:{})}));
-  // DO NOTHING keeps the first seller, terms and price snapshot intact. Reading
-  // the winning hash after INSERT also detects concurrent conflicting reuse.
-  const acceptance=db.prepare(`INSERT INTO rig_purchase_acceptances(user_id,request_id,version,buyer_country,customer_type,package_id,amount_cents,credits,currency,request_hash,seller_json,terms_text,created_at)
-   SELECT ?,?,?,?,?,?,?,?,'EUR',?,?,?,?
-   WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
-   AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?)
-   ON CONFLICT(user_id,request_id) DO NOTHING`).bind(userId,data.requestId,COMMERCE_VERSION,consent.country,consent.customerType,pkg.id,pkg.amountCents,pkg.credits,digest,seller,terms,now,userId);
-  if(invoiceRequired)await db.batch([acceptance,...purchaseBillingStatements(db,{userId,requestId:data.requestId,billing,requestHash:digest,now})]);
-  else await acceptance.run();
-  const saved=await db.prepare('SELECT request_hash FROM rig_purchase_acceptances WHERE user_id=? AND request_id=?').bind(userId,data.requestId).first();
-  if(!saved)return failed('De aankoopbevestiging kon niet veilig worden vastgelegd.');
-  if(saved.request_hash!==digest)return failed('Deze aankoop is al gestart met andere gegevens. Controleer eerst de bestaande betaling.',409);
-  if(await db.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(userId).first())return failed('Je account vereist eerst controle.',403);
-  if(invoiceRequired){
-   const savedBilling=await db.prepare('SELECT name,street,postal_code,city,country,electronic_delivery,request_hash FROM rig_purchase_billing WHERE user_id=? AND request_id=?').bind(userId,data.requestId).first();
-   if(!savedBilling||savedBilling.request_hash!==digest||savedBilling.name!==billing.name||savedBilling.street!==billing.street||savedBilling.postal_code!==billing.postalCode||savedBilling.city!==billing.city||savedBilling.country!==billing.country||savedBilling.electronic_delivery!==BILLING_ELECTRONIC_DELIVERY)return failed('Je factuurgegevens konden niet veilig worden vastgelegd.');
-  }
+  // Return bound statements instead of committing here. The payment boundary
+  // batches them with funding admission and the exact order; its rollback guard
+  // makes every rejected order discard all of these writes.
+  const orderEvidence=({orderId}={})=>{
+   if(typeof orderId!=='string'||!UUID.test(orderId))throw Error('Invalid order identity');
+   // DO NOTHING keeps the first seller, terms and price snapshot intact. The
+   // order gate below accepts only this order's exact immutable winner.
+   const acceptance=db.prepare(`INSERT INTO rig_purchase_acceptances(order_id,user_id,request_id,version,buyer_country,customer_type,package_id,amount_cents,credits,currency,request_hash,seller_json,terms_text,created_at)
+    SELECT ?,?,?,?,?,?,?,?,?,'EUR',?,?,?,?
+    WHERE EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+    AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?)
+    ON CONFLICT(user_id,request_id) DO NOTHING`).bind(orderId,userId,data.requestId,COMMERCE_VERSION,consent.country,consent.customerType,pkg.id,pkg.amountCents,pkg.credits,digest,seller,terms,now,userId);
+   const before=[acceptance,...(invoiceRequired?purchaseBillingStatements(db,{orderId,userId,requestId:data.requestId,billing,requestHash:digest,now}):[])];
+   const acceptanceGate=`EXISTS(SELECT 1 FROM rig_purchase_acceptances WHERE order_id=? AND user_id=? AND request_id=? AND request_hash=? AND version=? AND buyer_country=? AND customer_type=? AND package_id=? AND amount_cents=? AND credits=? AND currency='EUR')`;
+   const params=[orderId,userId,data.requestId,digest,COMMERCE_VERSION,consent.country,consent.customerType,pkg.id,pkg.amountCents,pkg.credits];
+   if(!invoiceRequired)return {before,gate:{sql:acceptanceGate,params}};
+   return {before,gate:{sql:`${acceptanceGate} AND EXISTS(SELECT 1 FROM rig_purchase_billing WHERE order_id=? AND user_id=? AND request_id=? AND request_hash=? AND name=? AND street=? AND postal_code=? AND city=? AND country=? AND electronic_delivery=?)`,params:[...params,orderId,userId,data.requestId,digest,billing.name,billing.street,billing.postalCode,billing.city,billing.country,BILLING_ELECTRONIC_DELIVERY]}};
+  };
   // Preserve only the original payment route's two allowed body fields. The
   // incoming Content-Length describes another body and must not be forwarded.
   const headers=new Headers(req.headers);headers.delete('content-length');
-  return {request:new Request(req.url,{method:'POST',headers,body:JSON.stringify({packageId:pkg.id,requestId:data.requestId})})};
+  return {request:new Request(req.url,{method:'POST',headers,body:JSON.stringify({packageId:pkg.id,requestId:data.requestId})}),orderEvidence};
  }catch{return failed('De aankoopbevestiging kon niet veilig worden gecontroleerd.');}
 }

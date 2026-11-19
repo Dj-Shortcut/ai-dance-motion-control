@@ -106,10 +106,13 @@ kosten en onverwachte prijsafwijkingen kunnen niet volledig worden afgeschermd.
    Sites-versie 40 en beide Cloudflare-deployments zijn op 12 november bijgewerkt;
    dat bewijst op zichzelf nog geen geactiveerde dekkingspolicy of echte verkoop.
    Samenvoegen op GitHub publiceert deze drie onderdelen niet automatisch.
-2. Pas de vereiste additieve migratie
-   `web/production-migrations/0015_funding_coverage.sql` toe op de aparte
-   productiedatabase, na de bestaande commerciële migraties. Ook een nieuwe
-   database met `production-schema.sql` heeft 0015 nodig. Voer de triggers als
+2. Pas de vereiste additieve migraties
+   `web/production-migrations/0015_funding_coverage.sql` en daarna
+   `web/production-migrations/0016_atomic_checkout_evidence.sql` toe op de aparte
+   productiedatabase, na de bestaande commerciële migraties. 0016 koppelt
+   aankoopbewijs en financieringstoelating aan hun exacte order en verwijdert
+   alleen oude rijen zonder zo'n order. Ook een nieuwe database met
+   `production-schema.sql` heeft 0015 en 0016 nodig. Voer de triggers als
    volledige SQL uit. De dekking-view gebruikt geen optionele workflowtabellen;
    migratie 0014 blijft afzonderlijk nodig als verwerkingsketens worden gebruikt.
    De nieuwe policy begint uitgeschakeld; geen bestaande saldi of betalingen

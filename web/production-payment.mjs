@@ -93,10 +93,12 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
      // checkout still perform their own current coverage/admission checks.
      return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:false,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
+    let orderEvidence;
     if(req.method==='POST'&&url.pathname==='/api/payments/create'){
      const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;
+     orderEvidence=prepared.orderEvidence;
     }
-    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit})(req,mapped,trustedUserId)||new Response(null,{status:404});
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit,...(orderEvidence?{orderEvidence}:{})})(req,mapped,trustedUserId)||new Response(null,{status:404});
     if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
      const value=await response.json();
      const stock=await coverage(mapped),packages=url.pathname==='/api/payments/packages'?value.packages:configuredPackages(mapped);

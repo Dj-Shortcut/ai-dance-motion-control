@@ -30,20 +30,20 @@ export function normalizePurchaseBilling(value,country){
 // The caller batches these after its immutable acceptance INSERT. Every write
 // is gated by the exact winning acceptance hash, so conflicting races cannot
 // attach a second buyer's data or profile to the winning purchase intent.
-export function purchaseBillingStatements(db,{userId,requestId,billing,requestHash,now}){
+export function purchaseBillingStatements(db,{orderId,userId,requestId,billing,requestHash,now}){
  const {name,street,postalCode,city,country}=billing;
- const eligible=`EXISTS(SELECT 1 FROM rig_purchase_acceptances WHERE user_id=? AND request_id=? AND request_hash=? AND buyer_country=? AND customer_type='consumer')
+ const eligible=`EXISTS(SELECT 1 FROM rig_purchase_acceptances WHERE order_id=? AND user_id=? AND request_id=? AND request_hash=? AND buyer_country=? AND customer_type='consumer')
   AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
   AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=?)`;
- const args=[userId,requestId,requestHash,country,userId];
- const immutable=db.prepare(`INSERT INTO rig_purchase_billing(user_id,request_id,name,street,postal_code,city,country,electronic_delivery,request_hash,created_at)
-  SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${eligible}
-  ON CONFLICT(user_id,request_id) DO NOTHING`).bind(userId,requestId,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY,requestHash,now,...args);
+ const args=[orderId,userId,requestId,requestHash,country,userId];
+ const immutable=db.prepare(`INSERT INTO rig_purchase_billing(order_id,user_id,request_id,name,street,postal_code,city,country,electronic_delivery,request_hash,created_at)
+  SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE ${eligible}
+  ON CONFLICT(user_id,request_id) DO NOTHING`).bind(orderId,userId,requestId,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY,requestHash,now,...args);
  const profile=db.prepare(`INSERT INTO rig_billing_profiles(user_id,name,street,postal_code,city,country,electronic_delivery,updated_at)
-  SELECT ?,?,?,?,?,?,?,(SELECT created_at FROM rig_purchase_acceptances WHERE user_id=? AND request_id=? AND request_hash=?) WHERE ${eligible}
-  AND EXISTS(SELECT 1 FROM rig_purchase_billing WHERE user_id=? AND request_id=? AND request_hash=? AND name=? AND street=? AND postal_code=? AND city=? AND country=? AND electronic_delivery=?)
+  SELECT ?,?,?,?,?,?,?,(SELECT created_at FROM rig_purchase_acceptances WHERE order_id=? AND user_id=? AND request_id=? AND request_hash=?) WHERE ${eligible}
+  AND EXISTS(SELECT 1 FROM rig_purchase_billing WHERE order_id=? AND user_id=? AND request_id=? AND request_hash=? AND name=? AND street=? AND postal_code=? AND city=? AND country=? AND electronic_delivery=?)
   ON CONFLICT(user_id) DO UPDATE SET name=excluded.name,street=excluded.street,postal_code=excluded.postal_code,city=excluded.city,country=excluded.country,electronic_delivery=excluded.electronic_delivery,updated_at=excluded.updated_at
-  WHERE excluded.updated_at>rig_billing_profiles.updated_at`).bind(userId,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY,userId,requestId,requestHash,...args,userId,requestId,requestHash,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY);
+  WHERE excluded.updated_at>rig_billing_profiles.updated_at`).bind(userId,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY,orderId,userId,requestId,requestHash,...args,orderId,userId,requestId,requestHash,name,street,postalCode,city,country,BILLING_ELECTRONIC_DELIVERY);
  return [immutable,profile];
 }
 

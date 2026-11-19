@@ -24,9 +24,20 @@ async function fixture(){
   const body=(extra={})=>({packageId:'five',requestId:crypto.randomUUID(),commerce:{version:COMMERCE_VERSION,accepted:true,customerType:'consumer',country:'NL'},...extra});
   const request=(data=body(),{path=BASE,origin=SITE,method='POST',headers={},raw}={})=>new Request(origin+path,{method,headers:{origin:SITE,'content-type':'application/json',...headers},...(method==='POST'?{body:raw??JSON.stringify(data)}:{})});
   const call=(data=body(),{extraEnv={},userId=ALICE,now=NOW,...options}={})=>prepareCommercialCheckout(request(data,options),{...env,...extraEnv},{userId,now});
+  const admit=async(data=body(),options={})=>{
+   const prepared=await call(data,options);if(prepared.response)return prepared;
+   const orderId=crypto.randomUUID(),evidence=await prepared.orderEvidence({orderId}),userId=options.userId??ALICE;
+   const order=db.prepare(`INSERT OR IGNORE INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits,state)
+    SELECT ?,?,?,?,?,?,'failed' WHERE (${evidence.gate.sql})`).bind(orderId,userId,data.requestId,data.packageId,packages.find(item=>item.id===data.packageId)?.amountCents??0,packages.find(item=>item.id===data.packageId)?.credits??0,...evidence.gate.params);
+   const guard=db.prepare(`INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits)
+    SELECT ?,?,?,?,0,0 WHERE NOT EXISTS(SELECT 1 FROM rig_orders WHERE id=?)`).bind(orderId,userId,data.requestId,data.packageId,orderId);
+   try{const results=await (options.extraEnv?.PRODUCTION_DB??db).batch([...evidence.before,order,guard]);if(results.at(-2)?.meta?.changes!==1)throw Error('not admitted');}
+   catch{return {response:Response.json({error:'not admitted'},{status:409})};}
+   return {...prepared,orderId};
+  };
   const rows=()=>db.prepare('SELECT * FROM rig_purchase_acceptances ORDER BY user_id,request_id').all().then(x=>x.results);
   const money=async()=>({orders:(await db.prepare('SELECT * FROM rig_orders').all()).results,ledger:(await db.prepare('SELECT * FROM rig_ledger').all()).results});
-  return {mf,db,legacy,env,body,request,call,rows,money};
+  return {mf,db,legacy,env,body,request,call,admit,rows,money};
  }catch(error){await mf.dispose();throw error;}
 }
 const status=result=>result.response?.status??200;
@@ -38,12 +49,12 @@ test('required flag activates exact current commerce metadata; disabled rollout 
  assert.equal(value.required,true);assert.equal(value.version,COMMERCE_VERSION);assert.deepEqual(value.countries,['BE','NL']);assert.equal(value.customerType,'consumer');assert.equal(value.currency,'EUR');assert.equal(value.termsPath,'/voorwaarden');assert.equal(value.merchant.legalName,merchant.legalName);
 });
 
-test('exact acceptance stores immutable seller, current terms and server price without creating money or payments',async()=>{
+test('exact admitted order stores immutable seller, current terms and server price without creating money or payments',async()=>{
  const f=await fixture();try{
-  const data=f.body(),text=JSON.stringify(data),result=await f.call(data,{headers:{'content-length':String(Buffer.byteLength(text))}});assert.equal(status(result),200,result.response&&await result.response.text());
+  const data=f.body(),text=JSON.stringify(data),result=await f.admit(data,{headers:{'content-length':String(Buffer.byteLength(text))}});assert.equal(status(result),200,result.response&&await result.response.text());
   assert.deepEqual(await result.request.json(),{packageId:'five',requestId:data.requestId});assert.equal(result.request.headers.get('content-length'),null);assert.equal(result.request.headers.get('origin'),SITE);
-  const [saved]=await f.rows();assert.equal(saved.user_id,ALICE);assert.equal(saved.version,COMMERCE_VERSION);assert.equal(saved.buyer_country,'NL');assert.equal(saved.customer_type,'consumer');assert.equal(saved.package_id,'five');assert.equal(saved.amount_cents,500);assert.equal(saved.credits,500);assert.equal(saved.currency,'EUR');assert.deepEqual(JSON.parse(saved.seller_json),merchant);assert.equal(saved.terms_text,await commerceDocument('/voorwaarden').text());assert.equal(saved.created_at,NOW);assert.match(saved.request_hash,/^[0-9a-f]{64}$/);
-  assert.equal(status(await f.call(data,{now:NOW+999999})),200);assert.deepEqual(await f.rows(),[saved]);assert.deepEqual(await f.money(),{orders:[],ledger:[]});assert.equal((await f.legacy.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='rig_purchase_acceptances'").first()).n,0);
+  const [saved]=await f.rows();assert.equal(saved.order_id,result.orderId);assert.equal(saved.user_id,ALICE);assert.equal(saved.version,COMMERCE_VERSION);assert.equal(saved.buyer_country,'NL');assert.equal(saved.customer_type,'consumer');assert.equal(saved.package_id,'five');assert.equal(saved.amount_cents,500);assert.equal(saved.credits,500);assert.equal(saved.currency,'EUR');assert.deepEqual(JSON.parse(saved.seller_json),merchant);assert.equal(saved.terms_text,await commerceDocument('/voorwaarden').text());assert.equal(saved.created_at,NOW);assert.match(saved.request_hash,/^[0-9a-f]{64}$/);
+  assert.equal(status(await f.admit(data,{now:NOW+999999})),409);assert.deepEqual(await f.rows(),[saved]);const money=await f.money();assert.equal(money.orders.length,1);assert.deepEqual(money.ledger,[]);assert.equal((await f.legacy.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='rig_purchase_acceptances'").first()).n,0);
  }finally{await f.mf.dispose();}
 });
 
@@ -74,41 +85,41 @@ test('genuine positive server package and a live pinned database are required, w
   for(const value of [[],[{id:'five',amountCents:0,credits:500}],[{id:'five',amountCents:500,credits:0}],[{id:'five',amountCents:1.5,credits:500}],[{id:'five',amountCents:500,credits:-1}],[packages[0],packages[0]],null])assert.equal(status(await f.call(data,{extraEnv:{RIG_PRODUCTION_PACKAGES:JSON.stringify(value)}})),503,JSON.stringify(value));
   for(const extraEnv of [{PRODUCTION_DB:f.legacy},{RIG_PRODUCTION_PAYMENTS_ENABLED:'no'},{RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_wrong'},{MOLLIE_LIVE_API_KEY:'test_fixture'}])assert.equal(status(await f.call(data,{extraEnv})),503);
   await f.db.prepare("UPDATE rig_payment_environment SET mode='test'").run();assert.equal(status(await f.call(data)),503);assert.deepEqual(await f.rows(),[]);
-  await f.db.prepare("UPDATE rig_payment_environment SET mode='live'").run();assert.equal(status(await f.call(data)),200);assert.doesNotMatch(JSON.stringify(await f.rows()),/vat_treatment|tax_classification|invoice_number|oss/);
+  await f.db.prepare("UPDATE rig_payment_environment SET mode='live'").run();assert.equal(status(await f.admit(data)),200);assert.doesNotMatch(JSON.stringify(await f.rows()),/vat_treatment|tax_classification|invoice_number|oss/);
  }finally{await f.mf.dispose();}
 });
 
 test('frozen wallet denies acceptance before any storage and changing prices cannot overwrite a prior snapshot',async()=>{
  const f=await fixture();try{
   const data=f.body();await f.db.prepare('INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,?)').bind(ALICE,'review').run();assert.equal(status(await f.call(data)),403);assert.deepEqual(await f.rows(),[]);
-  await f.db.prepare('DELETE FROM rig_frozen_accounts WHERE user_id=?').bind(ALICE).run();assert.equal(status(await f.call(data)),200);const original=await f.rows();
-  assert.equal(status(await f.call({...data,commerce:{...data.commerce,country:'BE'}})),409);assert.equal(status(await f.call({...data,packageId:'ten'})),409);
-  assert.equal(status(await f.call(data,{extraEnv:{RIG_PRODUCTION_PACKAGES:JSON.stringify([{id:'five',amountCents:501,credits:500}])}})),409);
-  assert.deepEqual(await f.rows(),original);assert.equal(status(await f.call(data,{userId:BOB})),200);assert.equal((await f.rows()).length,2);
+  await f.db.prepare('DELETE FROM rig_frozen_accounts WHERE user_id=?').bind(ALICE).run();assert.equal(status(await f.admit(data)),200);const original=await f.rows();
+  assert.equal(status(await f.admit({...data,commerce:{...data.commerce,country:'BE'}})),409);assert.equal(status(await f.admit({...data,packageId:'ten'})),409);
+  assert.equal(status(await f.admit(data,{extraEnv:{RIG_PRODUCTION_PACKAGES:JSON.stringify([{id:'five',amountCents:501,credits:500}])}})),409);
+  assert.deepEqual(await f.rows(),original);assert.equal(status(await f.admit(data,{userId:BOB})),200);assert.equal((await f.rows()).length,2);
  }finally{await f.mf.dispose();}
 });
 
 test('racing identical requests share one immutable snapshot; conflicting races cannot both pass',async()=>{
  const f=await fixture();try{
-  const same=f.body(),identical=await Promise.all([f.call(same),f.call(same),f.call(same)]);assert.deepEqual(identical.map(status),[200,200,200]);assert.equal((await f.rows()).length,1);
-  const conflict=f.body(),competing=await Promise.all([f.call(conflict),f.call({...conflict,commerce:{...conflict.commerce,country:'BE'}})]);assert.deepEqual(competing.map(status).sort(),[200,409]);assert.equal((await f.rows()).length,2);assert.deepEqual(await f.money(),{orders:[],ledger:[]});
+  const same=f.body(),identical=await Promise.all([f.admit(same),f.admit(same),f.admit(same)]);assert.deepEqual(identical.map(status).sort(),[200,409,409]);assert.equal((await f.rows()).length,1);
+  const conflict=f.body(),competing=await Promise.all([f.admit(conflict),f.admit({...conflict,commerce:{...conflict.commerce,country:'BE'}})]);assert.deepEqual(competing.map(status).sort(),[200,409]);assert.equal((await f.rows()).length,2);const money=await f.money();assert.equal(money.orders.length,2);assert.deepEqual(money.ledger,[]);
  }finally{await f.mf.dispose();}
 });
 
-function beforeInsertDatabase(db,before){return {prepare(sql){const statement=db.prepare(sql);if(!sql.startsWith('INSERT INTO rig_purchase_acceptances'))return statement;return {bind(...args){const bound=statement.bind(...args);return {async run(){await before();return bound.run();}};}};}};}
+function beforeInsertDatabase(db,before){return {prepare:sql=>db.prepare(sql),async batch(statements){await before();return db.batch(statements);}};}
 test('SQL insertion rechecks a freeze or mode change occurring after preflight; missing storage fails closed',async()=>{
  const f=await fixture();try{
   for(const mutate of [()=>f.db.prepare('INSERT OR IGNORE INTO rig_frozen_accounts(user_id,reason) VALUES(?,?)').bind(ALICE,'raced').run(),()=>f.db.prepare("UPDATE rig_payment_environment SET mode='test'").run()]){
-   const proxied=beforeInsertDatabase(f.db,mutate);assert.equal(status(await f.call(f.body(),{extraEnv:{PRODUCTION_DB:proxied}})),503);assert.deepEqual(await f.rows(),[]);await f.db.prepare('DELETE FROM rig_frozen_accounts').run();await f.db.prepare("UPDATE rig_payment_environment SET mode='live'").run();
+   const proxied=beforeInsertDatabase(f.db,mutate);assert.equal(status(await f.admit(f.body(),{extraEnv:{PRODUCTION_DB:proxied}})),409);assert.deepEqual(await f.rows(),[]);await f.db.prepare('DELETE FROM rig_frozen_accounts').run();await f.db.prepare("UPDATE rig_payment_environment SET mode='live'").run();
   }
-  await f.db.prepare('DROP TABLE rig_purchase_acceptances').run();assert.equal(status(await f.call()),503);assert.deepEqual(await f.money(),{orders:[],ledger:[]});
+  await f.db.prepare('DROP TABLE rig_purchase_acceptances').run();assert.equal(status(await f.admit()),409);assert.deepEqual(await f.money(),{orders:[],ledger:[]});
  }finally{await f.mf.dispose();}
 });
 
 test('acceptance SQL rejects unsupported country, business type, false currency and invalid monetary snapshots',async()=>{
  const f=await fixture();try{
-  const data=f.body();assert.equal(status(await f.call(data)),200);const [saved]=await f.rows();
-  const insert=(patch={})=>{const row={...saved,request_id:crypto.randomUUID(),...patch},keys=Object.keys(row);return f.db.prepare('INSERT INTO rig_purchase_acceptances('+keys.join(',')+') VALUES('+keys.map(()=>'?').join(',')+')').bind(...keys.map(key=>row[key])).run();};
+  const data=f.body();assert.equal(status(await f.admit(data)),200);const [saved]=await f.rows();
+  const insert=async(patch={})=>{const orderId=crypto.randomUUID(),requestId=crypto.randomUUID();await f.db.prepare("INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits,state) VALUES(?,?,?,'five',500,500,'failed')").bind(orderId,ALICE,requestId).run();const row={...saved,order_id:orderId,request_id:requestId,...patch},keys=Object.keys(row);return f.db.prepare('INSERT INTO rig_purchase_acceptances('+keys.join(',')+') VALUES('+keys.map(()=>'?').join(',')+')').bind(...keys.map(key=>row[key])).run();};
   for(const patch of [{buyer_country:'FR'},{customer_type:'business'},{currency:'USD'},{amount_cents:0},{amount_cents:1.1},{credits:0},{credits:1.1},{seller_json:'[]'},{seller_json:'{broken'},{request_hash:'z'.repeat(64)},{created_at:0}])await assert.rejects(insert(patch));
   assert.equal((await f.rows()).length,1);
  }finally{await f.mf.dispose();}
@@ -120,7 +131,7 @@ function fakePayments(f){
   const url=new URL(input);assert.equal(url.origin,'https://api.mollie.com');assert.equal(new Headers(init.headers).get('authorization'),'Bearer live_fixture');calls.push({path:url.pathname,method:init.method??'GET'});
   if(url.pathname==='/v2/profiles/me'&&(init.method??'GET')==='GET')return Response.json({id:PROFILE});
   assert.equal(url.pathname,'/v2/payments');assert.equal(init.method,'POST');created++;const body=JSON.parse(init.body);
-  const acceptance=await f.db.prepare('SELECT * FROM rig_purchase_acceptances WHERE user_id=?').bind(ALICE).first();assert.ok(acceptance);assert.equal(acceptance.amount_cents,500);assert.equal(body.amount.value,'5.00');
+  const acceptance=await f.db.prepare('SELECT * FROM rig_purchase_acceptances WHERE user_id=?').bind(ALICE).first();assert.ok(acceptance);assert.equal(acceptance.order_id,body.metadata.order_id);assert.equal(acceptance.amount_cents,500);assert.equal(body.amount.value,'5.00');
   return Response.json({id:'tr_Fixture0001',profileId:PROFILE,mode:'live',status:'open',amount:body.amount,metadata:body.metadata,_links:{checkout:{href:'https://www.mollie.com/checkout/fixture'}}},{status:201});
  }});
  return {payment,calls,get created(){return created;},call:(data,{path=BASE,method='POST',headers={}}={})=>payment.user(f.request(data,{path,method,headers}),f.env,ALICE)};
@@ -158,10 +169,10 @@ function beforeOrderDatabase(db,entered,release){const watched=new WeakSet();ret
  prepare(sql){const statement=db.prepare(sql);if(!sql.startsWith('INSERT OR IGNORE INTO rig_orders('))return statement;return {bind(...args){const bound=statement.bind(...args);watched.add(bound);return bound;}};},
  async batch(statements){if(statements.some(statement=>watched.has(statement))){entered.resolve();await release.promise;}return db.batch(statements);}
 };}
-test('recovery cancellation wins a race after commercial acceptance but before order insertion and blocks the late provider dispatch',async()=>{
+test('recovery cancellation wins while the atomic evidence-and-order batch waits and blocks the late provider dispatch',async()=>{
  const f=await fixture(),entered=deferred(),release=deferred();let attempt;try{
   const fake=fakePayments(f),data=f.body();f.env.PRODUCTION_DB=beforeOrderDatabase(f.db,entered,release);attempt=fake.call(data);await entered.promise;
-  assert.equal((await f.rows()).length,1);assert.equal((await f.money()).orders.length,0);assert.equal(fake.created,0);
+  assert.equal((await f.rows()).length,0);assert.equal((await f.money()).orders.length,0);assert.equal(fake.created,0);
   const recovery=await fake.call({}, {path:'/api/payments/orders/'+data.requestId+'/reconcile'});assert.equal(recovery.status,200);assert.equal((await recovery.json()).state,'canceled');release.resolve();assert.equal((await attempt).status,409);assert.equal(fake.created,0);assert.deepEqual(fake.calls,[]);assert.deepEqual(await f.money(),{orders:[],ledger:[]});
  }finally{release.resolve();if(attempt)await attempt;await f.mf.dispose();}
 });
