@@ -90,6 +90,8 @@ export function createProductionWorkflowStores(db,{productionContext,readCurrent
     const payload=workflowClientApprovalPayload({jobId,plan:b.plan,steps:b.steps,outputHash:inputHash}),payloadHash=await ownerMutationDigest(WORKFLOW_CLIENT_APPROVAL_OPERATION,payload);
     if(!isPreparedOwnerMutation(approval,{operation:WORKFLOW_CLIENT_APPROVAL_OPERATION,payloadHash})||approval.required!==true)return {authorized:false,state:'approval_required'};
     security=approval;
+   }else if(client&&processing.state!=='advanced'&&!clientAdvance){
+    return {authorized:false,state:'awaiting_client_processing'};
    }
    if(typeof readCurrentProductionContext!=='function')throw Error('Fresh production policy reader required');
    const currentContext=await readCurrentProductionContext();if(!isProductionGenerationContext(currentContext,{db})||currentContext.env.RIG_PUBLIC_ORIGIN!==productionContext.env.RIG_PUBLIC_ORIGIN)throw Error('Fresh production policy unavailable');
