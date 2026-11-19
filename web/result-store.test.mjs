@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {inspectResultMp4,resultMp4Testing} from './result-mp4-inspect.mjs';
+import {InvalidResultMp4Error,inspectResultMp4,resultMp4Testing} from './result-mp4-inspect.mjs';
 import {createResultStore} from './results.mjs';
 const job={id:'123e4567-e89b-42d3-a456-426614174000',falRequestId:'request_123',state:'completed',resultKey:'rig-results/123e4567-e89b-42d3-a456-426614174000.mp4'};
 const url='https://v3b.fal.media/files/b/test/result.mp4';
@@ -50,6 +50,12 @@ test('missing media or a truncated video sample table is held before any R2 writ
  for(const input of [headerOnly,bytes.subarray(0,bytes.length-1),corrupt]){
   assert.throws(()=>inspectResultMp4(input));const b=bucket(),store=createResultStore(b,async()=>response(input));await assert.rejects(store.store(job,url));assert.equal(b.items.size,0);
  }
+});
+test('result sample tables are capped by the supported duration and frame rate before allocation',async()=>{
+ assert.deepEqual(resultMp4Testing.limits,{maxResultSeconds:30,maxResultFps:60,maxSamples:1800});
+ const input=bytes.slice(),index=Buffer.from(input).indexOf('stsz');assert.ok(index>0);new DataView(input.buffer).setUint32(index+12,1801);
+ assert.throws(()=>inspectResultMp4(input),error=>error instanceof InvalidResultMp4Error&&error.message==='Invalid sample sizes');
+ const b=bucket();await assert.rejects(createResultStore(b,async()=>response(input)).store(job,url),error=>error instanceof InvalidResultMp4Error);assert.equal(b.items.size,0);
 });
 test('overlapping video chunks are refused instead of being counted twice',async()=>{
  const input=bytes.slice(),at=Buffer.from(input).indexOf('stco');assert.ok(at>0);const view=new DataView(input.buffer);assert.ok(view.getUint32(at+8)>1);view.setUint32(at+16,view.getUint32(at+12));
