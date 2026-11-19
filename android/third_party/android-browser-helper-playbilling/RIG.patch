@@ -1,0 +1,86 @@
+--- a/src/main/java/com/google/androidbrowserhelper/playbilling/provider/MethodData.java
++++ b/src/main/java/com/google/androidbrowserhelper/playbilling/provider/MethodData.java
+@@ -67,6 +67,8 @@
+     private static final String TAG = "MethodData";
+ 
+     public final String sku;
++    // RIG: Google must return this server-issued binding in the verified receipt.
++    public final String obfuscatedAccountId;
+     public final boolean isPriceChangeConfirmation;
+ 
+     // These three optional fields are to do with upgrading/downgrading subscriptions.
+@@ -74,9 +76,10 @@
+     @Nullable public final String purchaseToken;
+     @Nullable public final Integer replacementMode;
+ 
+-    private MethodData(String sku, boolean isPriceChangeConfirmation, @Nullable String oldSku,
++    private MethodData(String sku, String obfuscatedAccountId, boolean isPriceChangeConfirmation, @Nullable String oldSku,
+                        @Nullable String purchaseToken, @Nullable Integer replacementMode) {
+         this.sku = sku;
++        this.obfuscatedAccountId = obfuscatedAccountId;
+         this.isPriceChangeConfirmation = isPriceChangeConfirmation;
+         this.oldSku = oldSku;
+         this.purchaseToken = purchaseToken;
+@@ -100,6 +103,13 @@
+         String sku = dataObject.optString("sku");
+         if (TextUtils.isEmpty(sku)) return null;
+ 
++        // Missing, coerced, or malformed bindings must fail BEFORE the store opens.
++        // Native validation is format-only; RIG's server verifies its own HMAC.
++        Object rawAccountId = dataObject.opt("obfuscatedAccountId");
++        if (!(rawAccountId instanceof String)) return null;
++        String obfuscatedAccountId = (String) rawAccountId;
++        if (!isValidAccountId(obfuscatedAccountId)) return null;
++
+         boolean isPriceChangeConfirmation = dataObject.optBoolean("priceChangeConfirmation");
+ 
+         String oldSku = getString(dataObject, "oldSku");
+@@ -113,7 +123,11 @@
+             }
+         }
+ 
+-        return new MethodData(sku, isPriceChangeConfirmation, oldSku, purchaseToken, replacementMode);
++        return new MethodData(sku, obfuscatedAccountId, isPriceChangeConfirmation, oldSku, purchaseToken, replacementMode);
++    }
++
++    static boolean isValidAccountId(@Nullable String value) {
++        return value != null && value.length() == 64 && value.matches("[a-f0-9]{64}");
+     }
+ 
+     /**
+--- a/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PlayBillingWrapper.java
++++ b/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PlayBillingWrapper.java
+@@ -71,6 +71,13 @@
+                 .build();
+     }
+ 
++    // Package-private constructor for isolated SDK-boundary unit tests. It changes
++    // no production factory, global state, caller verification or browser token.
++    PlayBillingWrapper(Listener listener, BillingClient client) {
++        mListener = listener;
++        mClient = client;
++    }
++
+     @Override
+     public void connect(BillingClientStateListener callback) {
+         mClient.startConnection(callback);
+@@ -132,6 +139,9 @@
+ 
+     @Override
+     public boolean launchPaymentFlow(Activity activity, ProductDetails productDetails, MethodData methodData) {
++        if (methodData == null || !MethodData.isValidAccountId(methodData.obfuscatedAccountId)) {
++            return false;
++        }
+         BillingFlowParams.SubscriptionUpdateParams.Builder subUpdateParamsBuilder =
+             BillingFlowParams.SubscriptionUpdateParams.newBuilder();
+ 
+@@ -151,7 +161,8 @@
+         productDetailsParamsList.add(productDetailsParamsBuilder.build());
+ 
+         BillingFlowParams.Builder builder = BillingFlowParams.newBuilder()
+-            .setProductDetailsParamsList(productDetailsParamsList);
++            .setProductDetailsParamsList(productDetailsParamsList)
++            .setObfuscatedAccountId(methodData.obfuscatedAccountId);
+ 
+         if (methodData.replacementMode != null) {
+             subUpdateParamsBuilder.setSubscriptionReplacementMode(methodData.replacementMode);

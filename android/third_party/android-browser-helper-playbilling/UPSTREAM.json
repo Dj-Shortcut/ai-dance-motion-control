@@ -1,0 +1,226 @@
+{
+  "commit": "601087701eb941a76335c58593dac9f87d2a49b0",
+  "files": {
+    "LICENSE": {
+      "git_blob_sha1": "67db8588217f266eb561f75fae738656325deac9",
+      "local_sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "upstream_path": "LICENSE"
+    },
+    "consumer-rules.pro": {
+      "git_blob_sha1": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "upstream_path": "playbilling/consumer-rules.pro"
+    },
+    "proguard-rules.pro": {
+      "git_blob_sha1": "f1b424510da51fd82143bc74a0a801ae5a1e2fcd",
+      "local_sha256": "1cf8c57e8f79c250b0af9c1a5a4edad71a5c348a79ab70243b6bae086c150ad2",
+      "sha256": "1cf8c57e8f79c250b0af9c1a5a4edad71a5c348a79ab70243b6bae086c150ad2",
+      "upstream_path": "playbilling/proguard-rules.pro"
+    },
+    "src/main/AndroidManifest.xml": {
+      "git_blob_sha1": "aa457b446c41638f822bdf5620742e79b169a24d",
+      "local_sha256": "d0e0e94c5fe4ba7bfde4863fc5f8e846823d1f57f07d2d97b013ef89548eddd8",
+      "sha256": "d0e0e94c5fe4ba7bfde4863fc5f8e846823d1f57f07d2d97b013ef89548eddd8",
+      "upstream_path": "playbilling/src/main/AndroidManifest.xml"
+    },
+    "src/main/aidl/com/google/androidbrowserhelper/playbilling/ICallback.aidl": {
+      "git_blob_sha1": "aa339dcdd962f7a060a62221c917cbba29ee8c19",
+      "local_sha256": "faff0b8beaf712301eacc4f9b65472828c013f1fd7b95d4100e993fda9572843",
+      "sha256": "faff0b8beaf712301eacc4f9b65472828c013f1fd7b95d4100e993fda9572843",
+      "upstream_path": "playbilling/src/main/aidl/com/google/androidbrowserhelper/playbilling/ICallback.aidl"
+    },
+    "src/main/aidl/org/chromium/IsReadyToPayService.aidl": {
+      "git_blob_sha1": "c5cfd8f55e0298dfe03b8e8f26104b8aa6a262c8",
+      "local_sha256": "e8553fce3ac904b3446da2c84d9d18c3ad4a44971dc73a95abbc4b43d8499afb",
+      "sha256": "e8553fce3ac904b3446da2c84d9d18c3ad4a44971dc73a95abbc4b43d8499afb",
+      "upstream_path": "playbilling/src/main/aidl/org/chromium/IsReadyToPayService.aidl"
+    },
+    "src/main/aidl/org/chromium/IsReadyToPayServiceCallback.aidl": {
+      "git_blob_sha1": "5ff5dede0bed0fcc30e6a2e5911aa2f3d068d535",
+      "local_sha256": "0bda20ac6253fa81eb85a77c72ea3e3c19c5aa7f41bfdd2f6f82f093c3683f5a",
+      "sha256": "0bda20ac6253fa81eb85a77c72ea3e3c19c5aa7f41bfdd2f6f82f093c3683f5a",
+      "upstream_path": "playbilling/src/main/aidl/org/chromium/IsReadyToPayServiceCallback.aidl"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/AcknowledgeCall.java": {
+      "git_blob_sha1": "e9d2557204f834e8285428815d9ecf17aa4b2283",
+      "local_sha256": "4f6b0f72895b7204a70ff06ddf8305d89c15927ee85b28bf89cee3010eca5e99",
+      "sha256": "4f6b0f72895b7204a70ff06ddf8305d89c15927ee85b28bf89cee3010eca5e99",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/AcknowledgeCall.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/BillingResultMerger.java": {
+      "git_blob_sha1": "39095d2b89c5a6e544b72770c3b578669f38ea19",
+      "local_sha256": "02f55699fbdca37d56ddb1e9d54994da9f884c1a2810b6a878bd607d4781501a",
+      "sha256": "02f55699fbdca37d56ddb1e9d54994da9f884c1a2810b6a878bd607d4781501a",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/BillingResultMerger.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ConnectedBillingWrapper.java": {
+      "git_blob_sha1": "97115bee94914f7e9b1b444350b8652d1dc1d1af",
+      "local_sha256": "c4b989d5cffe48f5e3d478b64cb0a47e0239812b37543ebd8e7ba6c7fd0aed62",
+      "sha256": "c4b989d5cffe48f5e3d478b64cb0a47e0239812b37543ebd8e7ba6c7fd0aed62",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ConnectedBillingWrapper.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ConsumeCall.java": {
+      "git_blob_sha1": "4364710b3b96645250ce78dafa683452d801a5a3",
+      "local_sha256": "944cc732d740f9021fdfc8ddab966af2ecc5316c6bdb088753605eb2f0ef56fb",
+      "sha256": "944cc732d740f9021fdfc8ddab966af2ecc5316c6bdb088753605eb2f0ef56fb",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ConsumeCall.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsCallback.java": {
+      "git_blob_sha1": "763ab7b4c13797c5a47fd86b1114879d7126d12b",
+      "local_sha256": "e5b037802bec98af4e70bc2f97f16640ae12fb7da484fb25e9937e67c7bb9656",
+      "sha256": "e5b037802bec98af4e70bc2f97f16640ae12fb7da484fb25e9937e67c7bb9656",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsCallback.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsConverter.java": {
+      "git_blob_sha1": "9d3826f4fa04abd616079b7ca5198a84bf09d469",
+      "local_sha256": "0e234ede231782bef90be527d1213cb40f23d416e51a6c2d391d9d8672b64fdc",
+      "sha256": "0e234ede231782bef90be527d1213cb40f23d416e51a6c2d391d9d8672b64fdc",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsConverter.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsRequestHandler.java": {
+      "git_blob_sha1": "db9ce7b64e99113b78c57b601e31d7cc91c04679",
+      "local_sha256": "5ba0a61f3e0931db69f60689c889f55d78139c7d4bb89dc87d05b2573d7bf0e2",
+      "sha256": "5ba0a61f3e0931db69f60689c889f55d78139c7d4bb89dc87d05b2573d7bf0e2",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/DigitalGoodsRequestHandler.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/GetDetailsCall.java": {
+      "git_blob_sha1": "e5d74740469d491f5c2157723150cad8bd84ea31",
+      "local_sha256": "a6faa29db1b4907c570ad79420ab2f52cbec505a4d89a109f0971a31dc1b11db",
+      "sha256": "a6faa29db1b4907c570ad79420ab2f52cbec505a4d89a109f0971a31dc1b11db",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/GetDetailsCall.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ItemDetails.java": {
+      "git_blob_sha1": "fb6a2f281c2fe8e70cebd6457c74eb4912fa7995",
+      "local_sha256": "404540df2d484d32c936b884b39b41e871dde21af4ed7189e0717ff67a3a1384",
+      "sha256": "404540df2d484d32c936b884b39b41e871dde21af4ed7189e0717ff67a3a1384",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ItemDetails.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/LegacyPurchaseDetails.java": {
+      "git_blob_sha1": "ff60b36cb5fe1c978588fb1f8700057c1af4e4f7",
+      "local_sha256": "3c5a3fb34504ba55b48b689331ab1e61dc15ea4a3ec50be5b2b166637453a2f5",
+      "sha256": "3c5a3fb34504ba55b48b689331ab1e61dc15ea4a3ec50be5b2b166637453a2f5",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/LegacyPurchaseDetails.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ListPurchaseHistoryCall.java": {
+      "git_blob_sha1": "ba79073f611a43c6ba2b47f5309bf6d2725b9416",
+      "local_sha256": "e1fc6847a1630e9f762ca5566dd8058880dafb5a310066bac25a296b11973d08",
+      "sha256": "e1fc6847a1630e9f762ca5566dd8058880dafb5a310066bac25a296b11973d08",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ListPurchaseHistoryCall.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ListPurchasesCall.java": {
+      "git_blob_sha1": "a1ac0ff251bf77c14fc646d80bf4d2f382142b44",
+      "local_sha256": "52807675d694bde456ed4cc262e72cb5bcbe504f096988720563aec44d598770",
+      "sha256": "52807675d694bde456ed4cc262e72cb5bcbe504f096988720563aec44d598770",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/ListPurchasesCall.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/Logging.java": {
+      "git_blob_sha1": "62285e1a744c48ec827f415c97b4922b0841d71f",
+      "local_sha256": "85d95c4627b306ff46c024070fecfd30dd858ddb87ba2c5ad328fecd00f1c02d",
+      "sha256": "85d95c4627b306ff46c024070fecfd30dd858ddb87ba2c5ad328fecd00f1c02d",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/Logging.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/PurchaseDetails.java": {
+      "git_blob_sha1": "4b778dc749d1ea4603525b3652d47b46a8edc45c",
+      "local_sha256": "57fa7afe5334841679a323118ad219535212496f83d276185b574db719f3e6e1",
+      "sha256": "57fa7afe5334841679a323118ad219535212496f83d276185b574db719f3e6e1",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/digitalgoods/PurchaseDetails.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/BillingWrapper.java": {
+      "git_blob_sha1": "c51421c3e5f51e262664c6fa1c1dde72cec7ff0d",
+      "local_sha256": "1b1ed22e0970e80ccbc90c58229d075080e9e8b487265167d2033635d2b3a799",
+      "sha256": "1b1ed22e0970e80ccbc90c58229d075080e9e8b487265167d2033635d2b3a799",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/BillingWrapper.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/BillingWrapperFactory.java": {
+      "git_blob_sha1": "96f50b2fa4ccaa9e80e5cea0742a5877d4a4ae33",
+      "local_sha256": "39177989dfb96765143d22ee6acfb4ba333abacb4a1523b5f6893e8b38e9c2a7",
+      "sha256": "39177989dfb96765143d22ee6acfb4ba333abacb4a1523b5f6893e8b38e9c2a7",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/BillingWrapperFactory.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/InvocationTracker.java": {
+      "git_blob_sha1": "f7bc8dd4e0cbdf68123f37f8a72c3ee51e204c4f",
+      "local_sha256": "f3c2bec243e21d9dca29520963a54ee580c55147d592ef709236a5ad0c7d3789",
+      "sha256": "f3c2bec243e21d9dca29520963a54ee580c55147d592ef709236a5ad0c7d3789",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/InvocationTracker.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/Logging.java": {
+      "git_blob_sha1": "392580c45609ebdc3be20bf8cc089605f49f9be3",
+      "local_sha256": "23dac2387a7df05c1c0d0b4fc4d0032f0a87a5f9b7f2ec38b8bd9ecbb2f923b4",
+      "sha256": "23dac2387a7df05c1c0d0b4fc4d0032f0a87a5f9b7f2ec38b8bd9ecbb2f923b4",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/Logging.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/MethodData.java": {
+      "git_blob_sha1": "ee3fa68e363488892058a71ae39c87b5d8efb01f",
+      "local_sha256": "6c2f233477cbb70886aaf5e72f55cbe69b9580b8c03b29ad657c0227eeb20188",
+      "sha256": "c9cbfe6c73fe624493bb879257e68fb79ce477030c09aefdd56eb47175a86a0b",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/MethodData.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/MockBillingWrapper.java": {
+      "git_blob_sha1": "c8d435b6247e9532c27c0cabb1dbc30a5f538ffd",
+      "local_sha256": "64fcd07114ac0924ff3340c262edcfff6fc759b468816332204106cb323e4978",
+      "sha256": "64fcd07114ac0924ff3340c262edcfff6fc759b468816332204106cb323e4978",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/MockBillingWrapper.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/MultiProductTypeInvocationTracker.java": {
+      "git_blob_sha1": "0aedb92a1d22a82e3f6a5489a6327bd83998d0b2",
+      "local_sha256": "d29560b456c25379b8183f56a399ee355d2d5bc93a43216bf940bc30426b48fe",
+      "sha256": "d29560b456c25379b8183f56a399ee355d2d5bc93a43216bf940bc30426b48fe",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/MultiProductTypeInvocationTracker.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentActivity.java": {
+      "git_blob_sha1": "879b1df5f24c7c2a43a334baa78c6d3d271335a8",
+      "local_sha256": "24ffcfb07d45e1501015d4bd995122881dd02fad39970e0829b154cf52b0191d",
+      "sha256": "24ffcfb07d45e1501015d4bd995122881dd02fad39970e0829b154cf52b0191d",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentActivity.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentResult.java": {
+      "git_blob_sha1": "66081dac0b2794a85316859d769b61960d2aa7ef",
+      "local_sha256": "a73580bc5b822bd045c2d1a077794d477e9e4b6f0be9db1594b06b8bb6cc0c21",
+      "sha256": "a73580bc5b822bd045c2d1a077794d477e9e4b6f0be9db1594b06b8bb6cc0c21",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentResult.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentService.java": {
+      "git_blob_sha1": "3f1fd5276a0a1c35664e1c09f94cd79b279b1b2e",
+      "local_sha256": "e250d8ed3c39c3623a14c82bf97d0821c2cde0447649b16ad6894f3915a2cebe",
+      "sha256": "e250d8ed3c39c3623a14c82bf97d0821c2cde0447649b16ad6894f3915a2cebe",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentService.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentVerifier.java": {
+      "git_blob_sha1": "e8ebee1680df55c6a7c9b21a217579a070cb6b2b",
+      "local_sha256": "203a46b3f4db2516ada96742320ac1ee099ba99b1159fbdab26f6bd623ed01e9",
+      "sha256": "203a46b3f4db2516ada96742320ac1ee099ba99b1159fbdab26f6bd623ed01e9",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PaymentVerifier.java"
+    },
+    "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PlayBillingWrapper.java": {
+      "git_blob_sha1": "0e54623fd33368bfdd48bd01bb58a5ae45e5c65f",
+      "local_sha256": "180589fed5e770e0a35d13bf83d05587f690a12bb6359c4f63dff0a6af039cce",
+      "sha256": "a96055eaf91f886b9e1100ebcf7df207fbeb0a46de75fc2f544ac3f65d0538ed",
+      "upstream_path": "playbilling/src/main/java/com/google/androidbrowserhelper/playbilling/provider/PlayBillingWrapper.java"
+    },
+    "src/main/res/values/strings.xml": {
+      "git_blob_sha1": "b9972f7d825292bb7b5887f7aa3ab2f235fde8ca",
+      "local_sha256": "e916568d346c8640dc79518968d19fdd86b099b184b170af0ea6dee1d3bc215d",
+      "sha256": "e916568d346c8640dc79518968d19fdd86b099b184b170af0ea6dee1d3bc215d",
+      "upstream_path": "playbilling/src/main/res/values/strings.xml"
+    }
+  },
+  "license": "Apache-2.0",
+  "module": "playbilling",
+  "repository": "https://github.com/GoogleChrome/android-browser-helper",
+  "rig_patch": {
+    "caller_verification_changed": false,
+    "diff_file": "RIG.patch",
+    "diff_sha256": "e9e629853477e84801791740910f6fb70564c98d6e2b0a014e7763796898a3e6",
+    "modified_files": [
+      "src/main/java/com/google/androidbrowserhelper/playbilling/provider/MethodData.java",
+      "src/main/java/com/google/androidbrowserhelper/playbilling/provider/PlayBillingWrapper.java"
+    ],
+    "production_test_factory_hooks_changed": false,
+    "reason": "Require and forward the server-issued RIG account binding before any Google purchase sheet can open.",
+    "unchanged_upstream_files": 32
+  },
+  "tag": "android-browser-helper-2.7.4",
+  "upstream_version": "1.2.0"
+}

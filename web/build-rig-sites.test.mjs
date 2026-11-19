@@ -19,6 +19,13 @@ test('a fresh portable build creates its metadata and serves current UI without 
   const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(server).toString('base64'));
   const origin='https://rig.example.chatgpt.site',env={RIG_SITES_PRODUCER_ORIGIN:origin};
   const page=await worker.fetch(new Request(origin+'/'),env);assert.equal(page.status,200);const html=await page.text();
+  assert.doesNotMatch(html,/name="rig-app-channel"/,'ordinary website must keep its existing checkout channel');
+  const androidPage=await worker.fetch(new Request(origin+'/android/'),env);assert.equal(androidPage.status,200);const androidHtml=await androidPage.text();
+  assert.match(androidHtml,/<meta name="rig-app-channel" content="google-play">/);assert.match(androidHtml,/signin-with-chatgpt\?return_to=%2Fandroid%2F/);assert.match(androidHtml,/signout-with-chatgpt\?return_to=%2Fandroid%2F/);
+  assert.equal((await worker.fetch(new Request(origin+'/android/index.html'),env)).status,404);
+  const googlePayments=await worker.fetch(new Request(origin+'/multiuser/google-play-payments.js'),env);assert.equal(googlePayments.status,200);const googleClient=await googlePayments.text();
+  assert.match(googleClient,/getDigitalGoodsService/);assert.match(googleClient,/obfuscatedAccountId/);assert.doesNotMatch(googleClient,/\/api\/payments\/create|mollie\.com/);
+  const molliePayments=await worker.fetch(new Request(origin+'/multiuser/payments.js'),env);assert.equal(await molliePayments.text(),await readFile(join(root,'frontend/multiuser/payments.js'),'utf8'),'Android prep must not rewrite the website payment script');
   assert.match(html,/Op je foto/);assert.match(html,/id="briefDialog"/);assert.match(html,/id="tryShortVideo"/);assert.match(html,/id="flowTrialDuration"/);assert.match(html,/Eerst een proefje/);assert.match(html,/signin-with-chatgpt/);assert.doesNotMatch(html,/Inloggen met Google/);
   const canonical='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/';
   assert.match(html,/<title>RIG — Zet je foto in beweging<\/title>/);assert.ok(html.includes('<link rel="canonical" href="'+canonical+'">'));assert.ok(html.includes('<meta property="og:image" content="'+canonical+'social/rig-share-v1.png">'));assert.match(html,/<meta property="og:image:width" content="1200">/);assert.match(html,/<meta property="og:image:height" content="630">/);assert.match(html,/<meta name="twitter:card" content="summary_large_image">/);

@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.google.androidbrowserhelper.playbilling'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 24
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    buildFeatures {
+        aidl = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        // Upstream's package-only manifest is retained byte-for-byte as evidence.
+        // AGP 8 requires the namespace in this build file instead.
+        main.manifest.srcFile 'manifest/AndroidManifest.xml'
+    }
+
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            def frameworkRepository = rootProject.layout.buildDirectory
+                    .dir('robolectric-maven').get().asFile
+            def isolatedTestHome = rootProject.layout.buildDirectory
+                    .dir('test-home').get().asFile
+            systemProperty 'user.home', isolatedTestHome.absolutePath
+            systemProperty 'maven.repo.local', frameworkRepository.absolutePath
+            systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+            doFirst {
+                for (directory in [frameworkRepository, isolatedTestHome]) {
+                    if (!directory.isDirectory() && !directory.mkdirs()) {
+                        throw new GradleException('Cannot create the isolated test framework directories')
+                    }
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    api 'androidx.browser:browser:1.10.0'
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.4'
+    implementation 'com.android.billingclient:billing:8.3.0'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.12.2'
+    testImplementation 'org.mockito:mockito-core:5.15.2'
+}
