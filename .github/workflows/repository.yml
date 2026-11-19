@@ -24,5 +24,7 @@ jobs:
           persist-credentials: false
       - name: Reject credential and runtime artifacts
         run: python3 scripts/check-repository-safety.py
-      - name: Check legacy CLI syntax without running a render
-        run: node --check render.mjs
+      - name: Check legacy CLI and run its offline tests
+        run: |
+          node --check render.mjs
+          node --test scripts/legacy-cli.test.mjs

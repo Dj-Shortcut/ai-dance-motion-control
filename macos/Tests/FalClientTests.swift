@@ -3,15 +3,26 @@ import Foundation
 final class MockProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (Int, Data))!
     static var requests: [URLRequest] = []
+    static var headers: [String: String] = [:]
+    static var redirect: URL?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         do {
             Self.requests.append(request)
             let (code, data) = try Self.handler(request)
-            let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+            let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: "HTTP/1.1", headerFields: Self.headers)!
+            if let redirect = Self.redirect {
+                Self.redirect = nil
+                client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: redirect), redirectResponse: response)
+                return
+            }
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
+            if !data.isEmpty {
+                let middle = data.count / 2
+                client?.urlProtocol(self, didLoad: data.prefix(middle))
+                client?.urlProtocol(self, didLoad: data.suffix(from: middle))
+            }
             client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
@@ -36,9 +47,8 @@ final class MockProtocol: URLProtocol {
     static func main() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockProtocol.self]
-        let session = URLSession(configuration: config)
         let base = URL(string: "https://queue.fal.run")!
-        let client = FalClient(apiKey: "TEST_ONLY_NOT_REAL", session: session)
+        let client = FalClient(apiKey: "TEST_ONLY_NOT_REAL", configuration: config)
         let id = "test-request"
         let responseURL = base.appendingPathComponent("fal-ai/kling-video/requests/\(id)")
         let job = FalJob(requestID: id, statusURL: responseURL.appendingPathComponent("status"), responseURL: responseURL,
@@ -178,6 +188,40 @@ final class MockProtocol: URLProtocol {
         MockProtocol.requests = []
         do { try await client.download(from:video,to:already); throw NSError(domain:"expected",code:1) }
         catch FalError.existingFile { try check(MockProtocol.requests.isEmpty, "download never overwrites existing file") }
+
+        let bounded = FalClient(apiKey: "TEST_ONLY_NOT_REAL", configuration: config, responseLimit: 256, resultLimit: 8)
+        MockProtocol.handler = { _ in (200, Data(repeating: 65, count: 257)) }
+        do { _ = try await bounded.pricing(model: .klingStandard); throw NSError(domain:"expected",code:1) }
+        catch FalError.responseTooLarge { checks += 1 }
+        MockProtocol.requests = []
+        do { _ = try await bounded.submit(imageURL: image, videoURL: video, model: .klingPro, prompt: "", keepSound: true); throw NSError(domain:"expected",code:1) }
+        catch FalError.ambiguousSubmission { try check(MockProtocol.requests.count == 1, "oversized queue response never causes a retry") }
+        MockProtocol.handler = { req in
+            if req.httpMethod == "PUT" { return (200, Data(repeating: 65, count: 257)) }
+            return (200, data(["upload_url": "https://v3b.fal.media/presigned", "file_url": image.absoluteString]))
+        }
+        do { _ = try await bounded.upload(file: fixture, mimeType: "image/jpeg"); throw NSError(domain:"expected",code:1) }
+        catch FalError.responseTooLarge { checks += 1 }
+
+        let boundedTarget = FileManager.default.temporaryDirectory.appendingPathComponent("fal-bounded-\(UUID()).mp4")
+        defer { try? FileManager.default.removeItem(at: boundedTarget) }
+        MockProtocol.handler = { _ in (200, Data(repeating: 0, count: 9)) }
+        do { try await bounded.download(from: video, to: boundedTarget); throw NSError(domain:"expected",code:1) }
+        catch FalError.responseTooLarge { try check(!FileManager.default.fileExists(atPath: boundedTarget.path), "stream over limit never publishes partial file") }
+        MockProtocol.headers = ["Content-Length": "9"]
+        MockProtocol.handler = { _ in (200, Data(repeating: 0, count: 8)) }
+        do { try await bounded.download(from: video, to: boundedTarget); throw NSError(domain:"expected",code:1) }
+        catch FalError.responseTooLarge { try check(!FileManager.default.fileExists(atPath: boundedTarget.path), "declared over-limit result is refused") }
+        MockProtocol.headers = [:]
+        try await bounded.download(from: video, to: boundedTarget)
+        let boundedBytes = try Data(contentsOf: boundedTarget)
+        try check(boundedBytes.count == 8, "result exactly at limit succeeds")
+
+        MockProtocol.requests = []
+        MockProtocol.handler = { _ in (307, Data()) }
+        MockProtocol.redirect = URL(string: "https://example.test/unused")
+        do { _ = try await bounded.pricing(model: .klingStandard); throw NSError(domain:"expected",code:1) }
+        catch FalError.unsafeURL { try check(MockProtocol.requests.count == 1, "redirect stopped before a second request") }
 
         print("PASS: \(checks) fal client checks; mocked only, no fal credits spent")
     }

@@ -47,12 +47,13 @@ struct FalPrice: Sendable {
 }
 
 enum FalError: LocalizedError {
-    case missingKey, unsafeURL, invalidResponse, invalidFile, existingFile, network, ambiguousSubmission, http(Int), generationFailed
+    case missingKey, unsafeURL, invalidResponse, responseTooLarge, invalidFile, existingFile, network, ambiguousSubmission, http(Int), generationFailed
     var errorDescription: String? {
         switch self {
         case .missingKey: return "Bewaar eerst je fal.ai API-key in Sleutelhanger."
         case .unsafeURL: return "fal.ai gaf een onverwacht webadres terug. De aanvraag is veilig gestopt."
         case .invalidResponse: return "Het antwoord van fal.ai is onvolledig of onleesbaar. Controleer de bewaarde aanvraag."
+        case .responseTooLarge: return "Het antwoord van fal.ai overschrijdt de maximale downloadgrootte."
         case .invalidFile: return "Het voorbereide bestand is leeg of groter dan 90 MB. Kies een kortere clip."
         case .existingFile: return "Er bestaat al een bestand op deze locatie. Kies een andere bestandsnaam."
         case .network: return "Geen verbinding met fal.ai. Je kunt de bestaande aanvraag later opnieuw ophalen."
@@ -71,19 +72,104 @@ enum FalError: LocalizedError {
     }
 }
 
+/// Each transfer has one task and a serial delegate queue. No response is buffered by a completion-handler task.
+private final class FalTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let limit: Int
+    private let output: FileHandle?
+    private var received = 0
+    private var body = Data()
+    private var acceptedResponse = false
+    private var failure: Error?
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    init(limit: Int, output: FileHandle? = nil) {
+        self.limit = limit
+        self.output = output
+    }
+
+    func run(_ request: URLRequest, configuration: URLSessionConfiguration, upload: URL? = nil) async throws -> Data {
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                let task: URLSessionDataTask
+                if let upload { task = session.uploadTask(with: request, fromFile: upload) }
+                else { task = session.dataTask(with: request) }
+                if Task.isCancelled { task.cancel() }
+                else { task.resume() }
+            }
+        } onCancel: {
+            session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        failure = FalError.unsafeURL
+        task.cancel()
+        completionHandler(nil)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard failure == nil, let http = response as? HTTPURLResponse else {
+            failure = failure ?? FalError.invalidResponse
+            completionHandler(.cancel)
+            return
+        }
+        if !(200...299).contains(http.statusCode) { failure = FalError.http(http.statusCode) }
+        else if response.expectedContentLength > Int64(limit) { failure = FalError.responseTooLarge }
+        acceptedResponse = failure == nil
+        completionHandler(acceptedResponse ? .allow : .cancel)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard acceptedResponse, failure == nil else { return }
+        guard data.count <= limit - received else {
+            failure = FalError.responseTooLarge
+            dataTask.cancel()
+            return
+        }
+        do {
+            if let output { try output.write(contentsOf: data) }
+            else { body.append(data) }
+            received += data.count
+        } catch {
+            failure = error
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let failure { continuation?.resume(throwing: failure) }
+        else if let error = error as? URLError, error.code == .cancelled { continuation?.resume(throwing: CancellationError()) }
+        else if error != nil { continuation?.resume(throwing: FalError.network) }
+        else if !acceptedResponse { continuation?.resume(throwing: FalError.invalidResponse) }
+        else { continuation?.resume(returning: body) }
+        continuation = nil
+    }
+}
+
 final class FalClient: @unchecked Sendable {
     private let apiKey: String
-    private let session: URLSession
+    private let configuration: URLSessionConfiguration
+    private let responseLimit: Int
+    private let resultLimit: Int
     private let queueBase: URL
     private let restBase: URL
     private let platformBase: URL
 
-    init(apiKey: String, session: URLSession = .shared,
+    init(apiKey: String, configuration: URLSessionConfiguration = .ephemeral,
          queueBase: URL = URL(string: "https://queue.fal.run")!,
          restBase: URL = URL(string: "https://rest.fal.ai")!,
-         platformBase: URL = URL(string: "https://api.fal.ai/v1")!) {
+         platformBase: URL = URL(string: "https://api.fal.ai/v1")!,
+         responseLimit: Int = 1024 * 1024, resultLimit: Int = 100 * 1024 * 1024) {
         self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.session = session
+        self.configuration = configuration.copy() as! URLSessionConfiguration
+        self.configuration.urlCache = nil
+        self.responseLimit = responseLimit
+        self.resultLimit = resultLimit
         self.queueBase = queueBase
         self.restBase = restBase
         self.platformBase = platformBase
@@ -120,8 +206,7 @@ final class FalClient: @unchecked Sendable {
         put.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         put.httpShouldHandleCookies = false
         // The presigned upload gets no API-key header.
-        let (_, http) = try await transferredUpload(put, file: file)
-        try check(http)
+        _ = try await FalTransfer(limit: responseLimit).run(put, configuration: configuration, upload: file)
         return fileURL
     }
 
@@ -149,13 +234,10 @@ final class FalClient: @unchecked Sendable {
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: input)
         let data: Data
-        let response: URLResponse
-        do { (data, response) = try await session.data(for: req) }
+        do { data = try await FalTransfer(limit: responseLimit).run(req, configuration: configuration) }
+        catch FalError.http(let code) where (400...499).contains(code) { throw FalError.http(code) }
+        // Missing or oversized responses and server failures may follow a successful queue submission.
         catch { throw FalError.ambiguousSubmission }
-        guard let http = response as? HTTPURLResponse else { throw FalError.ambiguousSubmission }
-        // A 5xx may have occurred after the queue accepted the request.
-        if http.statusCode >= 500 { throw FalError.ambiguousSubmission }
-        try check(http)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let requestID = object["request_id"] as? String, !requestID.isEmpty else { throw FalError.ambiguousSubmission }
         // The server convenience URLs intentionally omit the model's endpoint suffix.
@@ -202,18 +284,23 @@ final class FalClient: @unchecked Sendable {
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw FalError.existingFile }
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 300)
         req.httpShouldHandleCookies = false
-        let temporary: URL
-        let response: URLResponse
-        do { (temporary, response) = try await session.download(for: req) }
-        catch is CancellationError { throw CancellationError() }
-        catch { throw FalError.network }
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        guard let http = response as? HTTPURLResponse else { throw FalError.invalidResponse }
-        try check(http)
-        let size = try FileManager.default.attributesOfItem(atPath: temporary.path)[.size] as? NSNumber
-        guard (size?.intValue ?? 0) > 0 else { throw FalError.invalidFile }
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: temporary, to: destination)
+        let files = FileManager.default
+        try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directory = try files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: destination, create: true)
+        defer { try? files.removeItem(at: directory) }
+        let temporary = directory.appendingPathComponent("result")
+        try Data().write(to: temporary, options: .withoutOverwriting)
+        let handle = try FileHandle(forWritingTo: temporary)
+        do {
+            _ = try await FalTransfer(limit: resultLimit, output: handle).run(req, configuration: configuration)
+            guard try handle.offset() > 0 else { throw FalError.invalidFile }
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        try Task.checkCancellation()
+        try files.moveItem(at: temporary, to: destination)
     }
 
     private func request(_ url: URL, method: String) throws -> URLRequest {
@@ -228,31 +315,12 @@ final class FalClient: @unchecked Sendable {
     }
 
     private func json(_ request: URLRequest, allowEmpty: Bool = false) async throws -> [String: Any] {
-        let data: Data
-        let response: URLResponse
-        do { (data, response) = try await session.data(for: request) }
-        catch is CancellationError { throw CancellationError() }
-        catch { throw FalError.network }
-        guard let http = response as? HTTPURLResponse else { throw FalError.invalidResponse }
-        try check(http)
+        let data = try await FalTransfer(limit: responseLimit).run(request, configuration: configuration)
         if allowEmpty && data.isEmpty { return [:] }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FalError.invalidResponse }
         return object
     }
 
-    private func transferredUpload(_ request: URLRequest, file: URL) async throws -> (Data, HTTPURLResponse) {
-        let data: Data
-        let response: URLResponse
-        do { (data, response) = try await session.upload(for: request, fromFile: file) }
-        catch is CancellationError { throw CancellationError() }
-        catch { throw FalError.network }
-        guard let http = response as? HTTPURLResponse else { throw FalError.invalidResponse }
-        return (data, http)
-    }
-
-    private func check(_ response: HTTPURLResponse) throws {
-        guard (200...299).contains(response.statusCode) else { throw FalError.http(response.statusCode) }
-    }
     private func requireURL(_ url: URL?) throws -> URL {
         guard let url else { throw FalError.unsafeURL }; return url
     }
