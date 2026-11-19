@@ -2,9 +2,9 @@
 //   test = 5 seconden (goedkoop proberen), vol = de volledige clip
 // Verwacht in deze map: ik_voorkant.jpg, dans_test_5s.mp4 en dans_20s.mp4
 import { fal } from "@fal-ai/client";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createInterface } from "node:readline/promises";
+import { promptForFalKey, saveFalVideo } from "./scripts/legacy-cli.mjs";
 
 const lengte = process.argv[2] ?? "test";
 const welk = process.argv[3] ?? "beide";
@@ -16,9 +16,12 @@ if (!key && existsSync(".env")) {
   if (m) key = m[1].trim();
 }
 if (!key) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  key = (await rl.question("Plak je fal.ai API-key: ")).trim();
-  rl.close();
+  try {
+    key = await promptForFalKey();
+  } catch (error) {
+    console.error(error.name === "AbortError" ? "Invoer geannuleerd." : error.message);
+    process.exit(1);
+  }
 }
 fal.config({ credentials: key });
 
@@ -61,10 +64,9 @@ await Promise.all(
         onQueueUpdate: (u) => u.status === "IN_QUEUE" && console.log(`[${naam}] in de wachtrij...`),
       });
       const url = res.data?.video?.url;
-      if (!url) throw new Error("Geen video in antwoord: " + JSON.stringify(res.data));
-      const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+      if (!url) throw new Error("Geen video in het Fal-antwoord.");
       const uit = `resultaat_${naam}_${lengte}.mp4`;
-      await writeFile(uit, buf);
+      await saveFalVideo(url, uit);
       console.log(`[${naam}] klaar -> ${uit}`);
     } catch (e) {
       console.error(`[${naam}] mislukt:`, e?.body ? JSON.stringify(e.body, null, 2) : e.message);

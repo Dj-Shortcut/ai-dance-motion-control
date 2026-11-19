@@ -7,7 +7,7 @@ bevat nu de website, de bestaande Mac-app en de oorspronkelijke Node-CLI.
 | --- | --- | --- |
 | Website en private backend | [web/](web/) | lokale UI-, provider-, betaal- en mediacontroles |
 | Mac-app | [macos/](macos/) | volledige build en offline Fal-clienttests |
-| Oorspronkelijke CLI | `render.mjs` | syntaxcontrole; renderen is een betaalde handeling |
+| Oorspronkelijke CLI | `render.mjs` | syntaxcontrole en offline tests voor sleutelinvoer en videodownloads |
 
 ## Website ontwikkelen
 
