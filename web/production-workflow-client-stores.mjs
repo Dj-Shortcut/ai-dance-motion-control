@@ -2,7 +2,7 @@
 // R2 callbacks resolve server-owned references only; they never accept URLs.
 import {isProductionGenerationContext,productionFundingKind} from './production-generation-context.mjs';
 import {inspectWorkflowMp4} from './workflow-mp4-inspect.mjs';
-import {WORKFLOW_CLIENT_CONTRACT,WORKFLOW_CLIENT_LIMITS,validateWorkflowClientInspection} from './workflow-client-contract.mjs';
+import {WORKFLOW_CLIENT_CONTRACT,WORKFLOW_CLIENT_LIMITS,validateWorkflowClientInspection,workflowClientApprovalPayload} from './workflow-client-contract.mjs';
 const ID=/^[A-Za-z0-9_-]{1,100}$/,SHA=/^[a-f0-9]{64}$/;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const descriptor=(id,media)=>({id,sha256:media.sha256,size:media.size});
@@ -49,7 +49,7 @@ export function createProductionWorkflowClientStores(db,{productionContext,readC
   return {bytes,inspection};
  }
  function manifest(b){
-  return {version:WORKFLOW_CLIENT_CONTRACT,jobId:b.row.job_id,stageId:b.spec.id,planHash:b.plan.planHash,state:b.row.state,media:clone(b.spec.media),artifacts:clone(b.inputs),...(b.row.output_sha256?{output:{id:'composed-'+b.spec.id,sha256:b.row.output_sha256,size:b.row.output_size}}:{})};
+  return {version:WORKFLOW_CLIENT_CONTRACT,jobId:b.row.job_id,stageId:b.spec.id,planHash:b.plan.planHash,state:b.row.state,media:clone(b.spec.media),artifacts:clone(b.inputs),...(b.row.output_sha256?{output:{id:'composed-'+b.spec.id,sha256:b.row.output_sha256,size:b.row.output_size},approval:workflowClientApprovalPayload({jobId:b.row.job_id,plan:b.plan,steps:b.steps,outputHash:b.row.output_sha256})}:{})};
  }
  const api={
   async prepareAwaiting({userId,jobId}){
@@ -83,9 +83,20 @@ export function createProductionWorkflowClientStores(db,{productionContext,readC
    await db.prepare("UPDATE rig_generation_workflow_client_processing SET state='ready_to_advance',output_key=?,output_sha256=?,output_size=?,output_metadata_json=?,uploaded_at=? WHERE job_id=? AND stage_id=? AND user_id=? AND plan_hash=? AND state='awaiting_client_processing' AND NOT EXISTS(SELECT 1 FROM rig_generation_workflow_settlements WHERE job_id=?) AND EXISTS(SELECT 1 FROM rig_generation_workflow_steps WHERE job_id=? AND step_id=? AND state='prepared')").bind(key,sha256,inspection.size,JSON.stringify(inspection),clock(),jobId,b.spec.id,userId,b.plan.planHash,jobId,jobId,b.spec.beforeStepId).run();
    const after=await rowFor(userId,jobId,b.spec.id);if(after.row.output_sha256!==sha256)throw Error('Composed output requires reconciliation');return manifest(after);
   },
+  async prepareAdvance({userId,jobId,stageId,idempotencyKey,outputHash}){
+   if(!ID.test(idempotencyKey||'')||!SHA.test(outputHash||''))throw Error('Invalid client advance binding');
+   const b=await rowFor(userId,jobId,stageId);if(b.row.state==='advanced'){if(b.row.advance_key!==idempotencyKey||b.row.output_sha256!==outputHash)throw Error('Conflicting client advance');return {advanced:true,manifest:manifest(b)};}
+   if(b.row.state!=='ready_to_advance'||b.row.output_sha256!==outputHash||b.base.state!=='prepared'||b.settlement)throw Error('Verified composed output required');
+   if(typeof readCurrentProductionContext!=='function')throw Error('Fresh production policy reader required');
+   const current=await readCurrentProductionContext();if(!isProductionGenerationContext(current,{db})||current.env.RIG_PUBLIC_ORIGIN!==productionContext.env.RIG_PUBLIC_ORIGIN||b.quote.fundingKind==='owner-provider'&&productionFundingKind(current,userId)!=='owner-provider')throw Error('Fresh production policy unavailable');
+   if(await db.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(userId).first())throw Error('Client advance is blocked');
+   return {advanced:false,manifest:manifest(b)};
+  },
   async advance({userId,jobId,stageId,idempotencyKey,outputHash}){
    if(!ID.test(idempotencyKey||'')||!SHA.test(outputHash||''))throw Error('Invalid client advance binding');
-   const b=await rowFor(userId,jobId,stageId);
+   // Owner workflows advance only inside authorizeStep's proof-gated batch.
+   // This legacy mutation remains available solely to credit-funded callers.
+   const b=await rowFor(userId,jobId,stageId);if(b.quote.fundingKind==='owner-provider')throw Error('Owner output approval required');
    if(b.row.state==='advanced'){if(b.row.advance_key!==idempotencyKey||b.row.output_sha256!==outputHash)throw Error('Conflicting client advance');return {advanced:false,manifest:manifest(b)};}
    if(b.row.state!=='ready_to_advance'||b.row.output_sha256!==outputHash||b.base.state!=='prepared'||b.settlement)throw Error('Verified composed output required');
    if(typeof readCurrentProductionContext!=='function')throw Error('Fresh production policy reader required');

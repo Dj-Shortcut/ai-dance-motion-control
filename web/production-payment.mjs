@@ -10,6 +10,7 @@ import {prepareFundingAdmission,readFundingCoverage} from './funding-coverage.mj
 import {invitationRenderLimits} from './invitation-render-budget.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail=()=>Response.json({error:'Betalen is tijdelijk niet beschikbaar.'},{status:503,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
+const webhookReply=(status,error,extra={})=>Response.json({error},{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff',...extra}});
 class PreDispatchFailure extends Error {}
 const readinessReply=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 async function readinessJSON(response){
@@ -42,6 +43,19 @@ async function jsonBounded(res){
  if(!res.body)throw Error('Empty response');const r=res.body.getReader(),parts=[];let n=0;
  try{for(;;){const {done,value}=await r.read();if(done)break;n+=value.length;if(n>262144)throw Error('Large response');parts.push(value)}}finally{try{await r.cancel()}catch{}}
  const bytes=new Uint8Array(n);let p=0;for(const part of parts){bytes.set(part,p);p+=part.length}return {bytes,value:JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))};
+}
+async function admitProductionWebhook(env,id){
+ const local=await env.DB.prepare(`SELECT
+  EXISTS(SELECT 1 FROM rig_orders WHERE payment_id=?) AS correlated,
+  EXISTS(SELECT 1 FROM rig_orders WHERE payment_id IS NULL AND state IN ('creating','unknown')) AS pending`).bind(id).first();
+ if(!local||![0,1].includes(local.correlated)||![0,1].includes(local.pending))throw Error('Invalid webhook correlation');
+ if(local.correlated!==1&&local.pending!==1)return webhookReply(400,'Onbekende betaalmelding.');
+ // Known payment IDs never share verification capacity. A provider callback
+ // that races payment_id persistence gets a small, separate recovery budget.
+ const category=local.correlated===1?'webhook-payment':'webhook-race';
+ const userId=local.correlated===1?id:null;
+ if(await d1Limit({env,category,userId,method:'POST'})===true)return null;
+ return webhookReply(429,'Betaalmeldingen zijn tijdelijk begrensd. Probeer later opnieuw.',{'retry-after':'60'});
 }
 function provider(env,transport){
  return async(input,init={})=>{
@@ -95,14 +109,16 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
      // checkout still perform their own current coverage/admission checks.
      return Response.json({userId:trustedUserId,balanceCents:balance.balance,frozen:balance.frozen===1,currency:'EUR',mode:'live',purchasesEnabled:false,funding:'credits'},{headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
     }
+    let orderEvidence;
     if(req.method==='POST'&&url.pathname==='/api/payments/create'){
      // This bounded tester must never buy additional wallet credit while its
      // two-attempt contract would prevent delivery. Existing orders/webhooks
      // remain recoverable, and no checkout or billing document is created.
      if(await invitationRenderLimits(mapped.DB,trustedUserId))return readinessReply({error:'Dit account gebruikt de begrensde gratis test. Extra tegoed kopen is hiervoor niet beschikbaar.'},409);
      const prepared=await prepareCommercialCheckout(req,env,{userId:trustedUserId});if(prepared.response)return prepared.response;req=prepared.request;
+     orderEvidence=prepared.orderEvidence;
     }
-    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit})(req,mapped,trustedUserId)||new Response(null,{status:404});
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,orderAdmission:admit,...(orderEvidence?{orderEvidence}:{})})(req,mapped,trustedUserId)||new Response(null,{status:404});
     if(response.ok&&req.method==='GET'&&['/api/payments/packages','/api/payments/balance'].includes(url.pathname)){
      const value=await response.json();
      const stock=await coverage(mapped),packages=url.pathname==='/api/payments/packages'?value.packages:configuredPackages(mapped);
@@ -126,10 +142,9 @@ export function createProductionPayment({transport,orderAdmission,coverageReader
    const mapped=await validateProductionTenant(env);if(!mapped)return fail();
    if(req.method!=='POST'||req.url!==mapped.RIG_WEBHOOK_URL)return new Response(null,{status:404});
    try{
-    // Independent of edge/IP limits: even distributed untrusted notifications
-    // cannot trigger unlimited authenticated reads from the payment provider.
-    if(await d1Limit({env:mapped,category:'webhook',userId:null,method:'POST'})!==true)return Response.json({error:'Betaalmeldingen zijn tijdelijk begrensd. Probeer later opnieuw.'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
-    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true})(req,mapped,null)||new Response(null,{status:404});
+    // Admission runs after bounded form parsing but before any authenticated
+    // provider read, so malformed and unrelated IDs cannot consume its budget.
+    const response=await closedPaymentWithFetch(provider(mapped,transport),PreDispatchFailure,{allowLive:true,webhookAdmission:id=>admitProductionWebhook(mapped,id)})(req,mapped,null)||new Response(null,{status:404});
     if(response.ok&&env.RIG_AUTOMATIC_INVOICES_ENABLED==='yes'){try{await ensurePendingInvoices(env,{limit:4});}catch{}}
     return response;
    }catch{return fail()}

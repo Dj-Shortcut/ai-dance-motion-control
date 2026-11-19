@@ -20,8 +20,8 @@
   let quote = null, active = false, recentId=null,recentState=null,ownerVerifying=false;
   let workflowIntent=null,cleanupModule=null,disposed=false,suspended=false,resumeRequested=false,confirmation=null,quoteWork=null;
   const loadCleanupModule=()=>cleanupModule??=(typeof window.rigLoadCleanupModule==='function'?window.rigLoadCleanupModule():import('/multiuser/cleanup-client.js')).catch(error=>{cleanupModule=null;throw error;});
-  const getBinding=()=>({request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage});
-  const bindingCurrent=binding=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&binding.active?.()===true;
+  const getBinding=()=>({request:window.rigRequest,active:window.rigSessionActive,storage:window.rigScopedStorage,verification:window.rigOwnerVerification});
+  const bindingCurrent=binding=>window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&window.rigScopedStorage===binding.storage&&window.rigOwnerVerification===binding.verification&&binding.active?.()===true;
   const lifecycleBinding=getBinding(),lifecycleCurrent=()=>!disposed&&bindingCurrent(lifecycleBinding);
   function stopWorkflowIntent(){workflowIntent?.abort.abort();workflowIntent=null;}
   function beginWorkflowIntent(){stopWorkflowIntent();const binding=getBinding(),intent={abort:new AbortController(),binding};intent.current=()=>workflowIntent===intent&&!intent.abort.signal.aborted&&bindingCurrent(binding);workflowIntent=intent;return intent;}
@@ -269,7 +269,7 @@
         const module=await loadCleanupModule();if(!intent.current())return;
         if(!module.cleanupSupported(window)){note('Deze browser kan de lokale tussenstap niet uitvoeren. Open je bestaande opdracht in een ondersteunde browser.');el('checkGeneration').hidden=false;return;}
         note('Je video wordt lokaal gecombineerd; het oorspronkelijke beeld en geluid blijven buiten het masker behouden. Houd RIG open.');
-        await module.resumeClientProcessing({jobId:id,getBinding,signal:intent.abort.signal,isCurrent:intent.current,onProgress:progress=>{if(intent.current())note(progress.stage==='advance'?'Je bestaande opdracht gaat verder…':'Je video wordt lokaal gecombineerd…');}});
+        await module.resumeClientProcessing({jobId:id,getBinding,signal:intent.abort.signal,isCurrent:intent.current,onProgress:progress=>{if(intent.current())note(progress.stage==='approval'?'Controleer de samengestelde video en bevestig die op je apparaat.':progress.stage==='advance'?'Je bestaande opdracht gaat verder…':'Je video wordt lokaal gecombineerd…');}});
         if(!intent.current())return;
         continue;
       }

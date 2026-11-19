@@ -9,13 +9,13 @@ const hash=async b=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-25
 const bytes=new TextEncoder().encode('test image bytes');
 const model='fal-ai/kling-video/o3/standard/video-to-video/edit';
 test('invalid capabilities do not reach tenant, database or media',async()=>{
- let calls=0;const sha=await hash(bytes),url=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,kind:'image'});
+ let calls=0;const sha=await hash(bytes),issuedAt=Date.now(),url=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'image',now:issuedAt});
  const env={RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,DB:{prepare(){calls++;throw Error()}},RIG_MEDIA:{fetch(){calls++;throw Error()}}};
  const verifyTenant=()=>{calls++;return true};
  for(const bad of [url.replace(/\.[a-f0-9]{64}\//,'.'+'0'.repeat(64)+'/'),url+'?identity=x',url.replace(origin,'https://evil.example'),url.replace('.jpg','.mp4')]){
   if(bad.endsWith('.mp4'))continue;assert.equal((await handleProviderInput(new Request(bad),env,{verifyTenant})).status,404);
  }
- assert.equal((await handleProviderInput(new Request(url),env,{verifyTenant,now:Date.now()+6*3600*1000+1})).status,404);
+ assert.equal((await handleProviderInput(new Request(url),env,{verifyTenant,now:issuedAt+30*60*1000})).status,404);
  assert.equal((await handleProviderInput(new Request(url,{method:'POST'}),env,{verifyTenant})).status,404);
  assert.equal(calls,0);
  assert.equal(isProviderInputUrl(url,origin,'image'),true);assert.equal(isProviderInputUrl(url+'?x',origin,'image'),false);
@@ -23,45 +23,56 @@ test('invalid capabilities do not reach tenant, database or media',async()=>{
 test('real D1 checks funding, ownership, hashes, status, HEAD and single byte ranges',async()=>{
  const sha=await hash(bytes),vsha='b'.repeat(64);
  const bundle=await build({stdin:{contents:"import {handleProviderInput} from './rig-provider-inputs.mjs';export default {fetch:(req,env)=>handleProviderInput(req,env,{verifyTenant:async()=>true})}",resolveDir:process.cwd(),sourcefile:'gateway-fixture.mjs'},bundle:true,format:'esm',platform:'browser',write:false,logLevel:'silent'});
- const media=`export default {fetch(req){if(req.headers.get('X-Rig-User')!=='${user}'||req.headers.get('authorization')!=='Bearer ${secret}')return new Response(null,{status:403});return new Response('test image bytes',{headers:{'content-type':'image/jpeg','content-length':'16','x-rig-asset-kind':'image','x-rig-sha256':'${sha}'}})}}`;
+ const media=`const bytes=new TextEncoder().encode('test image bytes');export default {async fetch(req){if(req.headers.get('X-Rig-User')!=='${user}'||req.headers.get('authorization')!=='Bearer ${secret}'||req.headers.get('x-rig-provider-input')!=='1'||req.headers.get('x-rig-expected-kind')!=='image'||req.headers.get('x-rig-expected-sha256')!=='${sha}'||req.headers.get('x-rig-expected-size')!=='16')return new Response(null,{status:403});await new Promise(resolve=>setTimeout(resolve,20));const value=req.headers.get('range'),match=value&&/^bytes=(\\d+)-(\\d+)$/.exec(value),start=match?Number(match[1]):0,end=match?Number(match[2]):15,body=bytes.slice(start,end+1),headers={'content-type':'image/jpeg','content-length':String(body.length),'x-rig-asset-kind':'image','x-rig-sha256':'${sha}',...(match?{'content-range':\`bytes \${start}-\${end}/16\`}:{})};return new Response(req.method==='HEAD'?null:body,{status:match?206:200,headers})}}`;
  const mf=new Miniflare({cf:false,workers:[{name:'gateway',modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-01-01',bindings:{RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test'},d1Databases:{DB:'gateway'},serviceBindings:{RIG_MEDIA:'media'}},{name:'media',modules:true,script:media,compatibilityDate:'2026-01-01'}]});
  try{
   const db=await mf.getD1Database('DB','gateway');
-  for(const f of ['schema.sql','generation-schema.sql'])for(const s of (await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();
+  for(const f of ['schema.sql','generation-schema.sql','limit-schema.sql'])for(const s of (await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();
   await db.prepare("INSERT INTO rig_payment_environment(id,mode) VALUES(1,'test')").run();
   const inp={data:{quality:'edit-standard',imageId:image,videoId:video},refs:[{id:image,kind:'image',sha256:sha},{id:video,kind:'video',sha256:vsha}]};
-  await db.prepare('INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind('quote',user,model,JSON.stringify(inp),100,'v',5,Date.now()+10000,Date.now()).run();
-  await db.prepare("INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,created_at) VALUES(?,?,?,?,?,'submitting',?)").bind(job,user,'quote','key',100,Date.now()).run();
+  const createdAt=Date.now();
+  await db.prepare('INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind('quote',user,model,JSON.stringify(inp),100,'v',5,createdAt+10000,createdAt).run();
+  await db.prepare("INSERT INTO rig_generation_jobs(id,user_id,quote_id,idempotency_key,price_cents,state,created_at) VALUES(?,?,?,?,?,'submitting',?)").bind(job,user,'quote','key',100,createdAt).run();
   await db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES(?,?,NULL,?)').bind('reserve:'+job,user,-100).run();
-  const url=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,kind:'image'}),get=(init={})=>mf.dispatchFetch(url,init);
+  const url=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'image',now:createdAt}),get=(init={})=>mf.dispatchFetch(url,init);
   let r=await get();assert.equal(r.status,200);assert.equal(await r.text(),'test image bytes');assert.equal(r.headers.get('access-control-allow-origin'),null);assert.equal(r.headers.get('accept-ranges'),'bytes');
   await verifyProviderInput(url,{origin,kind:'image',bytes,fetchImpl:(u,i)=>mf.dispatchFetch(u,i)});
   r=await get({method:'HEAD'});assert.equal(r.status,200);assert.equal(await r.text(),'');assert.equal(r.headers.get('content-length'),'16');
   r=await get({headers:{range:'bytes=2-5'}});assert.equal(r.status,206);assert.equal(await r.text(),'st i');assert.equal(r.headers.get('content-range'),'bytes 2-5/16');
   for(const range of ['bytes=0-1,3-4','bytes=99-','bytes=-0']){r=await get({headers:{range}});assert.equal(r.status,416);assert.equal(r.headers.get('content-range'),'bytes */16')}
-  const wrongsha=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:'c'.repeat(64),kind:'image'});assert.equal((await mf.dispatchFetch(wrongsha)).status,404);
-  const wrongkind=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,kind:'video'});assert.equal((await mf.dispatchFetch(wrongkind)).status,404);
+  const wrongsha=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:'c'.repeat(64),size:bytes.length,kind:'image'});assert.equal((await mf.dispatchFetch(wrongsha)).status,404);
+  const wrongkind=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'video'});assert.equal((await mf.dispatchFetch(wrongkind)).status,404);
   await db.prepare("UPDATE rig_generation_jobs SET state='unknown'").run();assert.equal((await get()).status,404);
-  await db.prepare("UPDATE rig_generation_jobs SET poll_token='dispatch-authorized',poll_lease_until=-1").run();assert.equal((await get()).status,200);
-  await db.prepare("UPDATE rig_generation_jobs SET state='queued'").run();assert.equal((await get()).status,200);
+  await db.prepare("UPDATE rig_generation_jobs SET poll_token='dispatch-authorized',poll_lease_until=-1").run();assert.equal((await get({method:'HEAD'})).status,200);
+  await db.prepare("UPDATE rig_generation_jobs SET state='queued'").run();assert.equal((await get({method:'HEAD'})).status,200);
   await db.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,'test')").bind(user).run();assert.equal((await get()).status,404);
   await db.prepare('DELETE FROM rig_frozen_accounts').run();
   await db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta) VALUES(?,?,NULL,?)').bind('release:'+job,user,100).run();assert.equal((await get()).status,404);
   await db.prepare("DELETE FROM rig_ledger WHERE event_id=?").bind('release:'+job).run();
   await db.prepare("UPDATE rig_generation_jobs SET state='failed'").run();assert.equal((await get()).status,404);
   await db.prepare("UPDATE rig_generation_jobs SET state='completed'").run();assert.equal((await get()).status,404);
+  await db.prepare("UPDATE rig_generation_jobs SET state='queued'").run();
+  assert.equal((await get({headers:{range:'bytes=0-0'}})).status,206);assert.equal((await get({headers:{range:'bytes=0-0'}})).status,404);assert.equal((await get({headers:{range:'bytes=0-0'}})).status,404);
+  const byteUrl=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'image',now:createdAt+1});
+  for(let i=0;i<3;i++)assert.equal((await mf.dispatchFetch(byteUrl)).status,200);assert.equal((await mf.dispatchFetch(byteUrl,{headers:{range:'bytes=0-0'}})).status,404);
+  const concurrentUrl=await mintProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'image',now:createdAt+2});
+  const concurrent=await Promise.all([0,1,2].map(()=>mf.dispatchFetch(concurrentUrl,{headers:{range:'bytes=0-0'}})));assert.deepEqual(concurrent.map(r=>r.status).sort(),[206,206,404]);
  }finally{await mf.dispose()}
 });
 
 test('proof capabilities have separate five-minute scope and require the dedicated authorizer',async()=>{
- const sha=await hash(bytes),issuedAt=Date.now(),url=await mintProofProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,kind:'image',issuedAt});
+ const sha=await hash(bytes),issuedAt=Date.now(),url=await mintProofProviderInput({origin,secret,jobId:job,assetId:image,sha256:sha,size:bytes.length,kind:'image',issuedAt});
  const input={data:{quality:'edit-standard',imageId:image,videoId:video},refs:[{id:image,kind:'image',sha256:sha},{id:video,kind:'video',sha256:'b'.repeat(64)}]};
- let calls=0;const env={RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test',DB:{prepare(){throw Error('generation query forbidden')}},RIG_MEDIA:{fetch:async(req)=>{assert.equal(req.headers.get('x-rig-user'),user);return new Response(bytes,{headers:{'content-type':'image/jpeg','content-length':String(bytes.length),'x-rig-asset-kind':'image','x-rig-sha256':sha}})}}};
- const options={verifyTenant:async()=>true,authorizeProof:async({token})=>{calls++;assert.equal(token.scope,'proof');assert.equal(token.issuedAt,issuedAt);return {user_id:user,model,input_json:JSON.stringify(input)}}};
- assert.equal(isProviderInputUrl(url,origin,'image'),false);
- assert.equal((await handleProviderInput(new Request(url),env,{verifyTenant:options.verifyTenant})).status,404);
- assert.equal((await handleProviderInput(new Request(url),env,options)).status,200);assert.equal(calls,1);
- assert.equal((await handleProviderInput(new Request(url),env,{...options,now:issuedAt+300000})).status,404);assert.equal(calls,1);
+ const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response()}}',compatibilityDate:'2026-01-01',d1Databases:['DB']});
+ try{
+  const db=await mf.getD1Database('DB');await db.prepare('CREATE TABLE rig_rate_limits(bucket TEXT PRIMARY KEY NOT NULL,window_start INTEGER NOT NULL,requests INTEGER NOT NULL CHECK(requests>0))').run();
+  let calls=0;const env={RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test',DB:db,RIG_MEDIA:{fetch:async(req)=>{assert.equal(req.headers.get('x-rig-user'),user);assert.equal(req.headers.get('x-rig-provider-input'),'1');return new Response(bytes,{headers:{'content-type':'image/jpeg','content-length':String(bytes.length),'x-rig-asset-kind':'image','x-rig-sha256':sha}})}}};
+  const options={verifyTenant:async()=>true,authorizeProof:async({token})=>{calls++;assert.equal(token.scope,'proof');assert.equal(token.issuedAt,issuedAt);return {user_id:user,model,input_json:JSON.stringify(input)}}};
+  assert.equal(isProviderInputUrl(url,origin,'image'),false);
+  assert.equal((await handleProviderInput(new Request(url),env,{verifyTenant:options.verifyTenant})).status,404);
+  assert.equal((await handleProviderInput(new Request(url),env,options)).status,200);assert.equal(calls,1);
+  assert.equal((await handleProviderInput(new Request(url),env,{...options,now:issuedAt+300000})).status,404);assert.equal(calls,1);
+ }finally{await mf.dispose()}
 });
 
 test('O3 upload requires anonymous matching gateway readback before returning; motion stays on existing provider path',async()=>{

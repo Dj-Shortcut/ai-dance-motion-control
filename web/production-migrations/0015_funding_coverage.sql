@@ -24,6 +24,8 @@ CREATE TABLE rig_funding_snapshots (
  expires_at INTEGER NOT NULL CHECK(expires_at>fetched_at)
 );
 CREATE INDEX rig_funding_snapshot_expiry ON rig_funding_snapshots(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS rig_order_checkout_evidence_owner
+ ON rig_orders(id,user_id,request_id);
 CREATE TABLE rig_funding_admissions (
  order_id TEXT PRIMARY KEY,
  user_id TEXT NOT NULL,
@@ -33,7 +35,8 @@ CREATE TABLE rig_funding_admissions (
  credit_cents INTEGER NOT NULL CHECK(credit_cents BETWEEN 1 AND 100000000),
  snapshot_id TEXT NOT NULL REFERENCES rig_funding_snapshots(id),
  created_at INTEGER NOT NULL,
- UNIQUE(user_id,request_id)
+ UNIQUE(user_id,request_id),
+ FOREIGN KEY(order_id,user_id,request_id) REFERENCES rig_orders(id,user_id,request_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE rig_owner_funding_admissions (

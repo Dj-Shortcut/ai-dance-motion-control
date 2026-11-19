@@ -70,7 +70,7 @@ test('concurrent and later repeats of the same purchase intent never admit or ch
 
 test('an admission refusal, exception or missing result fails closed without an order, payment or credit',async()=>{
  for(const admission of [async()=>{throw Error('fixture funding check unavailable');},async()=>null,async()=>undefined,async()=>({}),async()=>({before:[],gate:{sql:'0',params:[]}})]){
-  const f=await fixture({admission});try{const response=await f.create();assert.equal(response.status,503);assert.equal((await response.json()).checkoutUrl,undefined);assert.equal(f.created,0);assert.equal(f.calls.length,0);assert.equal(await f.count('rig_orders'),0);assert.equal(await f.count('rig_ledger'),0);}finally{await f.mf.dispose();}
+  const f=await fixture({admission});try{const response=await f.create();assert.equal(response.status,503);assert.equal((await response.json()).checkoutUrl,undefined);assert.equal(f.created,0);assert.equal(f.calls.length,0);assert.equal(await f.count('fixture_admission_attempts'),0);assert.equal(await f.count('rig_orders'),0);assert.equal(await f.count('rig_ledger'),0);}finally{await f.mf.dispose();}
  }
 });
 
@@ -94,7 +94,7 @@ test('legacy payment compositions without an optional admission retain their exi
 
 test('the actual funding policy admits only one concurrent five-euro purchase against a nine-dollar Fal balance',async()=>{
  const {f,controls}=await coveredFixture();try{
-  const replies=await Promise.all([f.create({userId:ALICE}),f.create({userId:BOB})]);assert.equal(replies.filter(response=>response.status===200).length,1);assert.equal(replies.filter(response=>response.status===503).length,1);assert.equal(f.created,1);assert.equal(await f.count('rig_orders'),1);assert.equal(await f.count('rig_ledger'),0);assert.ok(controls.reads>=1&&controls.reads<=2);
+  const replies=await Promise.all([f.create({userId:ALICE}),f.create({userId:BOB})]);assert.equal(replies.filter(response=>response.status===200).length,1);assert.equal(replies.filter(response=>response.status===503).length,1);assert.equal(f.created,1);assert.equal(await f.count('rig_orders'),1);assert.equal(await f.count('rig_funding_admissions'),1);assert.equal(await f.count('rig_funding_snapshots'),1);assert.equal(await f.count('rig_ledger'),0);assert.ok(controls.reads>=1&&controls.reads<=2);
  }finally{await f.mf.dispose();}
 });
 

@@ -54,7 +54,7 @@ test('existing aggregate windows and all other limiter categories stay enforced'
  assert.equal(await limited(env,'generation','POST'),false,'pre-upgrade counter remains an aggregate guard');
  await env.DB.prepare('UPDATE rig_rate_limits SET window_start=0').run();
  assert.equal(await limited(env,'generation','POST'),true,'expired window can recover');
- for(const [category,method,cap] of [['session','GET',360],['readiness','GET',20],['webhook','POST',120],['finance','POST',12],['owner-security','POST',12]]){
+ for(const [category,method,cap] of [['session','GET',360],['readiness','GET',20],['webhook-payment','POST',12],['webhook-race','POST',12],['finance','POST',12],['owner-security','POST',12]]){
   const key=category+':'+user+(['finance','owner-security'].includes(category)?':'+method:'');
   await env.DB.prepare('INSERT INTO rig_rate_limits VALUES(?,?,?)').bind(key,now,cap-1).run();
   assert.equal(await limited(env,category,method),true);assert.equal(await limited(env,category,method),false);

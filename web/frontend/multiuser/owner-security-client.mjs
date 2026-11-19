@@ -1,6 +1,7 @@
 import {startRegistration,startAuthentication,browserSupportsWebAuthn,WebAuthnAbortService} from '@simplewebauthn/browser';
 
-const operations=new Set(['finance-policy','finance-expense','owner-generation','accounting-document','recovery-note','recovery-payment']);
+const operations=new Set(['finance-policy','finance-expense','owner-generation','owner-workflow-advance','accounting-document','recovery-note','recovery-payment']);
+const SHA=/^[a-f0-9]{64}$/;
 const identifier=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const failure=(message,code,status)=>Object.assign(Error(message),{code,status});
 const ceremonyError=error=>{
@@ -15,7 +16,7 @@ const ceremonyError=error=>{
 export function createOwnerVerification({window:browser,document=browser?.document,webauthn={startRegistration,startAuthentication,browserSupportsWebAuthn,cancel:()=>WebAuthnAbortService.cancelCeremony()}}={}){
  const request=browser?.rigRequest,active=browser?.rigSessionActive;
  if(!browser||!document||browser.rigNativeSite!==true||typeof request!=='function'||typeof active!=='function')throw Error('Je aanmelding is gewijzigd.');
- let disposed=false,busy=false,popup=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0,refreshSequence=0,suspended=false;
+ let disposed=false,busy=false,popup=null,popupPreviewUrl=null,rejectPopup=null,mountRoot=null,statusNode=null,setupButton=null,refreshButton=null,pendingNode=null,pending=null,poll=null,sequence=0,refreshSequence=0,suspended=false;
  const current=()=>!disposed&&browser.rigRequest===request&&browser.rigSessionActive===active&&active()===true;
  const element=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
  const supported=()=>{try{return webauthn.browserSupportsWebAuthn()===true;}catch{return false;}};
@@ -27,6 +28,7 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   if(wasBusy)status('Bevestiging geannuleerd. Je kunt opnieuw bevestigen.');
   if(current()&&setupButton)setupButton.disabled=!supported();
   if(rejectPopup){const reject=rejectPopup;rejectPopup=null;reject(failure('Bevestiging geannuleerd.','verification_cancelled'));}
+  if(popupPreviewUrl){browser.URL.revokeObjectURL(popupPreviewUrl);popupPreviewUrl=null;}
   if(popup?.open)popup.close();popup?.remove();popup=null;
  }
  function dispose(){
@@ -46,15 +48,24 @@ export function createOwnerVerification({window:browser,document=browser?.docume
   const paragraph=element('p','Open RIG in een apart Chrome- of Safari-venster om op je apparaat te bevestigen.');paragraph.className='finance-policy-note owner-security-browser-hint';
   const link=element('a','Open RIG');link.href=new URL('/',browser.location.href).href;link.target='_blank';link.rel='noopener noreferrer';link.className='finance-export';paragraph.append(' ',link);return paragraph;
  }
- function confirm(summary){
+ async function approvalPreview(path,payload){
+  const expected=`/api/generations/${payload?.jobId}/client/output`;if(path!==expected||!SHA.test(payload?.outputHash||''))throw failure('De goedgekeurde voorbeeldvideo ontbreekt.','security_unavailable');
+  check();const response=await request(path,{cache:'no-store'});check();const size=Number(response.headers.get('content-length'));
+  if(!response.ok||response.headers.get('content-type')?.split(';')[0].trim()!=='video/mp4'||!Number.isSafeInteger(size)||size<32||size>16*1024*1024)throw failure('De goedgekeurde voorbeeldvideo kon niet veilig worden geopend.','security_unavailable');
+  const bytes=await response.arrayBuffer();check();if(bytes.byteLength!==size)throw failure('De goedgekeurde voorbeeldvideo is gewijzigd.','operation_changed');
+  const digest=Array.from(new Uint8Array(await browser.crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');check();if(digest!==payload.outputHash)throw failure('De goedgekeurde voorbeeldvideo is gewijzigd.','operation_changed');
+  if(typeof browser.URL?.createObjectURL!=='function'||typeof browser.URL?.revokeObjectURL!=='function')throw failure('De voorbeeldvideo kan niet op dit apparaat worden getoond.','browser_unsupported');
+  return browser.URL.createObjectURL(new Blob([bytes],{type:'video/mp4'}));
+ }
+ function confirm(summary,previewUrl=null){
   check();return new Promise((resolve,reject)=>{
    popup=element('dialog');popup.className='owner-verification-dialog';popup.setAttribute('aria-labelledby','ownerVerificationTitle');
    const title=element('strong','Extra bevestiging');title.id='ownerVerificationTitle';
    const text=element('p',typeof summary==='string'&&summary.length<=1600?summary:'Bevestig deze handeling op je apparaat.');text.className='owner-verification-summary';
    const note=element('p','Je apparaat vraagt om Touch ID, een apparaatcode of je beveiligingssleutel.');note.className='finance-policy-note';
    const actions=element('div'),approve=element('button','Bevestigen op mijn apparaat'),decline=element('button','Annuleren');approve.type=decline.type='button';actions.className='owner-verification-actions';actions.append(approve,decline);
-   popup.append(title,text,note,actions);document.body.append(popup);rejectPopup=reject;
-   const cleanup=()=>{rejectPopup=null;if(popup?.open)popup.close();popup?.remove();popup=null;};
+   popup.append(title,text);if(previewUrl){popupPreviewUrl=previewUrl;const preview=element('video');preview.src=previewUrl;preview.controls=true;preview.playsInline=true;preview.preload='metadata';preview.className='owner-verification-preview';popup.append(preview);}popup.append(note,actions);document.body.append(popup);rejectPopup=reject;
+   const cleanup=()=>{rejectPopup=null;if(popupPreviewUrl){browser.URL.revokeObjectURL(popupPreviewUrl);popupPreviewUrl=null;}if(popup?.open)popup.close();popup?.remove();popup=null;};
    approve.addEventListener('click',()=>{cleanup();resolve();},{once:true});decline.addEventListener('click',()=>{cleanup();reject(failure('Bevestiging geannuleerd.','verification_cancelled'));},{once:true});
    popup.addEventListener('cancel',event=>{event.preventDefault();cleanup();reject(failure('Bevestiging geannuleerd.','verification_cancelled'));},{once:true});popup.showModal();
   });
@@ -68,7 +79,8 @@ export function createOwnerVerification({window:browser,document=browser?.docume
    if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
    if(options?.required!==true||!identifier(options.challengeId)||!options.publicKey||!Number.isFinite(options.expiresAt)||options.expiresAt<=Date.now())throw failure('Vraag een nieuwe beveiligingscontrole aan.','verification_expired');
    if(!supported())throw failure('Bevestigen op je apparaat is hier niet beschikbaar. Open RIG in Chrome of Safari.','browser_unsupported');
-   await confirm(options.summary);check();if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
+   const previewUrl=operation==='owner-workflow-advance'?await approvalPreview(options.previewPath,frozen):null;if(token!==sequence){if(previewUrl)browser.URL.revokeObjectURL(previewUrl);throw failure('Bevestiging geannuleerd.','verification_cancelled');}if(JSON.stringify(payload)!==original){if(previewUrl)browser.URL.revokeObjectURL(previewUrl);throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');}
+   await confirm(options.summary,previewUrl);check();if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
    const credential=await webauthn.startAuthentication({optionsJSON:options.publicKey});check();
    if(token!==sequence||JSON.stringify(payload)!==original)throw failure('De handeling is gewijzigd. Controleer en bevestig opnieuw.','operation_changed');
    if(Date.now()>=options.expiresAt)throw failure('Je bevestiging is verlopen. Probeer opnieuw.','verification_expired');

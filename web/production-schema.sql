@@ -4,7 +4,8 @@
 -- 'test' OR 'live'. Use completely separate DBs for test and live; never
 -- change an existing environment row to live or reuse its balances.
 -- Commercial funding coverage additionally requires
--- production-migrations/0015_funding_coverage.sql, with complete triggers.
+-- production-migrations/0015_funding_coverage.sql followed by
+-- 0016_atomic_checkout_evidence.sql, with complete triggers.
 -- Missing funding setup refuses new purchases; it never grants test coverage.
 CREATE TABLE IF NOT EXISTS rig_payment_environment (
   id INTEGER PRIMARY KEY CHECK (id=1),
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS rig_payment_cancelled_intents (
 CREATE UNIQUE INDEX IF NOT EXISTS rig_one_unresolved_order_per_user
   ON rig_orders(user_id)
   WHERE state IN ('creating','open','unknown','credit_pending_review');
+-- Checkout evidence and funding admission are owned by the exact immutable
+-- order identity, including its authenticated user and idempotency key.
+CREATE UNIQUE INDEX IF NOT EXISTS rig_order_checkout_evidence_owner
+  ON rig_orders(id,user_id,request_id);
 -- Durable, internal outbox for Mollie payments that must be reviewed or canceled
 -- following an account freeze. Never expose this table as a browser route.
 CREATE TABLE IF NOT EXISTS rig_cancel_requests (
@@ -380,6 +385,7 @@ CREATE INDEX rig_customer_support_queue ON rig_customer_support_requests(created
 -- Immutable evidence of the price/terms and buyer's stated country before checkout.
 -- This does not assign a VAT treatment or issue a fiscal invoice.
 CREATE TABLE rig_purchase_acceptances (
+ order_id TEXT NOT NULL,
  user_id TEXT NOT NULL CHECK(typeof(user_id)='text' AND length(user_id)=38),
  request_id TEXT NOT NULL CHECK(typeof(request_id)='text' AND length(request_id)=36),
  version TEXT NOT NULL CHECK(typeof(version)='text' AND length(version) BETWEEN 1 AND 100),
@@ -393,7 +399,10 @@ CREATE TABLE rig_purchase_acceptances (
  seller_json TEXT NOT NULL CHECK(json_valid(seller_json) AND json_type(seller_json)='object'),
  terms_text TEXT NOT NULL CHECK(typeof(terms_text)='text' AND length(terms_text) BETWEEN 1 AND 65536),
  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
- PRIMARY KEY(user_id,request_id)
+ PRIMARY KEY(user_id,request_id),
+ UNIQUE(order_id),
+ UNIQUE(order_id,user_id,request_id,request_hash),
+ FOREIGN KEY(order_id,user_id,request_id) REFERENCES rig_orders(id,user_id,request_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 -- 0011_automatic_invoices.sql
@@ -438,6 +447,7 @@ CREATE TABLE rig_invoice_issuance_attempts (
 CREATE UNIQUE INDEX rig_purchase_acceptance_billing_hash
  ON rig_purchase_acceptances(user_id,request_id,request_hash);
 CREATE TABLE rig_purchase_billing (
+ order_id TEXT NOT NULL,
  user_id TEXT NOT NULL CHECK(typeof(user_id)='text' AND length(user_id)=38),
  request_id TEXT NOT NULL CHECK(typeof(request_id)='text' AND length(request_id)=36),
  name TEXT NOT NULL CHECK(typeof(name)='text' AND length(name) BETWEEN 1 AND 120),
@@ -449,7 +459,8 @@ CREATE TABLE rig_purchase_billing (
  request_hash TEXT NOT NULL CHECK(length(request_hash)=64 AND request_hash NOT GLOB '*[^0-9a-f]*'),
  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>0),
  PRIMARY KEY(user_id,request_id),
- FOREIGN KEY(user_id,request_id,request_hash) REFERENCES rig_purchase_acceptances(user_id,request_id,request_hash)
+ UNIQUE(order_id),
+ FOREIGN KEY(order_id,user_id,request_id,request_hash) REFERENCES rig_purchase_acceptances(order_id,user_id,request_id,request_hash)
 );
 CREATE TABLE rig_billing_profiles (
  user_id TEXT PRIMARY KEY CHECK(typeof(user_id)='text' AND length(user_id)=38),

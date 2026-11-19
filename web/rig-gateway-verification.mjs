@@ -74,7 +74,7 @@ export function createGatewayVerification({env,verifyTenant,mintProofInput,fetch
    for(const ref of refs){stage=ref.kind+'_source';if(!await permitted())throw Error('Proof revoked');inputs.push(await ownedBytes(env,userId,ref));}
    for(let i=0;i<refs.length;i++){
     const ref=refs[i],{bytes,mime}=inputs[i];stage=ref.kind+'_gateway';if(!await permitted())throw Error('Proof revoked');
-    const url=await mintProofInput({origin:env.RIG_SITES_BRIDGE_ORIGIN,secret:env.RIG_MEDIA_SECRET,jobId,assetId:ref.id,sha256:ref.sha256,kind:ref.kind,issuedAt});
+    const url=await mintProofInput({origin:env.RIG_SITES_BRIDGE_ORIGIN,secret:env.RIG_MEDIA_SECRET,jobId,assetId:ref.id,sha256:ref.sha256,size:bytes.length,kind:ref.kind,issuedAt});
     const parsed=new URL(url);if(parsed.origin!==env.RIG_SITES_BRIDGE_ORIGIN||parsed.href!==parsed.origin+parsed.pathname||!parsed.pathname.startsWith('/provider-inputs/')||!parsed.pathname.endsWith(`/${ref.id}.${i?'mp4':'jpg'}`))throw Error('Invalid proof destination');
     // No provider host, arbitrary URL, auth header, upload or queue endpoint is
     // available through this transport. Only these two freshly minted URLs.

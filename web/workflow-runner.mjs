@@ -6,8 +6,10 @@ import {validateWorkflowPlan,workflowHash,workflowInitialSourceHash} from './pro
 import {OVERLAY_CLEANUP_MODEL,OVERLAY_CLEANUP_QUEUE_FAMILY,OVERLAY_CLEANUP_CONTRACT,OVERLAY_CLEANUP_BILLING,validOverlayCleanupSettings,overlayCleanupPayload} from './overlay-cleanup-contract.mjs';
 import {RECAST_MODEL,RECAST_QUEUE_FAMILY,RECAST_PROVIDER_CONTRACT,RECAST_QUALITY,RECAST_SETTINGS,validRecastSettings} from './recast-contract.mjs';
 import {RECAST_BILLING} from './price-preflight.mjs';
+import {prepareOwnerMutation} from './owner-security.mjs';
+import {WORKFLOW_CLIENT_APPROVAL_OPERATION,WORKFLOW_CLIENT_TRANSFER_POLICY,workflowClientApprovalPayload} from './workflow-client-contract.mjs';
 export const WORKFLOW_OWNER_CLEANUP_FLAG='RIG_OWNER_CLEANUP_VALIDATION_ENABLED';
-export const WORKFLOW_TRANSFER_POLICY='fal-temporary-links-v1';
+export const WORKFLOW_TRANSFER_POLICY=WORKFLOW_CLIENT_TRANSFER_POLICY;
 const ID=/^[A-Za-z0-9_-]{1,100}$/,SHA=/^[a-f0-9]{64}$/;
 const plain=x=>x!==null&&Object.getPrototypeOf(x)===Object.prototype;
 const same=(a,b)=>plain(a)&&plain(b)&&Object.keys(a).length===Object.keys(b).length&&Object.keys(b).every(k=>Object.hasOwn(a,k)&&Object.is(a[k],b[k]));
@@ -35,7 +37,7 @@ export async function validateOwnerCleanupWorkflow(quote){
 }
 
 export function createWorkflowRunner({db,productionContext,readCurrentProductionContext,parents,workflows,clients,adapters}={}){
- if(!isProductionGenerationContext(productionContext,{db})||typeof readCurrentProductionContext!=='function'||typeof parents?.jobs?.authorizeDispatch!=='function'||['initialize','get','authorizeStep','markSubmitted','markUnknown','claimPoll','releasePoll','markNeedsReview','markCompleted','markFailed','skipStep','finalize'].some(k=>typeof workflows?.[k]!=='function')||['prepareAwaiting','get','getArtifact','advance'].some(k=>typeof clients?.[k]!=='function')||['prepareStep','submitStep','pollStep','persistStepResult'].some(k=>typeof adapters?.[k]!=='function'))throw Error('Workflow runner adapters required');
+ if(!isProductionGenerationContext(productionContext,{db})||typeof readCurrentProductionContext!=='function'||typeof parents?.jobs?.authorizeDispatch!=='function'||['initialize','get','authorizeStep','markSubmitted','markUnknown','claimPoll','releasePoll','markNeedsReview','markCompleted','markFailed','skipStep','finalize'].some(k=>typeof workflows?.[k]!=='function')||['prepareAwaiting','get','getArtifact','prepareAdvance'].some(k=>typeof clients?.[k]!=='function')||['prepareStep','submitStep','pollStep','persistStepResult'].some(k=>typeof adapters?.[k]!=='function'))throw Error('Workflow runner adapters required');
  async function gate(userId){
   const current=await readCurrentProductionContext();
   if(!isProductionGenerationContext(current,{db})||current.env.RIG_PUBLIC_ORIGIN!==productionContext.env.RIG_PUBLIC_ORIGIN||[WORKFLOW_OWNER_CLEANUP_FLAG,'RIG_OWNER_RECAST_VALIDATION_ENABLED'].some(flag=>productionContext.env[flag]!=='yes'||current.env[flag]!=='yes')||productionFundingKind(productionContext,userId)!=='owner-provider'||productionFundingKind(current,userId)!=='owner-provider')reject('workflow_owner_validation_unavailable',403);
@@ -54,12 +56,12 @@ export function createWorkflowRunner({db,productionContext,readCurrentProduction
   }
   return {jobId,quoteId:b.quote.id,state,...(clientProcessing?{clientProcessing}:{}),...(b.settlement?{settlement:{outcome:b.settlement.outcome,fundingKind:b.settlement.funding_kind,chargedCents:b.settlement.charged_cents,refundedCents:b.settlement.refunded_cents},...(b.settlement.result_key?{result:{stepId:base.step_id,sha256:base.output_sha256}}:{})}:{})};
  }
- async function prepare(userId,jobId,b,index){
+ async function prepare(userId,jobId,b,index,clientAdvance){
   const step=b.plan.steps[index];let inputBinding,sourceHash;
   if(index===0){sourceHash=await workflowInitialSourceHash(b.quote);inputBinding={kind:'source-and-mask',source:clone(b.plan.clientProcessing.source),mask:clone(b.plan.clientProcessing.mask)};inputBinding.inputHash=await workflowHash(inputBinding);}
   else{
    const manifest=await clients.get({userId,jobId,stageId:b.plan.clientProcessing.id});
-   if(manifest.state!=='advanced'||!SHA.test(manifest.output?.sha256||''))reject('workflow_explicit_advance_required');
+   if(!SHA.test(manifest.output?.sha256||'')||manifest.state!=='advanced'&&(manifest.state!=='ready_to_advance'||clientAdvance?.stageId!==manifest.stageId||clientAdvance.outputHash!==manifest.output.sha256))reject('workflow_explicit_advance_required');
    const held=await clients.getArtifact({userId,jobId,stageId:b.plan.clientProcessing.id,role:'output'});
    if(held.artifact.sha256!==manifest.output.sha256)reject('workflow_composed_input_changed');
    sourceHash=b.steps[0].output_sha256;inputBinding={kind:'client-composed',inputHash:manifest.output.sha256,artifact:clone(held.artifact),bytes:held.bytes,inspection:held.inspection,image:clone((await validateOwnerCleanupWorkflow(b.quote)).image)};
@@ -76,10 +78,10 @@ export function createWorkflowRunner({db,productionContext,readCurrentProduction
   const payload=clone(prepared.payload),inputHash=prepared.inputHash,requestHash=await workflowHash({model:step.model,queueFamily:step.queueFamily,contract:step.contract,settings:step.settings,inputHash,payload});
   return {step,payload,sourceHash,inputHash,requestHash};
  }
- async function dispatch(userId,jobId,index){
+ async function dispatch(userId,jobId,index,approval,clientAdvance){
   let b=await owned(userId,jobId);if(b.settlement||b.steps[index].state!=='prepared')return summary(userId,jobId);
-  await gate(userId);const prepared=await prepare(userId,jobId,b,index);await gate(userId);
-  const authorization=await workflows.authorizeStep({userId,jobId,stepId:prepared.step.id,sourceHash:prepared.sourceHash,inputHash:prepared.inputHash,requestHash:prepared.requestHash});
+  await gate(userId);const prepared=await prepare(userId,jobId,b,index,clientAdvance);await gate(userId);
+  const authorization=await workflows.authorizeStep({userId,jobId,stepId:prepared.step.id,sourceHash:prepared.sourceHash,inputHash:prepared.inputHash,requestHash:prepared.requestHash,...(approval?{approval}:{}),...(clientAdvance?{clientAdvance}:{})});
   if(!authorization.authorized){if((await owned(userId,jobId)).steps[index].state==='prepared')reject('workflow_dispatch_blocked');return summary(userId,jobId);}
   // From this durable claim onwards, every ambiguous result retains the hold.
   // Never call submit twice, even if the HTTP response or ID persistence fails.
@@ -112,9 +114,13 @@ export function createWorkflowRunner({db,productionContext,readCurrentProduction
    }
    return dispatch(userId,jobId,0);
   },
-  async advance({method,userId,jobId,stageId,idempotencyKey,outputHash}){
+  async advance({method,userId,jobId,stageId,idempotencyKey,outputHash,verification}){
    post(method);const b=await owned(userId,jobId);if(stageId!==b.plan.clientProcessing.id)reject('workflow_client_stage_changed');
-   await gate(userId);await clients.advance({userId,jobId,stageId,idempotencyKey,outputHash});return dispatch(userId,jobId,1);
+   await gate(userId);await clients.prepareAdvance({userId,jobId,stageId,idempotencyKey,outputHash});const advanced=await owned(userId,jobId),base=advanced.steps.find(step=>step.step_id===advanced.plan.baseStepId);
+   if(base?.state!=='prepared')return summary(userId,jobId);
+   const payload=workflowClientApprovalPayload({jobId,plan:advanced.plan,steps:advanced.steps,outputHash}),approval=await prepareOwnerMutation(db,{ownerId:userId,operation:WORKFLOW_CLIENT_APPROVAL_OPERATION,payload,verification});
+   if(!approval.ok)throw Object.assign(Error('Owner output approval required'),{response:approval.response});
+   return dispatch(userId,jobId,1,approval,{stageId,idempotencyKey,outputHash});
   },
   async poll({method,userId,jobId}){
    if(method!=='GET')reject('workflow_get_required',405);

@@ -41,7 +41,10 @@ async function fixture(){
 test('real paid webhooks credit once and issue one sequential invoice despite duplicate callback races',async()=>{
  const f=await fixture();try{
   const o=await f.create();assert.equal(o.state,'open');assert.equal(await f.count('rig_issued_invoices'),0);assert.equal(await f.balance(ALICE),0);f.payments.get(o.payment_id).status='paid';
-  const callbacks=await Promise.all(Array.from({length:16},()=>f.webhook(o.payment_id)));assert.ok(callbacks.every(r=>r.status===200),await Promise.all(callbacks.map(r=>r.clone().text())));assert.equal(await f.balance(ALICE),500);assert.equal(await f.count('rig_ledger'),1);assert.equal(await f.count('rig_issued_invoices'),1);assert.equal(f.created,1);
+  const callbacks=await Promise.all(Array.from({length:16},()=>f.webhook(o.payment_id)));
+  assert.equal(callbacks.filter(r=>r.status===200).length,12);
+  assert.equal(callbacks.filter(r=>r.status===429&&r.headers.get('retry-after')==='60').length,4);
+  assert.equal(await f.balance(ALICE),500);assert.equal(await f.count('rig_ledger'),1);assert.equal(await f.count('rig_issued_invoices'),1);assert.equal(f.created,1);
   const invoice=await getOwnedPurchaseInvoice(f.env,{userId:ALICE,requestId:o.request_id});assert.equal(invoice.state,'existing');assert.match(invoice.invoice.number,/^RIG-20\d{2}-000001$/);assert.equal(invoice.invoice.paymentReference,o.payment_id);assert.equal(invoice.invoice.amountCents,500);assert.equal(invoice.invoice.buyer.name,'Testklant Facturen');
   const orders=await(await f.payment.user(f.request('/api/payments/orders'),f.env,ALICE)).json();assert.equal(orders.automaticInvoices,true);assert.equal(orders.orders[0].invoiceAvailable,true);assert.equal(orders.orders[0].invoiceNumber,invoice.invoice.number);assert.equal((await(await f.payment.user(f.request('/api/payments/orders'),f.env,BOB)).json()).orders.length,0);
   assert.equal(await f.count('rig_invoice_archives'),0);assert.equal(await f.count('rig_invoice_mail_outbox'),0);
