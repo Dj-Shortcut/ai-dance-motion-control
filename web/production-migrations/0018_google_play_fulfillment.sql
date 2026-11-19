@@ -118,6 +118,7 @@ CREATE TABLE rig_google_play_notifications (
  CHECK((kind IN ('product','voided') AND token_hash IS NOT NULL AND sealed_token IS NOT NULL) OR (kind IN ('test','unsupported') AND token_hash IS NULL AND sealed_token IS NULL AND state='complete'))
 );
 CREATE INDEX rig_google_play_notification_due ON rig_google_play_notifications(state,next_check_at);
+CREATE INDEX rig_google_play_notification_token ON rig_google_play_notifications(token_hash,refund_attempted_at);
 CREATE TABLE rig_google_play_voided_cursor (
  id INTEGER PRIMARY KEY CHECK(id=1),
  mode TEXT NOT NULL CHECK(mode IN ('test','live')),
@@ -173,6 +174,7 @@ CREATE TRIGGER rig_google_play_claim_funding BEFORE INSERT ON rig_google_play_cr
     AND (r.purchased_at<=i.expires_at OR r.admitted_pending=1)
     AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode=r.mode)
     AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=r.user_id)
+    AND NOT EXISTS(SELECT 1 FROM rig_google_play_notifications n WHERE n.token_hash=r.token_hash AND n.refund_attempted_at IS NOT NULL)
     AND ((r.mode='live' AND EXISTS(SELECT 1 FROM rig_funding_valid_snapshots s WHERE s.snapshot_id=NEW.snapshot_id
      AND s.retail_liability_cents*s.usd_micros_per_euro_cent+s.provider_reserved_usd_micros+s.buffer_usd_micros<=s.balance_usd_micros))
      OR (r.mode='test' AND EXISTS(SELECT 1 FROM rig_google_play_test_policy p CROSS JOIN rig_google_play_test_exposure e

@@ -169,6 +169,7 @@ export function createGooglePlayCommerce({network=fetch,clock=Date.now,tenant=va
    // Recheck admission and durable credit under the same mutex used by normal
    // fulfillment. Only Google can identify this payment and original payer.
    if(await c.store.getReceipt(row.token_hash)||await c.store.findIntentForProvider({accountId:lookup.accountId,productId:lookup.productId,purchasedAt:lookup.purchasedAt??null,tokenHash:row.token_hash}))throw Error('purchase_binding_changed');
+   if(lookup.state==='CANCELLED'){await c.store.finishNotification({messageId:row.message_id,now:clock()});return;}
    if(lookup.state!=='PURCHASED'||!lookup.orderId)throw Error('purchase_not_refundable');
    const proof=await c.publisher.getOrder({orderId:lookup.orderId}),order=orderForGooglePlayProof(proof);
    if(order.tokenHash!==row.token_hash||order.productId!==lookup.productId||order.mode!==c.mode)throw Error('purchase_order_mismatch');

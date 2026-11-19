@@ -152,8 +152,17 @@ test('orphan refund requires a fresh matching private Google order proof and dur
   await f.store.noteNotification({descriptor,sealedToken,now});await assert.rejects(f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:JSON.parse(JSON.stringify(proof)),now}));
   assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:proof,now}),true);assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:proof,now}),false);
   const secondRead=await orphanOrder({now:now+1000});assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:secondRead,now:now+1000}),false,'a fresh read cannot bypass the uncertain-write cooldown');
+  await f.store.noteNotification({descriptor:{...descriptor,messageId:'orphan_duplicate_event'},sealedToken,now:now+1000});assert.equal(await f.store.markOrphanRefundAttempt({messageId:'orphan_duplicate_event',orderProof:secondRead,now:now+1000}),false,'another PubSub message cannot reset the same-token cooldown');
   const late=now+600001,afterCooldown=await orphanOrder({now:late});assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof:afterCooldown,now:late}),true);
   const row=await f.store.getNotification(descriptor.messageId);assert.equal(row.refund_attempt_inspection,orderForGooglePlayProof(afterCooldown).inspectionId);assert.equal(row.state,'queued');assert.equal((await f.counts()).ledger,0);
+ }finally{await f.mf.dispose()}
+});
+test('an orphan refund already requested makes later client confirmation refund-only and shares its retry cooldown',async()=>{
+ const f=await googlePlayFulfillmentFixture();try{
+  const now=Date.now(),token='orphan-then-client-confirm-1234567890',orderProof=await orphanOrder({token,now}),order=orderForGooglePlayProof(orderProof),descriptor={messageId:'orphan_then_client',kind:'product',tokenHash:order.tokenHash,productId:'rig_credit_5',orderId:order.orderId,mode:'live',packageName:'dev.andyarijs.rig'};
+  await f.store.noteNotification({descriptor,sealedToken,now});assert.equal(await f.store.markOrphanRefundAttempt({messageId:descriptor.messageId,orderProof,now}),true);
+  const i=await f.prepare(),paid=await f.inspect({token});const result=await f.grant(i.intentId,paid.proof);assert.equal(result.state,'refund_pending');assert.equal((await f.counts()).ledger,0);assert.equal((await f.counts()).claims,0);
+  assert.equal(await f.store.markRefundAttempt({tokenHash:order.tokenHash,inspectionId:purchaseForGooglePlayProof(paid.proof).inspectionId}),false,'moving the token into a receipt cannot reset the orphan refund cooldown');
  }finally{await f.mf.dispose()}
 });
 test('orphan refund cannot target a mismatched token or an existing owned receipt/entitlement',async()=>{
