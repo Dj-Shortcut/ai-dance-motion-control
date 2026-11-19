@@ -9,6 +9,19 @@ const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const reject=(status=403)=>json({error:status===401?'Meld je aan bij RIG.':'Deze aanvraag is niet toegestaan.'},status);
 const subject=req=>{const id=req.headers.get('oai-authenticated-user-id');return id&&id.length<=512&&!/[\u0000-\u001f\u007f]/.test(id)?id:null};
+// Display fields supplied by Sites dispatch, never by a browser body or a tool.
+// They are not used for account identity, permissions, payments or merging users.
+function accountProfile(req){
+ let displayName=null,email=null;
+ const forbidden=/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+ const raw=req.headers.get('oai-authenticated-user-full-name');
+ if(raw&&raw.length<=2048&&req.headers.get('oai-authenticated-user-full-name-encoding')==='percent-encoded-utf-8'){
+  try{const value=decodeURIComponent(raw).normalize('NFC').trim();if(value.length>0&&value.length<=120&&!forbidden.test(value))displayName=value}catch{}
+ }
+ const address=req.headers.get('oai-authenticated-user-email')?.trim();
+ if(address&&address.length<=254&&!forbidden.test(address)&&/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address))email=address;
+ return {displayName,email};
+}
 const PUBLIC_BRAND_ASSETS=Object.freeze({
  '/favicon.ico':{type:'image/x-icon',cache:'public, max-age=3600'},
  '/favicon.svg':{type:'image/svg+xml',cache:'public, max-age=3600'},
@@ -75,7 +88,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
   if(env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes'&&(session.mode!=='live'||session.currency!=='EUR'||typeof session.purchasesEnabled!=='boolean'||!Number.isSafeInteger(session.balanceCents)))throw Error('Invalid production session');
   return {userId:session.userId,request,session};
  }
- return {async fetch(req,env){
+ return {async fetch(req,env,execution){
   let url;try{url=new URL(req.url)}catch{return reject()}
   if(url.origin!==env.RIG_SITES_PRODUCER_ORIGIN)return reject();
   // Only these fixed, account-independent assets may be publicly cached.
@@ -111,7 +124,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    if(req.method==='POST'&&(req.headers.get('origin')!==url.origin||!['same-origin','none',null].includes(req.headers.get('sec-fetch-site'))))return reject();
    // The approval issuance API is a server-only adapter. Browsers obtain it
    // only as part of their owned, validated quote response.
-   if(url.pathname.startsWith('/api/chatgpt/'))return reject(404);
+   if(url.pathname.startsWith('/api/chatgpt/')||url.pathname.startsWith('/api/internal/'))return reject(404);
    const paymentRead=req.method==='GET'&&['/api/payments/balance','/api/payments/packages','/api/payments/orders'].includes(url.pathname)&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
    if(!production&&(sitesFinancePath(url.pathname+url.search,req.method)||sitesAdministrationPath(url.pathname+url.search,req.method)||sitesOwnerSecurityPath(url.pathname+url.search,req.method)||sitesCustomerSecurityPath(url.pathname+url.search,req.method)))return reject(404);
@@ -121,7 +134,18 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    if(!ctx)return reject(401);
    const expected=req.headers.get('x-rig-expected-user');
    if(expected!==null&&expected!==ctx.userId||req.method==='POST'&&expected!==ctx.userId)return reject();
-   if(req.method==='GET'&&url.pathname==='/api/session'&&!url.search)return json(ctx.session);
+   if(req.method==='GET'&&url.pathname==='/api/session'&&!url.search){
+    if(production){
+     // Recording activity is independent of sign-in availability. An unavailable
+     // optional profile store must never sign someone out or hide their balance.
+     const activity=(async()=>{try{
+      const response=await ctx.request('/api/internal/account-activity',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(accountProfile(req))});
+      if(response.body)void response.body.cancel().catch(()=>{});
+     }catch{}})();
+     if(typeof execution?.waitUntil==='function')execution.waitUntil(activity);else await activity;
+    }
+    return json(ctx.session);
+   }
    if(paymentRead&&!production){
     const state={currency:'EUR',mode:'test',purchasesEnabled:false};
     if(url.pathname.endsWith('/balance'))return Number.isSafeInteger(ctx.session.balanceCents)?json({balance:ctx.session.balanceCents,frozen:ctx.session.frozen===true,...state}):json({error:'Tegoed is tijdelijk niet beschikbaar.'},503);
@@ -151,4 +175,4 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
  }};
 }
 export default createRigSitesApp();
-export const rigSitesTesting={readBytes,subject,safeResponse};
+export const rigSitesTesting={readBytes,subject,safeResponse,accountProfile};

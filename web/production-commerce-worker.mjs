@@ -18,6 +18,7 @@ import {handleOwnerRecovery} from './owner-recovery.mjs';
 import {handleCustomerSupport,ownerSupportCases} from './customer-support.mjs';
 import {handleInvoiceRoute} from './invoice-delivery.mjs';
 import {handlePurchaseBilling} from './purchase-billing.mjs';
+import {handleOwnerUsers,handleAccountActivity} from './owner-users.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -33,6 +34,18 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
+   if(u.pathname==='/api/internal/account-activity'){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowAccountActivity:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleAccountActivity(authenticated.request,env,{userId:authenticated.userId,siteId:authenticated.siteId});
+   }
+   if(u.pathname==='/api/owner/users'){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleOwnerUsers(authenticated.request,env,{userId:authenticated.userId});
+   }
    if(u.pathname==='/api/security'||u.pathname.startsWith('/api/security/')){
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowCustomerSecurity:true});

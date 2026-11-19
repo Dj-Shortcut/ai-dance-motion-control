@@ -1,12 +1,13 @@
 // Production Sites identity: private payment Worker only, validated BEFORE
 // trusting a subject or request. Uses the same nonce and identity tables as
 // production video; never share these tables with the test database.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesPath,sitesRequestBodyLimit,sitesPreparationWrite} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesInternalAccountActivityPath,sitesPath,sitesRequestBodyLimit,sitesPreparationWrite} from './sites-bridge-protocol.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {createPreparationBudget,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const equals=(a,b)=>{if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0};
-function allowed(path,method,allowGeneration,allowFinance,allowSecurity,allowCustomerSecurity){
+function allowed(path,method,allowGeneration,allowFinance,allowSecurity,allowCustomerSecurity,allowAccountActivity){
+ if(sitesInternalAccountActivityPath(path,method))return allowAccountActivity;
  if(sitesOwnerSecurityPath(path,method))return allowSecurity;
  if(sitesCustomerSecurityPath(path,method))return allowCustomerSecurity;
  if(sitesAdministrationPath(path,method))return allowFinance;
@@ -33,7 +34,7 @@ export async function authenticateProductionSites(req,env,options={}){
  try{
   const mapped=await validateProductionTenant(env);if(!mapped||!HASH.test(env.RIG_PRODUCTION_SITES_BRIDGE_KEY||'')||!Number.isSafeInteger(now))return null;
   const u=new URL(req.url),path=u.pathname+u.search;
-  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration,allowFinance,options?.allowSecurity===true,options?.allowCustomerSecurity===true)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
+  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration,allowFinance,options?.allowSecurity===true,options?.allowCustomerSecurity===true,options?.allowAccountActivity===true)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
   const v=Object.fromEntries(Object.entries(SITE_HEADER_NAMES).map(([k,n])=>[k,req.headers.get(n)]));
   if(v.site!==env.RIG_PRODUCTION_SITE_ID||!HASH.test(v.subject||'')||!HASH.test(v.digest||'')||!HASH.test(v.signature||'')||!NONCE.test(v.nonce||'')||!/^\d{13}$/.test(v.time||'')||Math.abs(now-Number(v.time))>60000)return null;
   const headers=new Headers();for(const name of SIGNED_CONTENT_HEADERS){const value=req.headers.get(name);if(value!==null){if(value.length>256)return null;headers.set(name,value)}}
