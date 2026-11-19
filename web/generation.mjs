@@ -5,6 +5,7 @@ import {isR2InputUrl} from './rig-r2-inputs.mjs';
 import {validateInlineInput,INLINE_REQUEST_MAX_BYTES} from './rig-inline-inputs.mjs';
 import {RECAST_QUALITY,RECAST_MODEL,RECAST_QUEUE_FAMILY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS,validRecastSettings,validRecastVideo} from './recast-contract.mjs';
 import {invitationRenderContract,validInvitationRenderContract,checkInvitationRate} from './invitation-render-budget.mjs';
+import {InvalidResultMp4Error} from './result-mp4-inspect.mjs';
 // RIG generation module. External adapters must satisfy README contract.
 // All prices are configured by the operator in integer eurocents; no defaults.
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -360,7 +361,8 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         if(s.status!=='COMPLETED') return respond({...publicJob(job),state:s.status==='IN_QUEUE'?'queued':'processing'});
         if(s.error || s.error_type) {
           // Refund only after an explicit, authenticated terminal provider failure.
-          // Network errors, missing results and unrecognised errors remain queued.
+          // Deterministically invalid complete media is handled below; network
+          // errors, missing results and unrecognised errors remain queued.
           if(typeof s.error!=='string' || !s.error.trim()) return respond({...publicJob(job),state:'needs_review'});
           const failed=await services.jobs.markProviderFailed(user.id,job.id,job.falRequestId,claim.token);
           return respond(await publicFailure(failed));
@@ -382,7 +384,15 @@ export function createGenerationHandler(services, fetchImpl=fetch) {
         const key=await services.results.store(job,result.video.url,{signal,...(resultTransferPolicy?{transferPolicy:resultTransferPolicy}:{})});
         const completed=await services.jobs.markCompleted(user.id,job.id,job.falRequestId,key,claim.token);
         return respond({...publicJob(completed),videoPath:`/api/generations/${job.id}/video`});
-      } catch {return fail('Status is tijdelijk niet beschikbaar.',503);}
+      } catch(error) {
+        // A complete provider artifact that deterministically fails the bounded
+        // MP4 contract must not be downloaded and parsed again on every poll.
+        if(error instanceof InvalidResultMp4Error){
+          try{const failed=await services.jobs.markProviderFailed(user.id,job.id,job.falRequestId,claim.token);return respond(await publicFailure(failed));}
+          catch{return fail('Status is tijdelijk niet beschikbaar.',503);}
+        }
+        return fail('Status is tijdelijk niet beschikbaar.',503);
+      }
       finally {try {await services.jobs.releasePoll(user.id,job.id,claim.token);} catch {/* lease expiry permits recovery */}}
     }
     return fail('Niet gevonden.',404);

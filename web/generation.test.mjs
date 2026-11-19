@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGenerationHandler } from './generation.mjs';
 import {RECAST_MODEL,RECAST_QUALITY,RECAST_PROVIDER_CONTRACT,RECAST_SETTINGS} from './recast-contract.mjs';
+import {InvalidResultMp4Error} from './result-mp4-inspect.mjs';
 
 const endpoint='https://rig.test';
 const post=(path,data)=>new Request(endpoint+path,{method:'POST',headers:{'content-type':'application/json',origin:endpoint},body:JSON.stringify(data)});
@@ -54,9 +55,16 @@ test('finished provider result is stored privately and later accessed only by it
  const response=await f.handler(get('/api/generations/job1'));assert.equal(response.status,200);const result=await response.json();assert.equal(result.state,'completed');assert.equal(result.videoPath,'/api/generations/job1/video');assert.equal(result.videoUrl,undefined);
  assert.equal((await f.handler(get(result.videoPath))).status,200);f.setUser('u2');assert.equal((await f.handler(get(result.videoPath))).status,404);
 });
-test('only explicit provider failure calls refund, and missing durable result does not report success',async()=>{
+test('explicit provider failure is terminal while transient result storage remains retryable',async()=>{
  const f=fixture();await quote(f);await submit(f);f.setTerminalError('Model failed');const r=await f.handler(get('/api/generations/job1'));assert.equal((await r.json()).state,'failed');
  const g=fixture();await quote(g);await submit(g);g.services.results.store=async()=>{throw Error('storage unavailable')};assert.equal((await g.handler(get('/api/generations/job1'))).status,503);assert.equal((await g.services.jobs.getOwned('u1','job1')).state,'queued');
+});
+test('a deterministically invalid provider artifact becomes terminal and is not parsed by later polls',async()=>{
+ const f=fixture();await quote(f);await submit(f);let stores=0,failures=0;const markFailed=f.services.jobs.markProviderFailed;
+ f.services.results.store=async()=>{stores++;throw new InvalidResultMp4Error('Unsupported sample timing')};
+ f.services.jobs.markProviderFailed=async(...args)=>{failures++;return markFailed(...args)};
+ let response=await f.handler(get('/api/generations/job1'));assert.equal(response.status,200);assert.equal((await response.json()).state,'failed');
+ const providerCalls=f.calls().providerCalls;response=await f.handler(get('/api/generations/job1'));assert.equal((await response.json()).state,'failed');assert.equal(f.calls().providerCalls,providerCalls);assert.equal(stores,1);assert.equal(failures,1);
 });
 test('concurrent status polling returns processing without duplicate result download',async()=>{
  const f=fixture();await quote(f);await submit(f);
