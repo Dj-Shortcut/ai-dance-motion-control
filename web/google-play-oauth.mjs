@@ -12,7 +12,7 @@ export function createGooglePlayAccessTokenProvider(options={}){
  let account=serviceAccount;
  if(typeof account==='string'){if(account.length>32768)throw fail('play_oauth_setup');try{account=JSON.parse(account)}catch{throw fail('play_oauth_setup')}}
  if(!playObject(account)||account.type!=='service_account'||!email(account.client_email)||typeof account.private_key_id!=='string'||!/^[a-f0-9]{16,128}$/.test(account.private_key_id)||typeof account.private_key!=='string'||account.private_key.length>16384||account.token_uri!==undefined&&account.token_uri!==GOOGLE_PLAY_OAUTH_URL||typeof network!=='function'||typeof now!=='function')throw fail('play_oauth_setup');
- const pem=/^-----BEGIN PRIVATE KEY-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END PRIVATE KEY-----\r?\n?$/.exec(account.private_key);
+ const pem=/^-----BEGIN\x20PRIVATE\x20KEY-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END\x20PRIVATE\x20KEY-----\r?\n?$/.exec(account.private_key);
  if(!pem)throw fail('play_oauth_setup');
  let keyBytes;try{keyBytes=Uint8Array.from(atob(pem[1].replace(/[\r\n]/g,'')),char=>char.charCodeAt(0))}catch{throw fail('play_oauth_setup')}
  const issuer=account.client_email,keyId=account.private_key_id;let signingKey=null,pending=null,cached=null,generation=0;

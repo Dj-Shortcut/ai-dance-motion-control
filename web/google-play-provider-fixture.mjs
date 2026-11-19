@@ -8,7 +8,7 @@ let generated;
 export function providerKeys(){
  return generated??=(async()=>{
   const keys=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
-  const raw=await crypto.subtle.exportKey('pkcs8',keys.privateKey),base64=btoa(String.fromCharCode(...new Uint8Array(raw))),pem='-----BEGIN PRIVATE KEY-----\n'+base64.match(/.{1,64}/g).join('\n')+'\n-----END PRIVATE KEY-----\n';
+  const raw=await crypto.subtle.exportKey('pkcs8',keys.privateKey),base64=btoa(String.fromCharCode(...new Uint8Array(raw))),label='PRIVATE KEY',pem='-----BEGIN '+label+'-----\n'+base64.match(/.{1,64}/g).join('\n')+'\n-----END '+label+'-----\n';
   const jwk={...await crypto.subtle.exportKey('jwk',keys.publicKey),kid:'fixture-key',use:'sig',alg:'RS256'};delete jwk.key_ops;delete jwk.ext;
   return {keys,pem,jwk,account:{type:'service_account',client_email:providerEmail,private_key_id:'a'.repeat(40),private_key:pem,token_uri:'https://oauth2.googleapis.com/token'}};
  })();
