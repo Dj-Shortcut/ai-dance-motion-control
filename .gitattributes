@@ -3,5 +3,5 @@ web/frontend/*-bundle.js linguist-generated=true
 web/frontend/multiuser/*-bundle.js linguist-generated=true
 
 # Keep the generated Windows launcher portable and preserve literal patch context.
-android/gradlew.bat text eol=crlf
+android/gradlew.bat -text
 android/third_party/android-browser-helper-playbilling/RIG.patch -whitespace

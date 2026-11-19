@@ -4,7 +4,7 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 // Explicit regression gates. Operator/deployment scripts are never executed.
 const groups={
  unit:[
-  'android-site-entry','android-store-boundary','google-play-payments-ui','google-play-purchases',
+  'android-site-entry','android-store-boundary','google-play-payments-ui','google-play-purchases','google-play-financial','google-play-inspection','google-play-oauth-vault','google-play-push-rtdn','google-play-publisher','google-play-commerce-protocol','google-play-license-harness','google-play-accounting',
   'browser-preparation-capability-ui','screen-recording-crop-ui','browser-cleanup-preparation','browser-cleanup-aac','browser-cleanup-compositor','browser-cleanup-ui','browser-cleanup-client','overlay-cleanup-contract','workflow-client-contract','workflow-inputs','workflow-runtime',
   'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','owner-users-ui','owner-users-query','native-account-activity','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','guided-flow-ui','mobile-generation-lifecycle-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
   'sponsored-generation-ui','sponsored-payments-ui','multiuser-ui-integration','closed-payment-ui','funding-payments-ui','funding-diagnostics',
@@ -14,7 +14,7 @@ const groups={
   'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay','production-ingress'
  ],
  workerd:[
-  'google-play-credit-store-workerd',
+  'google-play-credit-store-workerd','google-play-fulfillment-store-workerd','google-play-license-test-funding-workerd','google-play-license-harness-workerd','google-play-commerce-workerd','google-play-accounting-workerd',
   'provider-admission-workerd','customer-security-workerd','video-drafts-workerd','router-rate-limit-workerd',
   'production-workflow-stores-workerd','production-workflow-client-workerd','workflow-runner-workerd','workflow-budget-workerd','workflow-http-workerd','funding-admission-workerd','funding-coverage-workerd','owner-funding-coverage-workerd','funding-production-boundary-workerd','funding-compression-workerd',
   'invoice-store-workerd','invoice-payment-workerd','invoice-delivery-workerd','purchase-billing-workerd','commercial-checkout-workerd','customer-support-workerd','accounting-export-workerd','owner-recovery-workerd','owner-users-workerd','preparation-budget-workerd','owner-security-workerd','profit-guard-workerd','owner-finance-workerd','sites-bridge','closed-video-worker-workerd','credit-ledger-workerd','sponsor-input-refund','rig-input-verification','rig-r2-verification','rig-provider-inputs',
@@ -25,7 +25,7 @@ const groups={
 const group=process.argv[2];if(!Object.hasOwn(groups,group)||process.argv.length!==3)throw Error('Choose unit, workerd or media.');
 await ensureFixtures();
 const env={...process.env};
-for(const key of Object.keys(env))if(/^(?:FAL_|MOLLIE_|ZOHO_|CLOUDFLARE_|CF_|RIG_|SUPABASE_)/.test(key))delete env[key];
+for(const key of Object.keys(env))if(/^(?:FAL_|MOLLIE_|ZOHO_|GOOGLE_PLAY_|CLOUDFLARE_|CF_|RIG_|SUPABASE_)/.test(key))delete env[key];
 env.CLOUDFLARE_CF_FETCH_ENABLED='false';env.WRANGLER_SEND_METRICS='false';
 const result=spawnSync(process.execPath,['--test','--test-concurrency='+ (group==='unit'?'2':'1'),...groups[group].map(name=>name+'.test.mjs')],{cwd:fileURLToPath(new URL('../',import.meta.url)),stdio:'inherit',env});
 if(result.error)throw result.error;

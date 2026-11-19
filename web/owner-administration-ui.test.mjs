@@ -27,7 +27,7 @@ const posts=f=>f.calls.filter(([,init])=>init.method==='POST');
 test('mount is closed and makes no requests; owner data loads only when the corresponding disclosure opens',async()=>{
  const f=fixture();try{
   await new Promise(r=>setTimeout(r,10));assert.equal(f.calls.length,0);assert.equal(f.verifications.length,0);assert.equal(f.root.querySelectorAll(':scope > details').length,3);assert.equal([...f.root.children].every(node=>node.open===false),true);
-  await accounting(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/accounting']);assert.match(f.root.textContent,/niet automatisch verbonden/);assert.match(f.root.textContent,/handmatig door jou geregistreerd/);assert.match(f.root.textContent,/Volledig werkelijk resultaat: nog onbekend/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,4);assert.equal(f.verifications.length,0);
+  await accounting(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/accounting']);assert.match(f.root.textContent,/niet automatisch verbonden/);assert.match(f.root.textContent,/handmatig door jou geregistreerd/);assert.match(f.root.textContent,/Volledig werkelijk resultaat: nog onbekend/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,5);assert.equal(f.verifications.length,0);
   await recovery(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/accounting','/api/owner/recovery','/api/owner/support']);assert.equal(posts(f).length,0);
  }finally{f.close();}
  for(const options of [{native:false},{active:false}]){const f=fixture(options);try{assert.equal(f.calls.length,0);assert.equal(f.root.children.length,0);}finally{f.close();}}
@@ -80,6 +80,13 @@ test('a late CSV read cannot produce a download after logout or session loss',as
  }finally{f.close();}
 });
 
+test('Google Play has its own authenticated accounting export, separate from Mollie purchases',async()=>{
+ const f=fixture();try{
+  await accounting(f);const button=f.d.querySelector('[data-export-kind="google-play"]');assert.ok(button);assert.match(button.textContent,/Google Play/);button.click();await waitFor(()=>f.downloads.length===1);
+  assert.equal(f.calls.at(-1)[0],'/api/owner/accounting/export/google-play.csv');assert.equal(f.downloads[0].name,'RIG-google-play-alle-periodes.csv');assert.equal(posts(f).length,0);assert.equal(f.verifications.length,0);
+ }finally{f.close();}
+});
+
 test('recovery notes and existing-payment verification require separate exact proofs and never retry Fal or create payments',async()=>{
  const f=fixture({cases:[recoveryCase(),recoveryCase({id:ORDER,kind:'generation',fundingKind:'owner-provider',amountCents:0,providerRequestId:'fal-existing-request'})]});try{
   await recovery(f);assert.match(f.root.textContent,/Eigen Fal-opdracht, geen klanttegoed/);let form=f.root.querySelector('form[data-recovery-kind=payment]');form.querySelector('textarea').value='Mollie-bewijs nagekeken';submit(f,form);await waitFor(()=>posts(f).length===1);assert.equal(f.verifications[0].operation,'recovery-note');assert.equal(f.verifications[0].payload.caseId,CASE);assert.equal(f.verifications[0].payload.expectedVersion,VERSION);assert.equal(posts(f)[0][0],'/api/owner/recovery/notes');assert.deepEqual(JSON.parse(posts(f)[0][1].body),{...f.verifications[0].payload,verification:{challengeId:'test-device-proof',credential:{id:'assertion-1'}}});await waitFor(()=>f.root.textContent.includes('Onderzoeksnotitie bewaard.'));
@@ -115,7 +122,7 @@ test('issued invoice defaults lock the exact original number while an external a
 
 test('invoice-list failures preserve administration, but an authorization denial clears all owner data',async()=>{
  for(const status of [503,403]){const f=fixture({handler:path=>path.startsWith('/api/owner/accounting')?Response.json(automaticData()):Response.json({error:'Facturen niet beschikbaar.'},{status})});try{
-  open(f,'Administratie voor Accountable');await waitFor(()=>f.calls.some(([path])=>path==='/api/owner/invoices'));await new Promise(r=>setTimeout(r,15));if(status===403)assert.equal(f.root.children.length,0);else{assert.match(f.root.textContent,/Facturen niet beschikbaar/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,4);assert.ok(f.d.getElementById('ownerAccountingDocumentForm'));}assert.equal(posts(f).length,0);
+  open(f,'Administratie voor Accountable');await waitFor(()=>f.calls.some(([path])=>path==='/api/owner/invoices'));await new Promise(r=>setTimeout(r,15));if(status===403)assert.equal(f.root.children.length,0);else{assert.match(f.root.textContent,/Facturen niet beschikbaar/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,5);assert.ok(f.d.getElementById('ownerAccountingDocumentForm'));}assert.equal(posts(f).length,0);
  }finally{f.close();}}
 });
 

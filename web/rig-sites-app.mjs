@@ -146,17 +146,16 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    const googleConfirm=req.method==='POST'&&url.pathname==='/api/payments/google-play/confirm'&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
    if(!production&&(sitesFinancePath(url.pathname+url.search,req.method)||sitesAdministrationPath(url.pathname+url.search,req.method)||sitesOwnerSecurityPath(url.pathname+url.search,req.method)||sitesCustomerSecurityPath(url.pathname+url.search,req.method)))return reject(404);
-   if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead)return reject(404);
+   if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead&&!googleConfig&&!googleConfirm)return reject(404);
    if(!paymentRead&&!googleConfig&&!googleConfirm&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
    let ctx;try{ctx=await context(req,env)}catch{return json({error:'RIG is tijdelijk niet beschikbaar.'},503)}
    if(!ctx)return reject(401);
    const expected=req.headers.get('x-rig-expected-user');
    if(expected!==null&&expected!==ctx.userId||req.method==='POST'&&expected!==ctx.userId)return reject();
-   // Preparation only: no flag or browser token can enable purchases until a
-   // reviewed Google funding/fulfillment/accounting composition is installed.
-   // These handlers cannot forward a purchase to Mollie or grant any credit.
-   if(googleConfig)return json({enabled:false});
-   if(googleConfirm)return json({code:'google_play_not_configured',error:'Aankopen via Google Play zijn nog niet beschikbaar.'},503);
+   // The signed private service owns Google's purchase verification and wallet
+   // writes. A browser flag, credit amount or token can never enable them here.
+   if(!production&&googleConfig)return json({enabled:false});
+   if(!production&&googleConfirm)return json({code:'google_play_not_configured',error:'Aankopen via Google Play zijn nog niet beschikbaar.'},503);
    if(req.method==='GET'&&url.pathname==='/api/session'&&!url.search){
     if(production){
      // Recording activity is independent of sign-in availability. An unavailable

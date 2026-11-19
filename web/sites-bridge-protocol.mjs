@@ -31,9 +31,15 @@ export function sitesOrigin(value){try{const u=new URL(value);return u.protocol=
 // Browser payment routes only. A webhook is never an authenticated customer
 // operation, and reconciliation is a write even though it reads provider state.
 export function sitesPaymentPath(path,method){
+ if(sitesGooglePlayPath(path,method))return true;
  if(typeof path!=='string'||path.includes('?')||path.includes('#'))return false;
  if(method==='GET')return ['/api/payments/packages','/api/payments/balance','/api/payments/orders','/api/payments/readiness','/api/payments/billing','/api/payments/support-requests'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}(?:\/(?:receipt|invoice))?$/.test(path)||/^\/api\/payments\/support-requests\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/confirmation$/.test(path);
  return method==='POST'&&(['/api/payments/create','/api/payments/support-requests'].includes(path)||/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/reconcile$/.test(path));
+}
+export function sitesGooglePlayPath(path,method){
+ if(typeof path!=='string')return false;
+ if(method==='GET')return path==='/api/payments/google-play/config'||new RegExp('^/api/payments/google-play/status(?:\\?intentId='+WORKFLOW_UUID+')?$').test(path);
+ return method==='POST'&&['/api/payments/google-play/intents','/api/payments/google-play/confirm'].includes(path);
 }
 // Financial data remains owner-only in the private service. Keep its signed
 // transport surface small and independent of video generation availability.
@@ -46,6 +52,7 @@ export function sitesFinancePath(path,method){
 export function sitesAdministrationPath(path,method){
  if(typeof path!=='string')return false;
  if(sitesUsersPath(path,method))return true;
+ if(method==='GET'&&/^\/api\/owner\/accounting\/(?:google-play|export\/google-play\.csv)(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path))return true;
  if(method==='GET')return /^\/api\/owner\/invoices(?:\/export\.zip)?(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path)||/^\/api\/owner\/invoices\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/pdf$/.test(path)||/^\/api\/owner\/accounting(?:\/export\/(?:purchases|credit-events|costs|estimates)\.csv)?(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path)||['/api/owner/recovery','/api/owner/support'].includes(path);
  return method==='POST'&&(['/api/owner/accounting/documents','/api/owner/recovery/notes'].includes(path)||/^\/api\/owner\/recovery\/payments\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/adopt$/.test(path));
 }

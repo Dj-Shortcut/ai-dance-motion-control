@@ -6,6 +6,7 @@ import {createProductionVideoService} from './production-video-service.mjs';
 import {createProductionPayment} from './production-payment.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
 import {collectInvoiceDocuments} from './invoice-delivery.mjs';
+import {createGooglePlayCommerce} from './google-play-commerce.mjs';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 async function statusJSON(response){
@@ -16,6 +17,7 @@ async function statusJSON(response){
 export async function collectProduction(env,{network=fetch,videoFactory=createProductionVideoService,clock=Date.now,limit=4}={}){
  const stats={videosChecked:0,paymentsChecked:0,needsReview:0,unavailable:0};
  if(env.RIG_AUTOMATIC_INVOICES_ENABLED==='yes')stats.invoices=await collectInvoiceDocuments(env,{now:clock(),limit});
+ if(env.RIG_GOOGLE_PLAY_PROCESSING_ENABLED==='yes')stats.googlePlay=await createGooglePlayCommerce({network,clock}).collect(env,{limit});
  if(env.RIG_PRODUCTION_COLLECTION_ENABLED!=='yes')return stats;
  if(!Number.isInteger(limit)||limit<1||limit>4)throw Error('Invalid collection limit');
  // Existing customer payments must recover even when new video generation is

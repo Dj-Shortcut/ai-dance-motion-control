@@ -19,6 +19,8 @@ import {handleCustomerSupport,ownerSupportCases} from './customer-support.mjs';
 import {handleInvoiceRoute} from './invoice-delivery.mjs';
 import {handlePurchaseBilling} from './purchase-billing.mjs';
 import {handleOwnerUsers,handleAccountActivity} from './owner-users.mjs';
+import {createGooglePlayCommerce,GOOGLE_PLAY_RTND_PATH} from './google-play-commerce.mjs';
+import {handleGooglePlayAccounting} from './google-play-accounting.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -27,13 +29,17 @@ async function readJSON(req){
  const reader=req.body?.getReader();if(!reader)return null;let size=0;const parts=[];
  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>8192)return null;parts.push(value)}const bytes=new Uint8Array(size);let i=0;for(const p of parts){bytes.set(p,i);i+=p.length}const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));return data&&typeof data==='object'&&!Array.isArray(data)?data:null}catch{return null}finally{void reader.cancel().catch(()=>{})}
 }
-export function createProductionCommerceWorker({network=fetch,videoFactory=createProductionVideoService,orderAdmission,coverageReader}={}){
+export function createProductionCommerceWorker({network=fetch,videoFactory=createProductionVideoService,orderAdmission,coverageReader,googlePlay=createGooglePlayCommerce({network})}={}){
  const payments=createProductionPayment({transport:network,orderAdmission,coverageReader});
  return {async fetch(req,env){
   let authenticated;
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
+   if(u.pathname===GOOGLE_PLAY_RTND_PATH){
+    if(!await validateProductionTenant(env))return unavailable();
+    return await googlePlay.handleNotification(req,env);
+   }
    if(u.pathname==='/api/internal/account-activity'){
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env,{allowAccountActivity:true});
@@ -57,6 +63,7 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
     const options={userId:authenticated.userId,network};
+    if(u.pathname==='/api/owner/accounting/google-play'||u.pathname==='/api/owner/accounting/export/google-play.csv')return await handleGooglePlayAccounting(authenticated.request,env,options);
     if(u.pathname==='/api/owner/support')return ownerSupportCases(env,options);
     if(u.pathname.startsWith('/api/owner/invoices'))return handleInvoiceRoute(authenticated.request,env,options);
     return u.pathname.startsWith('/api/owner/accounting')?handleOwnerAccounting(authenticated.request,env,options):handleOwnerRecovery(authenticated.request,env,options);
@@ -82,6 +89,7 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     if(!await validateProductionTenant(env))return unavailable();
     authenticated=await authenticateProductionSites(req,env);
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    if(u.pathname.startsWith('/api/payments/google-play/'))return await googlePlay.handleUser(authenticated.request,env,{userId:authenticated.userId});
     if(u.pathname==='/api/payments/billing')return handlePurchaseBilling(authenticated.request,env,{userId:authenticated.userId});
     if(/^\/api\/payments\/orders\/[A-Za-z0-9_-]{12,80}\/invoice$/.test(u.pathname))return handleInvoiceRoute(authenticated.request,env,{userId:authenticated.userId});
     if(u.pathname.startsWith('/api/payments/support-requests'))return handleCustomerSupport(authenticated.request,env,{userId:authenticated.userId});
