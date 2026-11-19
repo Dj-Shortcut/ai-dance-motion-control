@@ -34,11 +34,18 @@ test('every public page works without an account and has restrictive document he
   const html=await response.text();
   assert.match(html,/^<!doctype html><html lang="nl">/);
   assert.match(html,/<meta name="viewport"/);
-  assert.match(html,/Versie rig-commerce-2026-11-09-v2/);
+  assert.match(html,path==='/privacy'?/Versie rig-privacy-2026-11-19-v1 · 19 november 2026/:/Versie rig-commerce-2026-11-09-v2/);
   for(const link of ['/',...paths])assert.ok(html.includes('href="'+link+'"'),path+' links '+link);
   assert.doesNotMatch(html,/<script|<iframe|<form|on(?:load|error|click)=/i);
   assert.match(html,/info@andyarijs\.dev/);
  }
+});
+
+test('account visibility disclosure has its own version without changing purchase terms',async()=>{
+ const privacy=await commerceDocument('/privacy').text(),terms=await commerceDocument('/voorwaarden').text();
+ assert.match(privacy,/aanmeldplatform je naam en e-mailadres/);assert.match(privacy,/eerste bezoek/);assert.match(privacy,/laatst actief/);
+ assert.match(privacy,/Alleen de beheerder/);assert.match(privacy,/Een sessiecontrole geldt niet als een nieuwe login/);
+ assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/rig-privacy-2026-11-19-v1/);
 });
 
 test('Sites serves seller documents before authenticated account and provider work',async()=>{

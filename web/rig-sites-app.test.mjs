@@ -81,10 +81,11 @@ test('production native payments use their own signed realm and production accou
   const signature=await sitesHmac(key,sitesCanonical({env:{...env,RIG_SITES_BRIDGE_ORIGIN:productionBridge},method:req.method,path,subjectHash:h.get('x-rig-sites-subject'),time:h.get('x-rig-sites-time'),nonce:h.get('x-rig-sites-nonce'),digest:h.get('x-rig-sites-body-sha256'),headers:h}));
   assert.equal(h.get('x-rig-sites-signature'),signature);
   if(path==='/api/session')return Response.json({userId:productionUser,balanceCents:0,frozen:false,currency:'EUR',mode:'live',purchasesEnabled:true,funding:'credits'});
+  if(path==='/api/internal/account-activity'){assert.deepEqual(await req.json(),{displayName:null,email:null});return new Response(null,{status:204})}
   if(path==='/api/payments/create'){assert.equal(h.get('origin'),origin);assert.deepEqual(await req.json(),{packageId:'small',requestId:'purchase-intent-0001'});return Response.json({checkoutUrl:'https://www.mollie.com/checkout/purchase'})}
   return Response.json({packages:[{id:'small',amountCents:500,credits:500}],currency:'EUR',mode:'live',purchasesEnabled:true});
  }});
- const session=await app.fetch(request('/api/session',{headers:{'oai-authenticated-user-id':'native-subject'}}),configured);assert.equal((await session.json()).userId,productionUser);assert.equal(calls.length,1);
+ const session=await app.fetch(request('/api/session',{headers:{'oai-authenticated-user-id':'native-subject'}}),configured);assert.equal((await session.json()).userId,productionUser);assert.equal(calls.length,2);assert.equal(new URL(calls[1].url).pathname,'/api/internal/account-activity');
  const headers={...identity,'x-rig-expected-user':productionUser,origin,'content-type':'application/json',authorization:'browser-secret',cookie:'browser=private'};
  const packages=await app.fetch(request('/api/payments/packages',{headers}),configured);assert.equal((await packages.json()).packages[0].credits,500);
  const result=await app.fetch(request('/api/payments/create',{method:'POST',headers,body:JSON.stringify({packageId:'small',requestId:'purchase-intent-0001'})}),configured);assert.equal(result.status,200);assert.equal((await result.json()).checkoutUrl,'https://www.mollie.com/checkout/purchase');

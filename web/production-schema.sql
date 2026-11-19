@@ -157,6 +157,19 @@ CREATE TABLE rig_sites_bridge_nonces (
 );
 CREATE INDEX rig_sites_bridge_nonce_expiry ON rig_sites_bridge_nonces(expires_at);
 
+-- Signed Sites metadata and observed account activity. Legacy identities keep
+-- their original first-visit timestamp and have no inferred activity/profile.
+CREATE TABLE IF NOT EXISTS rig_account_profiles (
+ site_id TEXT NOT NULL,
+ user_id TEXT NOT NULL REFERENCES rig_sites_identities(user_id),
+ display_name TEXT CHECK(display_name IS NULL OR length(display_name) BETWEEN 1 AND 120),
+ email TEXT CHECK(email IS NULL OR length(email) BETWEEN 3 AND 254),
+ last_active_at INTEGER NOT NULL CHECK(last_active_at BETWEEN 0 AND 9007199254740991),
+ PRIMARY KEY(site_id,user_id)
+);
+CREATE INDEX IF NOT EXISTS rig_sites_identities_overview
+ ON rig_sites_identities(site_id,created_at DESC,user_id ASC);
+
 CREATE TABLE rig_production_tenant (id INTEGER PRIMARY KEY CHECK(id=1), environment_id TEXT NOT NULL UNIQUE, mode TEXT NOT NULL CHECK(mode='live'), site_id TEXT NOT NULL, site_origin TEXT NOT NULL, bridge_origin TEXT NOT NULL, mollie_profile TEXT NOT NULL, webhook_url TEXT NOT NULL);
 
 -- Production-private preprocessing exclusion; no automatic expiry or unlock.

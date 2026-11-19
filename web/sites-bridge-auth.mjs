@@ -1,6 +1,6 @@
 // Runs only inside the private consumer video Worker, after tenant validation.
 // Public relay and Site receive neither Fal nor media-service credentials.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,SITES_BODY_MAX,sitesCanonical,sitesDigest,sitesHmac,sitesPath,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,SITES_BODY_MAX,sitesCanonical,sitesDigest,sitesHmac,sitesPath,sitesProtocolConfig,sitesInternalAccountActivityPath} from './sites-bridge-protocol.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function equals(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}
 async function readBody(req,max){
@@ -15,7 +15,7 @@ export async function authenticateSitesBridge(req,env,{leaseFactory,now=Date.now
  try{
   if(env.RIG_SITES_BRIDGE_ENABLED!=='yes'||env.RIG_MODE!=='test'||env.RIG_MOLLIE_MODE!=='test'||!sitesProtocolConfig(env)||typeof env.DB?.prepare!=='function'||typeof leaseFactory!=='function'||!Number.isSafeInteger(now))return null;
   const u=new URL(req.url),path=u.pathname+u.search;
-  if(u.origin!==env.RIG_SITES_BRIDGE_ORIGIN||u.username||u.password||u.hash||!sitesPath(path,req.method)||req.method==='POST'&&req.headers.get('origin')!==env.RIG_SITES_PRODUCER_ORIGIN)return null;
+  if(u.origin!==env.RIG_SITES_BRIDGE_ORIGIN||u.username||u.password||u.hash||sitesInternalAccountActivityPath(path,req.method)||!sitesPath(path,req.method)||req.method==='POST'&&req.headers.get('origin')!==env.RIG_SITES_PRODUCER_ORIGIN)return null;
   const values=Object.fromEntries(Object.entries(SITE_HEADER_NAMES).map(([k,n])=>[k,req.headers.get(n)]));
   if(values.site!==env.RIG_SITES_PROJECT_ID||!HASH.test(values.subject||'')||!HASH.test(values.digest||'')||!HASH.test(values.signature||'')||!NONCE.test(values.nonce||'')||!/^\d{13}$/.test(values.time||'')||Math.abs(now-Number(values.time))>60000)return null;
   const content=new Headers();for(const name of SIGNED_CONTENT_HEADERS){const value=req.headers.get(name);if(value!==null){if(value.length>256)return null;content.set(name,value)}}

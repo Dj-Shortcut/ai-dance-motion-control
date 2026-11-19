@@ -10,7 +10,7 @@
  const recordTypes={'invoice':'Factuur','accounting-entry':'Boekingsreferentie'},delivery={'prepared':'Referentie klaargezet','recorded-in-accountable':'Zelf verwerkt in Accountable','peppol-sent-manually':'Zelf via Peppol verzonden'};
  const caseStatuses={'investigating':'In onderzoek','waiting-provider':'Wacht op aanbieder','reviewed':'Onderzocht, uitkomst apart beoordelen'};
  const states={creating:'Wordt aangemaakt',open:'Nog niet betaald',paid:'Betaald',expired:'Verlopen',failed:'Mislukt',unknown:'Onbekende uitkomst',credit_pending_review:'Tegoed in onderzoek',reversal_review:'Terugboeking in onderzoek',submitting:'Wordt verstuurd',queued:'In verwerking'};
- let disposed=false,root=null,onChanged=()=>{},accounting=null,recovery=null;
+ let disposed=false,root=null,onChanged=()=>{},accounting=null,recovery=null,users=null;
  const urls=new Set(),timers=new Set();
  const current=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&binding.active()===true;
  const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(cls)node.className=cls;return node;};
@@ -20,10 +20,10 @@
  function onPageHide(event){if(event.persisted!==true||!current())dispose();}
  function dispose(){
   if(disposed)return;disposed=true;
-  for(const state of [accounting,recovery])if(state){state.loadId++;state.actionId++;}
+  for(const state of [accounting,recovery,users])if(state){state.loadId++;state.actionId++;}
   if(accounting?.verifying||recovery?.verifying)window.rigOwnerVerification?.cancel?.();
   for(const url of urls)URL.revokeObjectURL(url);urls.clear();for(const timer of timers)clearTimeout(timer);timers.clear();
-  root?.replaceChildren();root=null;accounting=null;recovery=null;
+  root?.replaceChildren();root=null;accounting=null;recovery=null;users=null;
   window.removeEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.removeEventListener('click',dispose);
  }
  function check(){if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}}
@@ -164,10 +164,52 @@
   state.output.append(el('h3','Ontvangen klantvragen'));if(!requests.length){state.output.append(el('p','Nog geen klantvragen ontvangen.'));return;}
   for(const item of requests.slice(0,50)){const article=el('article',undefined,'finance-section');article.append(el('strong',(item.kind==='withdrawal'?'Herroepingsverzoek':'Vraag over betaling')+' · '+(item.id||'')),el('p',date(item.createdAt)+' · aankoop '+(item.orderRequestId||item.orderId||'—')),el('p',euro(item.amountCents)+' · actuele betaalstatus: '+(states[item.currentOrderState]||item.currentOrderState||'onbekend')+(item.paymentId?' · '+item.paymentId:'')),el('p',item.message||'Geen toelichting meegegeven.'),el('small','Ontvangen verzoek; geen beslissing of terugbetaling uitgevoerd.'));state.output.append(article);}
  }
+ const userTimestamp=value=>Number.isSafeInteger(value)&&value>=0&&!Number.isNaN(new Date(value).getTime());
+ const userDate=value=>{if(value===null)return 'Nog niet bijgehouden';const parts=new Intl.DateTimeFormat('nl-BE',{timeZone:'Europe/Brussels',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)),part=type=>parts.find(item=>item.type===type)?.value;return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')}`;};
+ function validUsers(data){
+  return data?.profileTrackingAvailable===true&&Array.isArray(data.users)&&data.users.length<=25&&Number.isSafeInteger(data.totalCount)&&data.totalCount>=data.users.length&&(data.nextCursor===null||typeof data.nextCursor==='string'&&data.nextCursor.length>0&&data.nextCursor.length<=512)&&data.users.every(item=>item&&typeof item.id==='string'&&item.id.length>0&&item.id.length<=128&&typeof item.reference==='string'&&item.reference.length>0&&item.reference.length<=128&&(item.displayName===null||typeof item.displayName==='string'&&item.displayName.length<=200)&&(item.email===null||typeof item.email==='string'&&item.email.length<=254)&&userTimestamp(item.firstSeenAt)&&(item.lastActiveAt===null||userTimestamp(item.lastActiveAt)));
+ }
+ function userControls(state){
+  state.refresh.disabled=state.loading;state.previous.disabled=state.loading||!state.previousCursors.length;state.next.disabled=state.loading||!state.nextCursor;
+ }
+ async function loadUsers({query=users?.query||'',cursor=null,previousCursors=[],page=1}={}){
+  const state=users;if(!current()||!state)return;const token=++state.loadId;state.loading=true;userControls(state);state.output.setAttribute('aria-busy','true');message(state,'Gebruikers ophalen…');
+  try{
+   const params=new URLSearchParams({limit:'25'});if(query)params.set('q',query);if(cursor)params.set('cursor',cursor);
+   const data=await request('/api/owner/users?'+params);if(token!==state.loadId)return;
+   if(!validUsers(data)||data.nextCursor!==null&&data.nextCursor===cursor)throw Error('Het gebruikersoverzicht kon niet worden gecontroleerd. Probeer opnieuw.');
+   state.loaded=true;state.query=query;state.cursor=cursor;state.previousCursors=previousCursors;state.page=page;state.nextCursor=data.nextCursor;renderUsers(state,data);
+   message(state,'Bijgewerkt. Tijden staan in de tijdzone van Brussel.');
+  }catch(error){if(token===state.loadId)message(state,(error.message||'De gebruikers konden niet worden opgehaald.')+(state.loaded?' De eerder opgehaalde gegevens blijven staan.':''),true);}
+  finally{if(current()&&token===state.loadId){state.loading=false;state.output.setAttribute('aria-busy','false');userControls(state);}}
+ }
+ function renderUsers(state,data){
+  state.output.replaceChildren();state.output.append(el('p',`${data.totalCount} ${data.totalCount===1?'gebruiker':'gebruikers'}${state.query?' voor “'+state.query+'”':''} · pagina ${state.page}`,'owner-users-count'));
+  if(!data.users.length){state.output.append(el('p',state.query?'Geen gebruikers gevonden voor deze zoekopdracht.':'Nog geen gebruikers gevonden.','finance-empty'));return;}
+  const list=el('ul',undefined,'owner-users-list');
+  for(const item of data.users){
+   const row=el('li',undefined,'owner-user-card'),identity=el('div',undefined,'owner-user-identity'),dates=el('dl',undefined,'owner-user-dates');row.dataset.ownerUser=item.id;
+   identity.append(el('strong',item.displayName?.trim()||'Naam nog niet gedeeld'));if(item.email?.trim())identity.append(el('span',item.email));identity.append(el('small',item.reference));
+   for(const [label,value]of [['Eerste bezoek',item.firstSeenAt],['Laatst actief',item.lastActiveAt]]){const pair=el('div');pair.append(el('dt',label),el('dd',userDate(value)));dates.append(pair);}
+   row.append(identity,dates);list.append(row);
+  }
+  state.output.append(list);
+ }
+ function mountUsers(container){
+  const state=users=panel(container,'Gebruikers');state.details.id='ownerUsers';state.query='';state.cursor=null;state.previousCursors=[];state.page=1;state.nextCursor=null;state.output.classList.add('owner-users-output');
+  const searchForm=el('form',undefined,'finance-toolbar owner-users-search');searchForm.setAttribute('role','search');const search=state.search=field(searchForm,'Zoek op naam, e-mail of referentie','ownerUsersSearch','search');search.maxLength=100;search.autocomplete='off';search.spellcheck=false;const submit=el('button','Zoeken');submit.type='submit';searchForm.append(submit);state.bar.before(searchForm);
+  state.details.insertBefore(el('p','Bij bestaande accounts worden naam en e-mail bij het volgende bezoek aangevuld, voor zover gedeeld door ChatGPT. Laatst actief wordt bijgewerkt bij sessiecontroles; dit is geen apart aanmeldlogboek.','finance-policy-note'),searchForm);
+  state.previous=el('button','Vorige pagina');state.next=el('button','Volgende pagina');state.previous.type=state.next.type='button';state.previous.dataset.usersPrevious='true';state.next.dataset.usersNext='true';state.refresh.dataset.usersRefresh='true';state.bar.append(state.previous,state.next);userControls(state);
+  state.details.addEventListener('toggle',()=>{if(current()&&users===state&&state.details.open&&!state.loaded&&!state.loading)void loadUsers();});state.refresh.addEventListener('click',()=>void loadUsers());
+  searchForm.addEventListener('submit',event=>{event.preventDefault();if(!current())return;const query=search.value.trim();if(query.length>100){message(state,'Gebruik maximaal 100 tekens om te zoeken.',true);return;}void loadUsers({query});});
+  state.previous.addEventListener('click',()=>{if(state.loading||!state.previousCursors.length)return;void loadUsers({query:state.query,cursor:state.previousCursors.at(-1),previousCursors:state.previousCursors.slice(0,-1),page:state.page-1});});
+  state.next.addEventListener('click',()=>{if(state.loading||!state.nextCursor)return;void loadUsers({query:state.query,cursor:state.nextCursor,previousCursors:[...state.previousCursors,state.cursor],page:state.page+1});});
+ }
  function mount(container,options={}){
   if(!current()){dispose();return;}if(root===container)return;if(root)root.replaceChildren();root=container;onChanged=typeof options.onChanged==='function'?options.onChanged:()=>{};container.replaceChildren();
   accounting=panel(container,'Administratie voor Accountable');accounting.month=field(accounting.bar,'Maand administratie (leeg = alle)','ownerAccountingMonth','month');accounting.details.addEventListener('toggle',()=>{if(current()&&accounting?.details.open&&!accounting.loaded&&!accounting.loading)void loadAccounting();});accounting.refresh.addEventListener('click',()=>void loadAccounting());accounting.month.addEventListener('change',()=>{if(accounting.details.open)void loadAccounting();});
   recovery=panel(container,'Probleemgevallen en klantvragen');recovery.details.addEventListener('toggle',()=>{if(current()&&recovery?.details.open&&!recovery.loaded&&!recovery.loading)void loadRecovery();});recovery.refresh.addEventListener('click',()=>void loadRecovery());
+  mountUsers(container);
  }
  window.addEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.addEventListener('click',dispose);window.rigOwnerAdministration={mount,dispose};
 })();

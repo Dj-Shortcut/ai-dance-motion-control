@@ -26,7 +26,7 @@ const posts=f=>f.calls.filter(([,init])=>init.method==='POST');
 
 test('mount is closed and makes no requests; owner data loads only when the corresponding disclosure opens',async()=>{
  const f=fixture();try{
-  await new Promise(r=>setTimeout(r,10));assert.equal(f.calls.length,0);assert.equal(f.verifications.length,0);assert.equal(f.root.querySelectorAll(':scope > details').length,2);assert.equal([...f.root.children].every(node=>node.open===false),true);
+  await new Promise(r=>setTimeout(r,10));assert.equal(f.calls.length,0);assert.equal(f.verifications.length,0);assert.equal(f.root.querySelectorAll(':scope > details').length,3);assert.equal([...f.root.children].every(node=>node.open===false),true);
   await accounting(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/accounting']);assert.match(f.root.textContent,/niet automatisch verbonden/);assert.match(f.root.textContent,/handmatig door jou geregistreerd/);assert.match(f.root.textContent,/Volledig werkelijk resultaat: nog onbekend/);assert.equal(f.root.querySelectorAll('[data-export-kind]').length,4);assert.equal(f.verifications.length,0);
   await recovery(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/accounting','/api/owner/recovery','/api/owner/support']);assert.equal(posts(f).length,0);
  }finally{f.close();}
