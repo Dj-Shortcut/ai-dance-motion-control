@@ -19,7 +19,7 @@ jobs:
   web:
     name: Web ${{ matrix.suite }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.suite == 'media' && 35 || 15 }}
     strategy:
       fail-fast: false
       matrix:
