@@ -35,8 +35,10 @@ jobs:
         with:
           validate-wrappers: true
           cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - name: Install Android 36 build tools
-        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Check the runner's installed Android 36 SDK
+        run: |
+          test -f "${ANDROID_HOME:?}/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
       - name: Check public certificate document generation
         run: node --test scripts/assetlinks.test.mjs
       - name: Build test APK and unsigned release bundle; run release lint
