@@ -28,10 +28,21 @@ const PUBLIC_BRAND_ASSETS=Object.freeze({
  '/apple-touch-icon.png':{type:'image/png',cache:'public, max-age=3600'},
  '/social/rig-share-v1.png':{type:'image/png',cache:'public, max-age=31536000, immutable'}
 });
+function androidPublicDocument(path,env){
+ if(path==='/android/manifest.webmanifest')return {type:'application/manifest+json',body:{id:'/android/',name:'RIG',short_name:'RIG',lang:'nl',start_url:'/android/',scope:'/android/',display:'standalone',background_color:'#111416',theme_color:'#111416',icons:[{src:'/favicon.svg',sizes:'any',type:'image/svg+xml',purpose:'any'}]}};
+ if(path==='/.well-known/assetlinks.json'){
+  // Public app-signing certificate only. No debug association or arbitrary
+  // package/origin can be installed through this fixed document.
+  const fingerprint=env.RIG_ANDROID_APP_SIGNING_SHA256;
+  const configured=typeof fingerprint==='string'&&fingerprint.length===95&&/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(fingerprint);
+  return {type:'application/json',body:configured?[{relation:['delegate_permission/common.handle_all_urls'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[fingerprint.toUpperCase()]}}]:[]};
+ }
+ return null;
+}
 const STUDIO_TRACKING_PARAMS=new Set(['fbclid','utm_source','utm_medium','utm_campaign','utm_term','utm_content']);
 function studioQueryAllowed(url){
  if(!url.search)return true;
- if(!['/','/multiuser/'].includes(url.pathname))return false;
+ if(!['/','/multiuser/','/android/'].includes(url.pathname))return false;
  let count=0,payment=false;
  for(const [name,value]of url.searchParams){
   if(++count>16||value.length>4096)return false;
@@ -91,6 +102,11 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
  return {async fetch(req,env,execution){
   let url;try{url=new URL(req.url)}catch{return reject()}
   if(url.origin!==env.RIG_SITES_PRODUCER_ORIGIN)return reject();
+  const androidDocument=androidPublicDocument(url.pathname,env);
+  if(androidDocument){
+   if(!['GET','HEAD'].includes(req.method)||url.search)return reject(404);
+   return new Response(req.method==='HEAD'?null:JSON.stringify(androidDocument.body),{headers:{'content-type':androidDocument.type,'cache-control':'public, max-age=300','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; frame-ancestors 'none'"}});
+  }
   // Only these fixed, account-independent assets may be publicly cached.
   // Typed build entries preserve binary bytes; their content type is not input.
   if(Object.hasOwn(PUBLIC_BRAND_ASSETS,url.pathname)){
@@ -126,14 +142,21 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    // only as part of their owned, validated quote response.
    if(url.pathname.startsWith('/api/chatgpt/')||url.pathname.startsWith('/api/internal/'))return reject(404);
    const paymentRead=req.method==='GET'&&['/api/payments/balance','/api/payments/packages','/api/payments/orders'].includes(url.pathname)&&!url.search;
+   const googleConfig=req.method==='GET'&&url.pathname==='/api/payments/google-play/config'&&!url.search;
+   const googleConfirm=req.method==='POST'&&url.pathname==='/api/payments/google-play/confirm'&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
    if(!production&&(sitesFinancePath(url.pathname+url.search,req.method)||sitesAdministrationPath(url.pathname+url.search,req.method)||sitesOwnerSecurityPath(url.pathname+url.search,req.method)||sitesCustomerSecurityPath(url.pathname+url.search,req.method)))return reject(404);
    if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead)return reject(404);
-   if(!paymentRead&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
+   if(!paymentRead&&!googleConfig&&!googleConfirm&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
    let ctx;try{ctx=await context(req,env)}catch{return json({error:'RIG is tijdelijk niet beschikbaar.'},503)}
    if(!ctx)return reject(401);
    const expected=req.headers.get('x-rig-expected-user');
    if(expected!==null&&expected!==ctx.userId||req.method==='POST'&&expected!==ctx.userId)return reject();
+   // Preparation only: no flag or browser token can enable purchases until a
+   // reviewed Google funding/fulfillment/accounting composition is installed.
+   // These handlers cannot forward a purchase to Mollie or grant any credit.
+   if(googleConfig)return json({enabled:false});
+   if(googleConfirm)return json({code:'google_play_not_configured',error:'Aankopen via Google Play zijn nog niet beschikbaar.'},503);
    if(req.method==='GET'&&url.pathname==='/api/session'&&!url.search){
     if(production){
      // Recording activity is independent of sign-in availability. An unavailable
@@ -168,10 +191,14 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
   // Share tracking is ignored only on studio HTML entries, never forwarded or
   // reflected. A Mollie return remains a hint; payment is verified separately.
   if(req.method!=='GET'||!studioQueryAllowed(url))return reject(404);
-  const path=url.pathname==='/'||url.pathname==='/multiuser/'?'/multiuser/index.html':url.pathname;
+  // The store marker belongs only to this explicit entry. Direct access to
+  // its internal build asset must not select another checkout context.
+  if(url.pathname==='/android/index.html')return reject(404);
+  const android=url.pathname==='/android/';
+  const path=android?'/android/index.html':url.pathname==='/'||url.pathname==='/multiuser/'?'/multiuser/index.html':url.pathname;
   const asset=uiFiles[path];if(typeof asset!=='string')return reject(404);
   const type=path.endsWith('.html')?'text/html; charset=utf-8':path.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8';
-  return new Response(asset,{headers:{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'publickey-credentials-create=(self), publickey-credentials-get=(self)','content-security-policy':"default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
+  return new Response(asset,{headers:{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':(android?'payment=(self), ':'')+'publickey-credentials-create=(self), publickey-credentials-get=(self)','content-security-policy':"default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
  }};
 }
 export default createRigSitesApp();

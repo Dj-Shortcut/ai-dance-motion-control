@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="rig_background">#111416</color>
+    <color name="rig_foreground">#EEF5F1</color>
+    <color name="rig_accent">#85E0BB</color>
+</resources>
+

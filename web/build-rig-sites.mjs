@@ -11,6 +11,7 @@ if(output===root)throw Error('Choose a separate build output directory.');
 if(values['project-id']&&!/^appgprj_[A-Za-z0-9]{20,80}$/.test(values['project-id']))throw Error('Invalid optional Site project ID.');
 // Build in memory: source bundles and sibling checkouts are never overwritten.
 const browser=await build({entryPoints:[join(root,'frontend/multiuser/native-site-boot.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
+const googlePlay=await build({entryPoints:[join(root,'frontend/multiuser/google-play-payments.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const security=await build({entryPoints:[join(root,'frontend/multiuser/owner-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const customerSecurity=await build({entryPoints:[join(root,'frontend/multiuser/customer-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const cleanup=await build({entryPoints:[join(root,'frontend/multiuser/cleanup-client.mjs')],bundle:true,format:'esm',platform:'browser',target:'es2022',write:false,logLevel:'silent',legalComments:'eof'});
@@ -45,7 +46,17 @@ files['/multiuser/index.html']=files['/multiuser/index.html']
  .replace(/<button\b(?=[^>]*\bid="authLogin")[^>]*>\s*Inloggen met Google\s*<\/button>/,'<a id="authLogin" class="auth-login" href="/signin-with-chatgpt?return_to=%2F" target="_top" hidden>Inloggen met ChatGPT</a>')
  .replace(/<button\b(?=[^>]*\bid="authLogout")[^>]*>\s*Afmelden\s*<\/button>/,'<a id="authLogout" class="account auth-logout" href="/signout-with-chatgpt?return_to=%2F" target="_top" hidden>Afmelden</a>');
 if(files['/multiuser/index.html'].includes('Inloggen met Google'))throw Error('Native sign-in replacement failed.');
+// A distinct server-rendered entry, not a URL/UA-triggered checkout switch.
+files['/android/index.html']=files['/multiuser/index.html']
+ .replace('<head>','<head><meta name="rig-app-channel" content="google-play"><link rel="manifest" href="/android/manifest.webmanifest">')
+ .replace('href="/signin-with-chatgpt?return_to=%2F"','href="/signin-with-chatgpt?return_to=%2Fandroid%2F"')
+ .replace('href="/signout-with-chatgpt?return_to=%2F"','href="/signout-with-chatgpt?return_to=%2Fandroid%2F"')
+ .replace(/(<small id="videoAvailabilityNote">)[\s\S]*?(<\/small>)/,'$1Je ziet de prijs vóór je bevestigt.$2')
+ .replace(/(<p id="creditsMessage"[^>]*>)[\s\S]*?(<\/p>)/,'$1Je tegoed wordt gecontroleerd…$2')
+ .replace(/(<button id="resumePayment"[^>]*>)[\s\S]*?(<\/button>)/,'$1$2');
+if(!files['/android/index.html'].includes('<meta name="rig-app-channel" content="google-play">'))throw Error('Android channel entry missing.');
 files['/multiuser/auth-bundle.js']=browser.outputFiles[0].text;
+files['/multiuser/google-play-payments.js']=googlePlay.outputFiles[0].text;
 files['/multiuser/owner-security.js']=security.outputFiles[0].text;
 files['/multiuser/customer-security.js']=customerSecurity.outputFiles[0].text;
 files['/multiuser/cleanup-client.js']=cleanup.outputFiles[0].text;
