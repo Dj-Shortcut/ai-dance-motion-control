@@ -121,9 +121,9 @@ test('output and advance idempotency are immutable; a stale or forged transition
 test('freeze and current owner-pin reductions block explicit continuation but preserve private recovery',async()=>{
  const f=await fixture({owner:true});try{
   await f.prep();await f.upload();const args={...f.identity,stageId:'compose',idempotencyKey:'owner-advance',outputHash:clips.output.meta.sha256};
-  await f.db.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,'fixture')").bind(USER).run();await assert.rejects(f.clients.advance(args),/blocked/);assert.equal((await f.clients.get({...f.identity,stageId:'compose'})).state,'ready_to_advance');await f.db.prepare('DELETE FROM rig_frozen_accounts WHERE user_id=?').bind(USER).run();
-  f.env.RIG_PRODUCTION_OWNER_USER_ID=OTHER;await assert.rejects(f.clients.advance(args),/blocked/);assert.equal((await f.authorize('base')).authorized,false);
-  f.env.RIG_PRODUCTION_OWNER_USER_ID=USER;assert.equal((await f.clients.advance(args)).advanced,true);f.env.RIG_PRODUCTION_OWNER_USER_ID=OTHER;assert.equal((await f.authorize('base')).authorized,false);assert.equal(await f.balance(),2000);
+  await f.db.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES(?,'fixture')").bind(USER).run();await assert.rejects(f.clients.prepareAdvance(args),/blocked/);assert.equal((await f.clients.get({...f.identity,stageId:'compose'})).state,'ready_to_advance');await f.db.prepare('DELETE FROM rig_frozen_accounts WHERE user_id=?').bind(USER).run();
+  f.env.RIG_PRODUCTION_OWNER_USER_ID=OTHER;await assert.rejects(f.clients.prepareAdvance(args),/policy/);assert.equal((await f.authorize('base')).authorized,false);
+  f.env.RIG_PRODUCTION_OWNER_USER_ID=USER;assert.equal((await f.clients.prepareAdvance(args)).advanced,false);assert.equal((await f.clients.get({...f.identity,stageId:'compose'})).state,'ready_to_advance');await assert.rejects(f.clients.advance(args),/approval/);assert.equal(await f.balance(),2000);
  }finally{await f.mf.dispose();}
 });
 test('an unstarted primary can still be cancelled after paid preclean without erasing provider costs',async()=>{

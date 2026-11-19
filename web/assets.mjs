@@ -121,7 +121,7 @@ export function createAssets(o){
      url=await mintR2Input({config:o.r2Inputs,key:copy.key});
      await verifyR2Input(url,{config:o.r2Inputs,key:copy.key,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
     }else{
-     url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,kind});
+     url=await mintProviderInput({origin:o.gatewayOrigin,secret:o.mediaSecret,jobId:context.jobId,assetId:id,sha256:sha,size,kind});
      await verifyProviderInput(url,{origin:o.gatewayOrigin,kind,bytes,fetchImpl:o.gatewayFetch||fetch});
     }
    }else url=await uploadVerifiedAsset({asset:{verified:true,mime,size,body:new Blob([bytes],{type:mime})},key:o.falKey,fetchImpl:o.providerFetch||fetch});

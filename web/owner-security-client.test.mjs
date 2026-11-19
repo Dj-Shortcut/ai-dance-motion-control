@@ -8,8 +8,9 @@ const waitFor=async fn=>{for(let i=0;i<200;i++){if(fn())return;await new Promise
 const candidateId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const options=(number=1)=>({required:true,challengeId:'11111111-1111-4111-8111-'+String(number).padStart(12,'0'),expiresAt:Date.now()+60000,publicKey:{challenge:'test-only-challenge-'+number,userVerification:'required'},summary:'Daglimiet Fal: US$10 → US$15'});
 function fixture({handler,supported=true,authenticate,register}={}){
- const dom=new JSDOM('<button id="authLogout">Afmelden</button><section id="security"></section>',{url:'https://rig.example.chatgpt.site/'}),win=dom.window,d=win.document,calls=[],authCalls=[],registerCalls=[],timers=new Map();
+ const dom=new JSDOM('<button id="authLogout">Afmelden</button><section id="security"></section>',{url:'https://rig.example.chatgpt.site/'}),win=dom.window,d=win.document,calls=[],authCalls=[],registerCalls=[],timers=new Map(),objectUrls=[],revokedUrls=[];
  win.HTMLDialogElement.prototype.showModal=function(){this.open=true;};win.HTMLDialogElement.prototype.close=function(){this.open=false;};
+ if(!win.crypto.subtle)Object.defineProperty(win,'crypto',{value:globalThis.crypto});win.URL.createObjectURL=blob=>{const value='blob:test-only-'+objectUrls.length;objectUrls.push({value,blob});return value;};win.URL.revokeObjectURL=value=>revokedUrls.push(value);
  let live=true,cancelled=0,timerSequence=0;
  win.rigNativeSite=true;win.rigSessionActive=()=>live;
  win.setTimeout=callback=>{const id=++timerSequence;timers.set(id,callback);return id;};win.clearTimeout=id=>timers.delete(id);
@@ -22,7 +23,7 @@ function fixture({handler,supported=true,authenticate,register}={}){
   return Response.json({status:'pending'});
  };
  const client=createOwnerVerification({window:win,webauthn:{browserSupportsWebAuthn:()=>supported,startAuthentication:async value=>{authCalls.push(value);return authenticate?authenticate(value):{id:'test-only-assertion-'+authCalls.length};},startRegistration:async value=>{registerCalls.push(value);return register?register(value):{id:'test-only-registration'};},cancel:()=>{cancelled++;}}});
- return {dom,win,d,calls,authCalls,registerCalls,timers,client,mount(){client.mount(d.getElementById('security'));},stop(){live=false;},cancelled:()=>cancelled,async poll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);await next[1]();await new Promise(r=>setTimeout(r,5));}},close(){client.dispose();dom.window.close();}};
+ return {dom,win,d,calls,authCalls,registerCalls,timers,objectUrls,revokedUrls,client,mount(){client.mount(d.getElementById('security'));},stop(){live=false;},cancelled:()=>cancelled,async poll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);await next[1]();await new Promise(r=>setTimeout(r,5));}},close(){client.dispose();dom.window.close();}};
 }
 const approve=f=>f.d.querySelector('.owner-verification-dialog button').click();
 const setup=f=>f.d.querySelector('#security button').click();
@@ -73,8 +74,15 @@ test('a fresh assertion requires the action summary and explicit confirmation fo
  }finally{f.close();}
 });
 
+test('workflow output approval shows the exact hash-bound private preview before authentication',async()=>{
+ const bytes=new TextEncoder().encode('approved private video bytes'.repeat(4)),outputHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join(''),payload={jobId:'job-owned',stageId:'compose',planHash:'a'.repeat(64),outputHash,sourceHash:'b'.repeat(64),maskHash:'c'.repeat(64),cleanHash:'d'.repeat(64),model:'minimax/h3-max/recast',providerEstimateUsdMicros:2700000,transferConsent:'fal-temporary-links-v1'},previewPath='/api/generations/job-owned/client/output';
+ const f=fixture({handler:call=>call.path.endsWith('/verification/options')?Response.json({...options(),summary:'Controleer de samengestelde video.',previewPath}):call.path===previewPath?new Response(bytes,{headers:{'content-type':'video/mp4','content-length':String(bytes.length)}}):Response.json({error:'unexpected'},{status:404})});try{
+  const pending=f.client.prepare('owner-workflow-advance',payload);await waitFor(()=>f.d.querySelector('dialog')?.open);const preview=f.d.querySelector('.owner-verification-preview');assert.ok(preview);assert.equal(preview.src,'blob:test-only-0');assert.equal(f.authCalls.length,0);assert.deepEqual(f.calls.map(call=>call.path),['/api/owner/security/verification/options',previewPath]);approve(f);assert.equal((await pending).credential.id,'test-only-assertion-1');assert.deepEqual(f.revokedUrls,['blob:test-only-0']);
+ }finally{f.close();}
+});
+
 test('every operation rejects authorization-free or malformed verification options',async()=>{
- for(const operation of ['finance-policy','finance-expense','owner-generation']){
+ for(const operation of ['finance-policy','finance-expense','owner-generation','owner-workflow-advance']){
   const unexpected=fixture({handler:()=>Response.json({required:false})});try{await assert.rejects(unexpected.client.prepare(operation,{}),{code:'verification_expired'});assert.equal(unexpected.authCalls.length,0);}finally{unexpected.close();}
  }
  for(const invalid of [{},Object.fromEntries(Object.entries(options()).filter(([key])=>key!=='required')),{...options(),required:false},{...options(),required:'true'},{required:true,publicKey:{}}]){

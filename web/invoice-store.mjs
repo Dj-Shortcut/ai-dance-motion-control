@@ -32,8 +32,8 @@ const proofSelect=`SELECT o.*,l.created_at AS credited_at,
  a.version AS terms_version,a.buyer_country,a.customer_type,a.package_id AS agreed_package_id,a.amount_cents AS agreed_amount_cents,a.credits AS agreed_credits,a.currency AS agreed_currency,a.request_hash AS acceptance_hash,a.seller_json,a.terms_text,a.created_at AS accepted_at,
  b.name AS billing_name,b.street AS billing_street,b.postal_code AS billing_postal_code,b.city AS billing_city,b.country AS billing_country,b.electronic_delivery AS billing_delivery,b.request_hash AS billing_hash,b.created_at AS billing_at
  FROM rig_orders o LEFT JOIN rig_ledger l ON l.event_id='credit:'||o.id AND l.order_id=o.id AND l.user_id=o.user_id AND l.delta=o.credits
- LEFT JOIN rig_purchase_acceptances a ON a.user_id=o.user_id AND a.request_id=o.request_id
- LEFT JOIN rig_purchase_billing b ON b.user_id=o.user_id AND b.request_id=o.request_id WHERE o.id=?`;
+ LEFT JOIN rig_purchase_acceptances a ON a.order_id=o.id AND a.user_id=o.user_id AND a.request_id=o.request_id
+ LEFT JOIN rig_purchase_billing b ON b.order_id=o.id AND b.user_id=o.user_id AND b.request_id=o.request_id WHERE o.id=?`;
 
 async function makeSnapshot(row,now){
  if(!UUID.test(row.id||'')||!USER.test(row.user_id||'')||!REQUEST.test(row.request_id||'')||row.state!=='paid'||!PAYMENT.test(row.payment_id||'')||!Number.isSafeInteger(row.amount_cents)||row.amount_cents<1||row.amount_cents>1000000||!Number.isSafeInteger(row.credits)||row.credits<1||row.credits>100000000||!text(row.package_id,1,40))return result('not-eligible','payment_not_verified');
@@ -90,7 +90,7 @@ export async function ensurePaidPurchaseInvoice(env,{orderId,now=Date.now()}={})
    db.prepare('INSERT INTO rig_invoice_counters(issue_year,next_sequence) VALUES(?,1) ON CONFLICT(issue_year) DO NOTHING').bind(year),
    db.prepare(`INSERT INTO rig_issued_invoices(id,order_id,user_id,order_request_id,invoice_number,issue_year,sequence,issued_date,issued_at,currency,amount_cents,credit_cents,snapshot_json,snapshot_sha256)
     SELECT ?,o.id,o.user_id,o.request_id,'RIG-'||c.issue_year||'-'||printf('%06d',c.next_sequence),c.issue_year,c.next_sequence,?,?,'EUR',o.amount_cents,o.credits,?,?
-    FROM rig_orders o JOIN rig_purchase_acceptances a ON a.user_id=o.user_id AND a.request_id=o.request_id JOIN rig_purchase_billing b ON b.user_id=o.user_id AND b.request_id=o.request_id JOIN rig_invoice_counters c ON c.issue_year=?
+    FROM rig_orders o JOIN rig_purchase_acceptances a ON a.order_id=o.id AND a.user_id=o.user_id AND a.request_id=o.request_id JOIN rig_purchase_billing b ON b.order_id=o.id AND b.user_id=o.user_id AND b.request_id=o.request_id JOIN rig_invoice_counters c ON c.issue_year=?
     WHERE ${eligibility} AND c.next_sequence<=?
     AND NOT EXISTS(SELECT 1 FROM rig_accounting_references WHERE reference_key=lower('RIG-'||c.issue_year||'-'||printf('%06d',c.next_sequence)))
     AND NOT EXISTS(SELECT 1 FROM rig_accounting_documents WHERE lower(trim(external_invoice_reference))=lower('RIG-'||c.issue_year||'-'||printf('%06d',c.next_sequence)))

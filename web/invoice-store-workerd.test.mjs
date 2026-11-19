@@ -18,11 +18,12 @@ async function fixture(){
   const env={DB:legacy,PRODUCTION_DB:db,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_INVOICE',RIG_PRODUCTION_ENVIRONMENT_ID:'invoice-fixture',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[{"id":"five","amountCents":500,"credits":500}]',RIG_COMMERCIAL_CHECKOUT_REQUIRED:'yes',RIG_AUTOMATIC_INVOICES_ENABLED:'yes',RIG_PRODUCTION_OWNER_USER_ID:OWNER};
   async function order({userId=ALICE,acceptance=true,billing=true,state='paid',credit=true,paidAt=PAID_AT,createdAt='2026-11-01 11:00:00',acceptedAt=Date.parse('2026-11-01T11:00:00Z')}={}){
    const id=crypto.randomUUID(),requestId=crypto.randomUUID();
+   const order=db.prepare('INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits,payment_id,state,created_at) VALUES(?,?,?,?,500,500,?,?,?)').bind(id,userId,requestId,'five','tr_'+id.replaceAll('-',''),state,createdAt);
    if(acceptance){const data={packageId:'five',requestId,commerce:{version:COMMERCE_VERSION,accepted:true,customerType:'consumer',country:'NL'},billing:{name:'Anne-Marie van Dijk',street:'Dorpsstraat 12',postalCode:'1234 AB',city:'Middelburg'}};
     const prepared=await prepareCommercialCheckout(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify(data)}),env,{userId,now:acceptedAt});assert.equal(prepared.response?.status??200,200,prepared.response&&await prepared.response.text());
+    const evidence=await prepared.orderEvidence({orderId:id});await db.batch([order,...evidence.before]);
     if(!billing)await db.prepare('DELETE FROM rig_purchase_billing WHERE user_id=? AND request_id=?').bind(userId,requestId).run();
-   }
-   await db.prepare('INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits,payment_id,state,created_at) VALUES(?,?,?,?,500,500,?,?,?)').bind(id,userId,requestId,'five','tr_'+id.replaceAll('-',''),state,createdAt).run();
+   }else await order.run();
    if(credit)await db.prepare('INSERT INTO rig_ledger(event_id,user_id,order_id,delta,created_at) VALUES(?,?,?,500,?)').bind('credit:'+id,userId,id,paidAt).run();return {id,requestId,userId};
   }
   const issue=(o,{extraEnv={},now=NOW}={})=>ensurePaidPurchaseInvoice({...env,...extraEnv},{orderId:typeof o==='string'?o:o.id,now});

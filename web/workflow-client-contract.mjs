@@ -1,10 +1,22 @@
 // Inactive server/browser boundary. Metadata proves container structure and
 // packet identity, never that client-composited pixels have a visual property.
 export const WORKFLOW_CLIENT_CONTRACT='rig-client-mask-compose-v1';
+export const WORKFLOW_CLIENT_APPROVAL_OPERATION='owner-workflow-advance';
+export const WORKFLOW_CLIENT_TRANSFER_POLICY='fal-temporary-links-v1';
 export const WORKFLOW_CLIENT_LIMITS=Object.freeze({source:16*1024*1024,clean:64*1024*1024,mask:2*1024*1024,output:16*1024*1024});
 const SHA=/^[a-f0-9]{64}$/,ID=/^[A-Za-z0-9_-]{1,100}$/,STEP=/^[a-z][a-z0-9-]{0,31}$/;
+const MODEL=/^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_.-]+){1,8}$/;
 const exact=(o,k)=>o&&Object.getPrototypeOf(o)===Object.prototype&&Object.keys(o).length===k.length&&k.every(x=>Object.hasOwn(o,x));
 const integer=(n,a,b)=>Number.isSafeInteger(n)&&n>=a&&n<=b;
+const approvalKeys=['jobId','stageId','planHash','outputHash','sourceHash','maskHash','cleanHash','model','providerEstimateUsdMicros','transferConsent'];
+export function validateWorkflowClientApprovalPayload(value){
+ if(!exact(value,approvalKeys)||!ID.test(value.jobId)||!STEP.test(value.stageId)||![value.planHash,value.outputHash,value.sourceHash,value.maskHash,value.cleanHash].every(x=>SHA.test(x))||!MODEL.test(value.model)||!integer(value.providerEstimateUsdMicros,1,6000000)||value.transferConsent!==WORKFLOW_CLIENT_TRANSFER_POLICY)throw Error('Invalid client output approval');
+ return Object.fromEntries(approvalKeys.map(key=>[key,value[key]]));
+}
+export function workflowClientApprovalPayload({jobId,plan,steps,outputHash}={}){
+ const client=plan?.clientProcessing,base=plan?.steps?.find(step=>step.id===client?.beforeStepId),clean=steps?.find(step=>step.step_id===client?.cleanFromStepId);
+ return validateWorkflowClientApprovalPayload({jobId,stageId:client?.id,planHash:plan?.planHash,outputHash,sourceHash:client?.source?.sha256,maskHash:client?.mask?.sha256,cleanHash:clean?.output_sha256,model:base?.model,providerEstimateUsdMicros:base?.providerEstimateUsdMicros,transferConsent:WORKFLOW_CLIENT_TRANSFER_POLICY});
+}
 export function validateWorkflowClientPlan(value,steps,baseStepId){
  if(!exact(value,['id','contract','beforeStepId','cleanFromStepId','source','mask','media'])||!STEP.test(value.id)||value.contract!==WORKFLOW_CLIENT_CONTRACT||value.beforeStepId!==baseStepId)throw Error('Invalid client processing plan');
  const base=steps.find(s=>s.id===baseStepId),clean=steps.find(s=>s.id===value.cleanFromStepId);

@@ -84,16 +84,16 @@ an audit trail and without double spending or unproved refunds.
 
 ### P2: provider input links need a complete lifetime and consumption policy
 
-`web/rig-provider-inputs.mjs` uses job-bound HMAC capabilities, owned immutable
-references, a six-hour expiry, and revocation after terminal settlement.
-However, a queued or dispatched-unknown job has no proven shorter maximum wait.
-Each authorized HEAD or small byte range also reads and hashes the entire
-private object. The relay IP limit does not cap bytes or concurrent reads per
-job/capability.
+`web/rig-provider-inputs.mjs` now uses job-bound HMAC capabilities with an exact
+30-minute issued-at window and signed immutable size/digest metadata. Durable
+per-signature request, byte and concurrency budgets are consumed before private
+media access; private HEAD and range reads use stored metadata and exact R2
+ranges instead of reading and hashing the complete object. A queued or
+dispatched-unknown job still has no separately documented provider wait and
+recovery policy.
 
-Done when: provider wait/expiry and recovery are defined, capabilities have a
-bounded byte/concurrency budget, and request-log access/redaction is reviewed.
-Do not fix this by making the input bucket public.
+Done when: provider wait and recovery are defined and request-log
+access/redaction is reviewed. Do not fix this by making the input bucket public.
 
 ### P2: terminal error coverage remains deliberately narrow
 

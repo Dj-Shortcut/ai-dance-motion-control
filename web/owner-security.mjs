@@ -4,6 +4,7 @@ import {validateProductionTenant} from './production-tenant.mjs';
 import {d1Limit} from './router.mjs';
 import {administrationFields,validateAdministrationPayload,administrationSummary} from './owner-administration-operations.mjs';
 import {profitPolicyRow} from './profit-policy.mjs';
+import {WORKFLOW_CLIENT_APPROVAL_OPERATION,validateWorkflowClientApprovalPayload,workflowClientApprovalPayload} from './workflow-client-contract.mjs';
 
 export const OWNER_RP_ID='rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 export const OWNER_ORIGIN='https://'+OWNER_RP_ID;
@@ -15,7 +16,8 @@ const VERSION=/^[A-Za-z0-9_.-]{1,64}$/;
 const expenseCategories=new Set(['fal-charge','fal-topup','mollie','hosting','other','refund']);
 const policyNames=['expectedVersion','eurPerUsdMicros','providerVatBps','paymentFeeBps','failureBufferBps','preparationCents','minMarginBps','dailyProviderLimitUsdMicros','minPriceCents','minProPriceCents'];
 const policyColumns=['eur_per_usd_micros','provider_vat_bps','payment_fee_bps','failure_buffer_bps','preparation_cents','min_margin_bps','daily_provider_limit_usd_micros','min_price_cents','min_pro_price_cents'];
-const operations=new Set(['finance-policy','finance-expense','owner-generation',...Object.keys(administrationFields)]);
+const operations=new Set(['finance-policy','finance-expense','owner-generation',WORKFLOW_CLIENT_APPROVAL_OPERATION,...Object.keys(administrationFields)]);
+const preparedMutations=new WeakSet();
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'private, no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const fail=(code,message,status=428)=>({ok:false,response:json({error:message,code},status)});
 const base64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
@@ -25,7 +27,7 @@ const credentialMeta=row=>({id:row.credential_id,candidateId:row.candidate_id,la
 const candidateMeta=(row,now)=>({candidateId:row.candidate_id,label:row.label,fingerprint:row.fingerprint,status:row.state==='active'?'active':row.state!=='pending'?'rejected':row.expires_at<=now?'expired':'pending',expiresAt:row.expires_at});
 function canonical(operation,payload){
  if(!operations.has(operation)||!payload||typeof payload!=='object'||Array.isArray(payload))throw Error('Invalid operation');
- const keys=Object.keys(payload),allowed=operation==='finance-policy'?policyNames:operation==='finance-expense'?['idempotencyKey','category','date','amountCents','note','jobId','replacesExpenseId']:operation==='owner-generation'?['quoteId','idempotencyKey','transferConsent']:administrationFields[operation];
+ const keys=Object.keys(payload),allowed=operation==='finance-policy'?policyNames:operation==='finance-expense'?['idempotencyKey','category','date','amountCents','note','jobId','replacesExpenseId']:operation==='owner-generation'?['quoteId','idempotencyKey','transferConsent']:operation===WORKFLOW_CLIENT_APPROVAL_OPERATION?Object.keys(validateWorkflowClientApprovalPayload(payload)):administrationFields[operation];
  if(keys.length===0||keys.some(k=>!allowed.includes(k)))throw Error('Invalid operation');
  const out={};for(const key of keys.sort()){const value=payload[key];if(typeof value==='string'){if(value.length>2048||/[\u0000-\u001f\u007f]/.test(value))throw Error('Invalid string');}else if(!Number.isSafeInteger(value))throw Error('Invalid value');out[key]=value;}
  if(operation==='finance-policy'){
@@ -36,6 +38,7 @@ function canonical(operation,payload){
   if(['idempotencyKey','category','date','amountCents','note'].some(k=>!Object.hasOwn(payload,k))||!UUID.test(payload.idempotencyKey||'')||!expenseCategories.has(payload.category)||!/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(payload.date||'')||new Date(payload.date+'T00:00:00Z').toISOString().slice(0,10)!==payload.date||!Number.isSafeInteger(payload.amountCents)||payload.amountCents<0||payload.amountCents>100000000||typeof payload.note!=='string'||Array.from(payload.note.trim()).length<1||Array.from(payload.note).length>240||Object.hasOwn(payload,'replacesExpenseId')&&!UUID.test(payload.replacesExpenseId)||(payload.category==='fal-charge'?(typeof payload.jobId!=='string'||!ID.test(payload.jobId)):Object.hasOwn(payload,'jobId')))throw Error('Invalid expense');
  }
  if(operation==='owner-generation'&&(!UUID.test(payload.quoteId||'')||typeof payload.idempotencyKey!=='string'||!ID.test(payload.idempotencyKey)||Object.hasOwn(payload,'transferConsent')&&payload.transferConsent!=='fal-temporary-links-v1'))throw Error('Invalid generation');
+ if(operation===WORKFLOW_CLIENT_APPROVAL_OPERATION)validateWorkflowClientApprovalPayload(payload);
  if(administrationFields[operation])validateAdministrationPayload(operation,payload);
  return JSON.stringify(out);
 }
@@ -60,6 +63,12 @@ async function rejectAssertion(db,challenge,now){
 }
 async function operationSummary(db,ownerId,operation,payload,now){
  const administration=administrationSummary(operation,payload);if(administration)return administration;
+ if(operation===WORKFLOW_CLIENT_APPROVAL_OPERATION){
+  const row=await db.prepare(`SELECT cp.*,w.plan_json FROM rig_generation_workflow_client_processing cp JOIN rig_generation_workflows w ON w.job_id=cp.job_id AND w.user_id=cp.user_id JOIN rig_generation_jobs j ON j.id=w.job_id AND j.user_id=w.user_id JOIN rig_generation_quotes q ON q.id=j.quote_id AND q.user_id=j.user_id JOIN rig_generation_workflow_steps c ON c.job_id=w.job_id AND c.step_id=cp.clean_step_id JOIN rig_generation_workflow_steps b ON b.job_id=w.job_id AND b.step_id=cp.before_step_id WHERE cp.job_id=? AND cp.stage_id=? AND cp.user_id=? AND cp.plan_hash=? AND cp.output_sha256=? AND cp.state IN ('ready_to_advance','advanced') AND c.state='completed' AND c.output_sha256=cp.clean_sha256 AND b.state='prepared' AND j.state='queued' AND q.funding_kind='owner-provider' AND EXISTS(SELECT 1 FROM rig_owner_provider_usage u WHERE u.job_id=j.id AND u.quote_id=q.id AND u.user_id=q.user_id AND u.state='authorized') AND NOT EXISTS(SELECT 1 FROM rig_generation_workflow_settlements s WHERE s.job_id=j.id)`).bind(payload.jobId,payload.stageId,ownerId,payload.planHash,payload.outputHash).first();
+  let expected;try{expected=row&&workflowClientApprovalPayload({jobId:row.job_id,plan:JSON.parse(row.plan_json),steps:[{step_id:row.clean_step_id,output_sha256:row.clean_sha256}],outputHash:row.output_sha256});}catch{}
+  if(!expected||JSON.stringify(expected)!==JSON.stringify(validateWorkflowClientApprovalPayload(payload)))throw Error('Workflow output unavailable');
+  return `Samengestelde video goedkeuren. Controleer de voorbeeldvideo; daarna start ${payload.model} met maximaal US$${(payload.providerEstimateUsdMicros/1000000).toFixed(2)} uit je eigen Fal-tegoed. Tijdelijke Fal-links voor je media (24 uur). Opdracht ${payload.jobId}.`;
+ }
  if(operation==='finance-policy'){
   const row=await db.prepare('SELECT * FROM rig_finance_policy WHERE id=1').first();if(!row||row.version!==payload.expectedVersion)throw Error('Policy changed');
   const labels=['Wisselkoers EUR per USD','Reserve btw','Reserve betaling','Reserve mislukkingen','Voorbereiding','Minimummarge','Daglimiet Fal','Minimumprijs standaard','Minimumprijs Pro'];
@@ -104,8 +113,9 @@ export async function prepareOwnerMutation(db,{ownerId,operation,payload,verific
   WHERE c.id=? AND c.owner_id=? AND c.operation=? AND c.payload_hash=? AND c.use_token=? AND c.used_at=? AND c.verified_counter=? AND k.counter=? AND k.state='active')`,params:[id,ownerId,operation,digest,token,now,counter,counter]};
  const event=db.prepare(`INSERT INTO rig_owner_security_audit(id,owner_id,event,operation,payload_hash,credential_id,candidate_id,created_at)
   SELECT ?,?,'verification-consumed',?,?,?,NULL,? WHERE ${gate.sql}`).bind(crypto.randomUUID(),ownerId,operation,digest,key.credential_id,now,...gate.params);
- return {ok:true,required:true,before:[consume,bump,event],gate,challengeId:id,credentialId:key.credential_id};
+ const prepared={ok:true,required:true,before:[consume,bump,event],gate,operation,payloadHash:digest,challengeId:id,credentialId:key.credential_id};preparedMutations.add(prepared);return prepared;
 }
+export function isPreparedOwnerMutation(value,{operation,payloadHash}={}){return preparedMutations.has(value)&&value.operation===operation&&value.payloadHash===payloadHash;}
 
 export async function handleOwnerSecurity(req,env,{userId,now=Date.now()}={}){
  if(!USER.test(env?.RIG_PRODUCTION_OWNER_USER_ID||'')||userId!==env.RIG_PRODUCTION_OWNER_USER_ID)return json({error:'Geen toegang.'},403);
@@ -157,7 +167,7 @@ export async function handleOwnerSecurity(req,env,{userId,now=Date.now()}={}){
    const count=await db.prepare("SELECT COUNT(*) n FROM rig_owner_security_challenges_v2 WHERE owner_id=? AND operation<>'registration' AND expires_at>? AND used_at IS NULL AND attempted_at IS NULL").bind(userId,now).first();if(count.n>=5)return json({error:'Er staan al bevestigingen klaar. Wacht even en probeer opnieuw.'},429);
    const publicKey=await generateAuthenticationOptions({rpID:OWNER_RP_ID,timeout:120000,userVerification:'required',allowCredentials:keys.map(row=>({id:row.credential_id,transports:JSON.parse(row.transports_json)}))}),id=crypto.randomUUID(),expiresAt=now+120000;
    await db.prepare('INSERT INTO rig_owner_security_challenges_v2(id,owner_id,operation,challenge,payload_hash,payload_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)').bind(id,userId,data.operation,publicKey.challenge,digest,payload,now,expiresAt).run();
-   return json({required:true,challengeId:id,publicKey,expiresAt,summary},201);
+   return json({required:true,challengeId:id,publicKey,expiresAt,summary,...(data.operation===WORKFLOW_CLIENT_APPROVAL_OPERATION?{previewPath:`/api/generations/${data.payload.jobId}/client/output`}:{})},201);
   }
   return json({error:'Niet gevonden.'},404);
  }catch{return json({error:'De beveiligingscontrole is tijdelijk niet beschikbaar.'},503);}

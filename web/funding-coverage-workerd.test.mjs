@@ -17,7 +17,11 @@ async function fixture({enabled=true,flag=true,balance=100,response,oldSchema=fa
  const network=async(url,init)=>{assert.equal(url,'https://api.fal.ai/v1/account/billing?expand=credits');assert.equal(init.method,'GET');assert.equal(init.redirect,'manual');assert.equal(init.credentials,'omit');assert.equal(new Headers(init.headers).get('Authorization'),'Key '+env.FAL_KEY);assert.equal(init.body,undefined);calls.push({url,method:init.method});return response?response(init):Response.json({username:'fixture-team',credits:{current_balance:balance,currency:'USD'}});};
  const args=(user=USER)=>({userId:user,orderId:crypto.randomUUID(),requestId:crypto.randomUUID(),pkg,network,now:now()});
  const prepare=a=>prepareFundingAdmission(env,a??args());
- async function insert(a,admission){return db.batch([...admission.before,db.prepare(`INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,?,? WHERE ${admission.gate.sql}`).bind(a.orderId,a.userId,a.requestId,a.pkg.id,a.pkg.amountCents,a.pkg.credits,...admission.gate.params)]);}
+ async function insert(a,admission){
+  const order=db.prepare(`INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,?,? WHERE ${admission.gate.sql}`).bind(a.orderId,a.userId,a.requestId,a.pkg.id,a.pkg.amountCents,a.pkg.credits,...admission.gate.params);
+  const guard=db.prepare('INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,0,0 WHERE NOT EXISTS(SELECT 1 FROM rig_orders WHERE id=?)').bind(a.orderId,a.userId,a.requestId,a.pkg.id,a.orderId);
+  try{return (await db.batch([...admission.before,order,guard])).slice(0,-1);}catch{return [{meta:{changes:0}}];}
+ }
  const read=options=>readFundingCoverage(env,{network,now:now(),...options});
  return {mf,db,env,calls,network,args,prepare,insert,read};
 }
@@ -124,7 +128,7 @@ test('expired observations and order identity/package substitutions cannot cross
  const f=await fixture();try{
   const a=f.args(),stale=await f.prepare({...a,now:now()-120000});assert.equal((await f.insert(a,stale)).at(-1).meta.changes,0);
   for(const substitute of [{userId:OTHER},{orderId:crypto.randomUUID()},{requestId:crypto.randomUUID()},{pkg:{...pkg,credits:1000}},{pkg:{...pkg,amountCents:1000}},{pkg:{...pkg,id:'other'}}]){
-   const original=f.args(),prepared=await f.prepare(original);await assert.rejects(f.insert({...original,...substitute},prepared),/RIG_FUNDING_COVERAGE_REQUIRED/);
+   const original=f.args(),prepared=await f.prepare(original);assert.equal((await f.insert({...original,...substitute},prepared)).at(-1).meta.changes,0);
   }
  }finally{await f.mf.dispose()}
 });

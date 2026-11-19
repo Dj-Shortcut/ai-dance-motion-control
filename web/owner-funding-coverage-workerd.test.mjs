@@ -8,6 +8,8 @@ import {createProductionGenerationContext} from './production-generation-context
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 import {prepareFundingAdmission,prepareOwnerFundingAdmission,readFundingCoverage} from './funding-coverage.mjs';
 import {createProductionWorkflowStores,workflowPlanHash,workflowInitialSourceHash} from './production-workflow-stores.mjs';
+import {workflowClientApprovalPayload} from './workflow-client-contract.mjs';
+import {prepareOwnerMutation} from './owner-security.mjs';
 const OWNER='u-12345678-1234-4123-8123-123456789abc',CUSTOMER='u-22345678-1234-4123-8123-123456789abc';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
 async function fixture({migration=true,enabled=true,balance=9,customerCents=500,response,oldSchema=false}={}){
@@ -64,7 +66,8 @@ test('actual owner begin and workflow stages retain the full confirmed plan thro
   assert.equal((await workflow.authorizeStep({...identity,stepId:'base',sourceHash:hash('d'),inputHash:hash('e'),requestHash:hash('f')})).state,'awaiting_client_processing');
   await f.db.prepare("UPDATE rig_generation_workflow_client_processing SET state='ready_to_advance',output_key='fixture-output',output_sha256=?,output_size=100,output_metadata_json='{}',uploaded_at=? WHERE job_id=?").bind(hash('e'),Date.now(),job.id).run();await held('client output ready still reserves the whole plan');
   await f.db.prepare("UPDATE rig_generation_workflow_client_processing SET state='advanced',advance_key='fixture-explicit-advance',advanced_at=? WHERE job_id=?").bind(Date.now(),job.id).run();
-  const base=await workflow.authorizeStep({...identity,stepId:'base',sourceHash:hash('d'),inputHash:hash('e'),requestHash:hash('f')});assert.equal(base.authorized,true);await held('base authorized');
+  const state=await workflow.get(identity),approvalPayload=workflowClientApprovalPayload({jobId:job.id,plan,steps:state.steps,outputHash:hash('e')}),outputProof=await verificationFor(f.db,OWNER,'owner-workflow-advance',approvalPayload,Date.now(),{env:f.env}),approval=await prepareOwnerMutation(f.db,{ownerId:OWNER,operation:'owner-workflow-advance',payload:approvalPayload,verification:outputProof});
+  const base=await workflow.authorizeStep({...identity,stepId:'base',sourceHash:hash('d'),inputHash:hash('e'),requestHash:hash('f'),approval,clientAdvance:{stageId:'compose',idempotencyKey:'fixture-explicit-advance',outputHash:hash('e')}});assert.equal(base.authorized,true);await held('base authorized');
   await workflow.markSubmitted({...identity,stepId:'base',dispatchToken:base.dispatchToken,requestId:'fixture-base'});await held('base queued');
   const baseLease=await workflow.claimPoll({...identity,stepId:'base'});await workflow.markCompleted({...identity,stepId:'base',requestId:'fixture-base',token:baseLease.token,resultKey:`rig-workflow-results/${job.id}/base.mp4`,outputHash:hash('f'),outputMetadata:{durationSeconds:5}});await held('all steps completed before financial settlement');
   await workflow.finalize(identity);await held('a late parent and owner financial completion starts a new conservative window');

@@ -51,6 +51,8 @@ async function normalizeImage(images,bytes,signal){
 }
 function videoMime(b){if(b.length>=12&&String.fromCharCode(...b.slice(4,8))==='ftyp')return 'video/mp4';if(b[0]===0x1a&&b[1]===0x45&&b[2]===0xdf&&b[3]===0xa3)return 'video/webm';throw Error('unsupported video')}
 function validMeta(m,id,owner){return m&&m.id===id&&m.ownerId===owner&&['image','video'].includes(m.kind)&&m.mime===(m.kind==='video'?'video/mp4':'image/jpeg')&&SHA.test(m.sha256??'')&&Number.isSafeInteger(m.size)&&m.size>=16&&m.size<=MAX&&Number.isSafeInteger(m.width)&&m.width>=340&&m.width<=1280&&Number.isSafeInteger(m.height)&&Number.isSafeInteger(m.expiresAt)&&m.height>=340&&m.height<=1280&&(m.kind!=='video'||Number.isFinite(m.durationSeconds)&&m.durationSeconds>=3&&m.durationSeconds<=30&&(m.fps===undefined||Number.isFinite(m.fps)&&m.fps>=20&&m.fps<=60))}
+function providerRange(value,size){if(value===null)return null;const m=/^bytes=(\d+)-(\d+)$/.exec(value);if(!m)return false;const start=Number(m[1]),end=Number(m[2]);return Number.isSafeInteger(start)&&Number.isSafeInteger(end)&&start<size&&end>=start&&end<size?{start,end}:false}
+function storedHeaders(m,length,range){return {'Content-Type':m.mime,'Content-Length':String(length),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Accept-Ranges':'bytes','X-Rig-Asset-Kind':m.kind,'X-Rig-Sha256':m.sha256,'X-Rig-Expires-At':String(m.expiresAt),'X-Rig-Width':String(m.width),'X-Rig-Height':String(m.height),...(range?{'Content-Range':`bytes ${range.start}-${range.end}/${m.size}`} : {}),...(m.kind==='video'?{'X-Rig-Duration-Seconds':String(m.durationSeconds),...(m.fps!==undefined?{'X-Rig-Fps':String(m.fps)}:{})}:{})}}
 async function readCopyRequest(req,signal){
  if(!/^application\/json(?:\s*;|\s*$)/i.test(req.headers.get('content-type')||'')||!req.body)return null;
  const length=req.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>1024))return null;
@@ -74,6 +76,24 @@ export function createCloudMediaService({secret,bucket,images,video,enabled=fals
   const diagnostic=diagnosticEnabled===true&&diagnosticOwnerRequest;
   const summary=summaryEnabled===true&&diagnosticOwnerRequest;
   const u=new URL(req.url),get=u.pathname.match(/^\/v1\/assets\/([0-9a-f-]{36})$/i);
+  // Provider capabilities supply signed immutable metadata. This private mode
+  // uses R2 HEAD/range reads and leaves ordinary asset GET integrity checks intact.
+  if(get&&!u.search&&req.headers.get('x-rig-provider-input')!==null){
+   if(req.headers.get('x-rig-provider-input')!=='1'||!['GET','HEAD'].includes(req.method))return json(404,{error:'Niet gevonden.'});
+   const id=get[1],expectedKind=req.headers.get('x-rig-expected-kind'),expectedSha=req.headers.get('x-rig-expected-sha256'),sizeText=req.headers.get('x-rig-expected-size');
+   if(!UUID.test(id)||!['image','video'].includes(expectedKind)||!SHA.test(expectedSha||'')||!/^\d+$/.test(sizeText||''))return json(404,{error:'Niet gevonden.'});
+   const expectedSize=Number(sizeText),range=providerRange(req.headers.get('range'),expectedSize);if(!Number.isSafeInteger(expectedSize)||expectedSize<16||expectedSize>MAX||range===false)return json(404,{error:'Niet gevonden.'});
+   const key=`rig-inputs/${owner}/${id}`;
+   try{
+    const signal=AbortSignal.timeout(30000),object=await raceDeadline(req.method==='HEAD'?bucket.head(key):bucket.get(key,range?{range:{offset:range.start,length:range.end-range.start+1}}:undefined),signal);
+    if(!object)return json(404,{error:'Niet gevonden.'});
+    const metadata=JSON.parse(object.customMetadata?.manifest??'null');
+    if(!validMeta(metadata,id,owner)||metadata.expiresAt<=Date.now()){if(metadata?.expiresAt<=Date.now())try{await raceDeadline(bucket.delete(key),AbortSignal.timeout(5000))}catch{}return json(404,{error:'Niet gevonden.'})}
+    if(metadata.kind!==expectedKind||metadata.sha256!==expectedSha||metadata.size!==expectedSize||object.size!==expectedSize||req.method==='GET'&&!object.body)throw Error('Provider metadata mismatch');
+    const length=range?range.end-range.start+1:expectedSize;
+    return new Response(req.method==='HEAD'?null:object.body,{status:range?206:200,headers:storedHeaders(metadata,length,range)});
+   }catch{return json(503,{error:'Bestand niet beschikbaar.'})}
+  }
   if(req.method==='GET'&&get&&!u.search){const id=get[1];if(!UUID.test(id))return json(400,{error:'Ongeldig bestand.'});try{const getSignal=AbortSignal.timeout(30000);const obj=await raceDeadline(bucket.get(`rig-inputs/${owner}/${id}`),getSignal);if(!obj)return json(404,{error:'Niet gevonden.'});const metadata=JSON.parse(obj.customMetadata?.manifest??'null');if(!validMeta(metadata,id,owner))throw Error('bad metadata');if(metadata.expiresAt<=Date.now()){try{await raceDeadline(bucket.delete(`rig-inputs/${owner}/${id}`),AbortSignal.timeout(5000))}catch{}return json(404,{error:'Bestand verlopen.'})}const bytes=await readBounded(obj.body,getSignal);if(bytes.length!==metadata.size||await hash(bytes)!==metadata.sha256)throw Error('bad object');return new Response(bytes,{headers:{'Content-Type':metadata.mime,'Content-Length':String(metadata.size),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Rig-Asset-Kind':metadata.kind,'X-Rig-Sha256':metadata.sha256,'X-Rig-Expires-At':String(metadata.expiresAt),'X-Rig-Width':String(metadata.width),'X-Rig-Height':String(metadata.height),...(metadata.kind==='video'?{'X-Rig-Duration-Seconds':String(metadata.durationSeconds),...(metadata.fps!==undefined?{'X-Rig-Fps':String(metadata.fps)}:{})}:{})}})}catch{return json(503,{error:'Bestand niet beschikbaar.'})}}
   // Only the trusted private backend can request this copy, after it has
   // authorized and reserved a specific job. Never put identity metadata on it.

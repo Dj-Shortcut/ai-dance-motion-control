@@ -4,6 +4,8 @@ import {isMollieCheckoutURL} from './mollie-checkout-url.mjs';
 export function closedPaymentWithFetch(fetch, PreDispatchFailure, options = {}) {
 const allowLive = options.allowLive === true;
 if(options.orderAdmission!==undefined&&typeof options.orderAdmission!=='function')throw Error('Invalid order admission');
+if(options.orderEvidence!==undefined&&typeof options.orderEvidence!=='function')throw Error('Invalid order evidence');
+if(options.webhookAdmission!==undefined&&typeof options.webhookAdmission!=='function')throw Error('Invalid webhook admission');
 // RIG Mollie foundation; import handlePaymentRoute from a Worker. Never run outside
 // an ingress that STRIPS client-supplied identity headers and adds trusted ones.
 const response = (status, data) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -90,20 +92,36 @@ async function start(req, env, cfg, user) {
   const frozen = await env.DB.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(user).first();
   if (frozen) return response(403, { error: 'Account requires review' });
   const id = crypto.randomUUID();
-  let admission;
-  if(options.orderAdmission){
+  const requirements=[];
+  if(options.orderAdmission||options.orderEvidence){
     const existing=await priorIntent(env,user,data.requestId);
     if(existing)return response(409,{error:'Er is al een betaling gestart of deze aanvraag is al gebruikt. Controleer eerst de status.'});
     try{
-      admission=await options.orderAdmission({env,userId:user,orderId:id,requestId:data.requestId,pkg});
-      if(!admission||!Array.isArray(admission.before)||admission.before.length>8||admission.before.some(statement=>typeof statement?.run!=='function')||typeof admission.gate?.sql!=='string'||admission.gate.sql.length<1||admission.gate.sql.length>16384||!Array.isArray(admission.gate.params)||admission.gate.params.length>128)throw Error('Invalid order admission');
+      for(const prepare of [options.orderAdmission,options.orderEvidence])if(prepare){
+       const requirement=await prepare({env,userId:user,orderId:id,requestId:data.requestId,pkg});
+       if(!requirement||!Array.isArray(requirement.before)||requirement.before.length>8||requirement.before.some(statement=>typeof statement?.run!=='function')||typeof requirement.gate?.sql!=='string'||requirement.gate.sql.length<1||requirement.gate.sql.length>16384||!Array.isArray(requirement.gate.params)||requirement.gate.params.length>128)throw Error('Invalid order requirement');
+       requirements.push(requirement);
+      }
+      if(requirements.reduce((count,item)=>count+item.before.length,0)>12)throw Error('Too many order requirements');
     }catch{return fundingRefused(env,user,data.requestId);}
   }
   const insertSQL="INSERT OR IGNORE INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM rig_frozen_accounts WHERE user_id=?) AND NOT EXISTS (SELECT 1 FROM rig_orders WHERE user_id=? AND state IN ('creating','open','unknown','credit_pending_review')) AND NOT EXISTS (SELECT 1 FROM rig_payment_cancelled_intents WHERE user_id=? AND request_id=?)";
-  const statement=env.DB.prepare(insertSQL+(admission?' AND ('+admission.gate.sql+')':'')).bind(id,user,data.requestId,pkg.id,pkg.amountCents,pkg.credits,user,user,user,data.requestId,...(admission?.gate.params??[]));
+  const gates=requirements.map(item=>'('+item.gate.sql+')').join(' AND '),gateParams=requirements.flatMap(item=>item.gate.params);
+  const statement=env.DB.prepare(insertSQL+(gates?' AND '+gates:'')).bind(id,user,data.requestId,pkg.id,pkg.amountCents,pkg.credits,user,user,user,data.requestId,...gateParams);
   let insert;
-  if(admission){
-    try{const results=await env.DB.batch([...admission.before,statement]);insert=results.at(-1);}catch{return fundingRefused(env,user,data.requestId);}
+  if(requirements.length){
+    // Requirement writes precede the order because funding and evidence gates
+    // inspect them. If the order SELECT admits no row, this final impossible
+    // order violates the positive-money checks and rolls the whole D1 batch
+    // back. No rejected attempt can retain a snapshot, admission or evidence.
+    const rollbackGuard=env.DB.prepare(`INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits)
+      SELECT ?,?,?,?,0,0 WHERE NOT EXISTS(SELECT 1 FROM rig_orders WHERE id=?)`).bind(id,user,data.requestId,pkg.id,id);
+    try{const results=await env.DB.batch([...requirements.flatMap(item=>item.before),statement,rollbackGuard]);insert=results.at(-2);}
+    catch{
+      const existing=await priorIntent(env,user,data.requestId);
+      if(existing)return response(409,{error:'Er is al een betaling gestart of deze aanvraag is al gebruikt. Controleer eerst de status.'});
+      return fundingRefused(env,user,data.requestId);
+    }
     if(insert?.meta?.changes!==1){
       const existing=await priorIntent(env,user,data.requestId);
       if(!existing)return fundingRefused(env,user,data.requestId);
@@ -153,6 +171,10 @@ async function webhook(req, env) {
   let raw; try { raw=await boundedText(req,2048); } catch { return response(413, { error: 'Too large' }); }
   const id = new URLSearchParams(raw).get('id');
   if (!paymentId(id)) return response(400, { error: 'Invalid payment' });
+  if(options.webhookAdmission){
+    const denied=await options.webhookAdmission(id);
+    if(denied!==null){if(!(denied instanceof Response))throw Error('Invalid webhook admission');return denied;}
+  }
   const p = await mollie(`payments/${id}`, env.MOLLIE_API_KEY);
   if (p.id !== id || p.mode !== env.RIG_MOLLIE_MODE || !validId(p.metadata?.order_id)) return response(400, { error: 'Unknown payment' });
   const order = await env.DB.prepare('SELECT * FROM rig_orders WHERE id=?').bind(p.metadata.order_id).first();

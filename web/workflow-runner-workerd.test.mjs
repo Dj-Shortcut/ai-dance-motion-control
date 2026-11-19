@@ -60,7 +60,7 @@ async function fixture({owner=true,flag='yes',recastFlag='yes'}={}){
  const poll=()=>runner.poll({method:'GET',...identity});
  const stage=async()=>{await start();answers.set('provider-source-cleanup',{state:'completed',requestId:'provider-source-cleanup',result:{fixture:true}});return poll();};
  const upload=()=>clients.uploadOutput({...identity,stageId:'compose',body:clips.output.bytes,sha256:clips.output.meta.sha256});
- const advance=()=>runner.advance({method:'POST',...identity,stageId:'compose',idempotencyKey:'explicit-owner-advance',outputHash:clips.output.meta.sha256});
+ let advanceVerification;const advance=async()=>{const manifest=await clients.get({...identity,stageId:'compose'});advanceVerification??=verificationFor(db,USER,'owner-workflow-advance',manifest.approval,Date.now(),{env});return runner.advance({method:'POST',...identity,stageId:'compose',idempotencyKey:'explicit-owner-advance',outputHash:clips.output.meta.sha256,verification:await advanceVerification});};
  return {runner,adapters,prepared,submitted,polled,stored,answers,start,poll,stage,advance,clients,upload,objects,reads,writes,mf,db,env,context,parents,workflow,plan,quote,job,identity,balance,usd,totalRetail};
  }catch(error){await mf.dispose();throw error;}
 }
@@ -129,6 +129,7 @@ test('upload and GET remain unpaid; only explicit exact-stage POST uses the comp
   await f.stage();await f.upload();await f.poll();assert.equal(f.submitted.length,1);
   const args={...f.identity,stageId:'compose',idempotencyKey:'explicit-owner-advance',outputHash:clips.output.meta.sha256};
   await assert.rejects(f.runner.advance({method:'GET',...args}),{code:'workflow_explicit_post_required'});await assert.rejects(f.runner.advance({method:'POST',...args,stageId:'other'}),{code:'workflow_client_stage_changed'});
+  await assert.rejects(f.runner.advance({method:'POST',...args}),error=>error.response?.status===428);assert.equal(f.submitted.length,1);assert.equal((await f.workflow.get(f.identity)).steps[1].dispatch_token,null);
   const concurrent=await Promise.all([f.advance(),f.advance()]);assert.ok(concurrent.every(result=>['unknown','queued'].includes(result.state)));assert.equal(f.submitted.length,2);const sent=f.submitted[1];assert.equal(sent.model,RECAST_MODEL);assert.equal(sent.payload.resolution,'1080P');assert.equal(sent.payload.prompt,f.quote.input.prompt);assert.equal(sent.inputHash,clips.output.meta.sha256);assert.equal(sent.payload.video_url,'https://v3b.fal.media/files/b/fixture/composed.mp4');
   const state=await f.workflow.get(f.identity);assert.equal(state.steps[1].source_sha256,clips.clean.meta.sha256);assert.equal(state.steps[1].input_sha256,clips.output.meta.sha256);await f.advance();assert.equal(f.submitted.length,2);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,1);
  }finally{await f.mf.dispose();}
