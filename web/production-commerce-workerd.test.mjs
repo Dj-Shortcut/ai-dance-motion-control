@@ -44,15 +44,27 @@ test('native Site → production relay → Mollie credits are owned, verified an
   // A checkout return alone has not funded the wallet.
   let balance=await(await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('alice',alice.userId)})).json();assert.equal(balance.balance,0);
   const paymentId=state.payments[0].id;await f.privateService.fetch('https://fixture.invalid/fixture/paid?id='+paymentId);
+  // A real callback may beat persistence of the provider id. The local creating
+  // order admits that bounded race and the verified webhook binds the id.
+  await f.db.prepare("UPDATE rig_orders SET payment_id=NULL,state='creating' WHERE payment_id=?").bind(paymentId).run();
   const webhook=()=>f.relay.fetch(BRIDGE+'/api/payments/webhook',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'192.0.2.30','oai-authenticated-user-id':'forged',authorization:'forged'},body:new URLSearchParams({id:paymentId})});
   const callbacks=await Promise.all([webhook(),webhook(),webhook()]);assert.ok(callbacks.every(r=>r.status===200));
   response=await f.site.fetch(SITE+`/api/payments/orders/${requestId}/reconcile`,{method:'POST',headers:headers('alice',alice.userId),body:'{}'});assert.equal(response.status,200);assert.equal((await response.json()).state,'paid');
   balance=await(await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('alice',alice.userId)})).json();assert.equal(balance.balance,500);assert.equal(balance.purchasesEnabled,true);assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM rig_ledger WHERE event_id LIKE 'credit:%'").first()).n,1);
   assert.equal((await(await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('bob',bob.userId)})).json()).balance,0);
   const testDb=await f.mf.getD1Database('DB','private');assert.equal((await testDb.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name='rig_ledger'").first()).n,0);
-  const reads=(await stats(f)).providerReads;
-  await f.db.prepare("UPDATE rig_rate_limits SET requests=120,window_start=? WHERE bucket='webhook:global'").bind(Math.floor(Date.now()/1000)).run();
-  const limited=await webhook();assert.equal(limited.status,429);assert.equal(limited.headers.get('retry-after'),'60');assert.equal((await stats(f)).providerReads,reads);
+  let reads=(await stats(f)).providerReads;
+  const unknown=await f.relay.fetch(BRIDGE+'/api/payments/webhook',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'192.0.2.31'},body:'id=tr_Unknown000001'});
+  assert.equal(unknown.status,400);assert.equal((await stats(f)).providerReads,reads,'unrelated ids are rejected locally');
+  await f.db.prepare("INSERT INTO rig_orders(id,user_id,request_id,package_id,amount_cents,credits,state) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','u-99999999-9999-4999-8999-999999999999','pending-race-budget','small',500,500,'creating')").run();
+  const now=Math.floor(Date.now()/1000);
+  await f.db.prepare("INSERT INTO rig_rate_limits(bucket,window_start,requests) VALUES('webhook-race:global',?,12) ON CONFLICT(bucket) DO UPDATE SET window_start=excluded.window_start,requests=excluded.requests").bind(now).run();
+  const raced=await f.relay.fetch(BRIDGE+'/api/payments/webhook',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'192.0.2.32'},body:'id=tr_Unmatched000001'});
+  assert.equal(raced.status,429);assert.equal(raced.headers.get('retry-after'),'60');assert.equal((await stats(f)).providerReads,reads);
+  assert.equal((await webhook()).status,200,'exhausted race traffic cannot consume a correlated payment bucket');
+  reads=(await stats(f)).providerReads;
+  await f.db.prepare("INSERT INTO rig_rate_limits(bucket,window_start,requests) VALUES(?,?,12) ON CONFLICT(bucket) DO UPDATE SET window_start=excluded.window_start,requests=excluded.requests").bind('webhook-payment:'+paymentId,now).run();
+  const limited=await webhook();assert.equal(limited.status,429);assert.equal(limited.headers.get('retry-after'),'60');assert.equal((await stats(f)).providerReads,reads,'per-id replays stop before provider verification');
   // Frequent identity probes use their own bucket, not the purchase limit.
   for(let i=0;i<65;i++)assert.equal((await f.site.fetch(SITE+'/api/session',{headers:headers('alice')})).status,200);
   assert.equal((await f.site.fetch(SITE+'/api/payments/balance',{headers:headers('alice',alice.userId)})).status,200);

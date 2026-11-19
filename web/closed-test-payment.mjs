@@ -3,7 +3,7 @@ import {isMollieCheckoutURL} from './mollie-checkout-url.mjs';
 // Derived test-only version of payment.mjs; adds only proven pre-dispatch failure handling.
 export function closedPaymentWithFetch(fetch, PreDispatchFailure, options = {}) {
 const allowLive = options.allowLive === true;
-if(options.orderAdmission!==undefined&&typeof options.orderAdmission!=='function')throw Error('Invalid order admission');
+if(options.orderAdmission!==undefined&&typeof options.orderAdmission!=='function'||options.webhookAdmission!==undefined&&typeof options.webhookAdmission!=='function')throw Error('Invalid payment admission');
 // RIG Mollie foundation; import handlePaymentRoute from a Worker. Never run outside
 // an ingress that STRIPS client-supplied identity headers and adds trusted ones.
 const response = (status, data) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -153,6 +153,10 @@ async function webhook(req, env) {
   let raw; try { raw=await boundedText(req,2048); } catch { return response(413, { error: 'Too large' }); }
   const id = new URLSearchParams(raw).get('id');
   if (!paymentId(id)) return response(400, { error: 'Invalid payment' });
+  if(options.webhookAdmission){
+    const denied=await options.webhookAdmission(id);
+    if(denied!==null){if(!(denied instanceof Response))throw Error('Invalid webhook admission');return denied;}
+  }
   const p = await mollie(`payments/${id}`, env.MOLLIE_API_KEY);
   if (p.id !== id || p.mode !== env.RIG_MOLLIE_MODE || !validId(p.metadata?.order_id)) return response(400, { error: 'Unknown payment' });
   const order = await env.DB.prepare('SELECT * FROM rig_orders WHERE id=?').bind(p.metadata.order_id).first();
