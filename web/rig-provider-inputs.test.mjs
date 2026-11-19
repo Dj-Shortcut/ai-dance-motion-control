@@ -27,7 +27,7 @@ test('real D1 checks funding, ownership, hashes, status, HEAD and single byte ra
  const mf=new Miniflare({cf:false,workers:[{name:'gateway',modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-01-01',bindings:{RIG_SITES_BRIDGE_ORIGIN:origin,RIG_MEDIA_SECRET:secret,RIG_MODE:'test',RIG_MOLLIE_MODE:'test'},d1Databases:{DB:'gateway'},serviceBindings:{RIG_MEDIA:'media'}},{name:'media',modules:true,script:media,compatibilityDate:'2026-01-01'}]});
  try{
   const db=await mf.getD1Database('DB','gateway');
-  for(const f of ['schema.sql','generation-schema.sql'])for(const s of (await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();
+  for(const f of ['schema.sql','generation-schema.sql','limit-schema.sql'])for(const s of (await readFile(f,'utf8')).replace(/^\s*--.*$/gm,'').split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(s).run();
   await db.prepare("INSERT INTO rig_payment_environment(id,mode) VALUES(1,'test')").run();
   const inp={data:{quality:'edit-standard',imageId:image,videoId:video},refs:[{id:image,kind:'image',sha256:sha},{id:video,kind:'video',sha256:vsha}]};
   const createdAt=Date.now();
