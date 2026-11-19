@@ -119,6 +119,14 @@ export async function readFundingCoverage(env,{network=fetch,now=Date.now(),diag
  try{config=await configuration(env);const reading=await fetchBalance(config,network,now);return summary(config,reading,await exposure(config.db));}
  catch(error){return {enabled:Boolean(config),status:error?.code==='funding_setup'?'setup':'unavailable',reason:error instanceof FundingCoverageError?error.code:'funding_unavailable',fetchedAt:null,expiresAt:null,providerBalanceAsOf:null,availableUsdMicros:null,retailLiabilityCents:null,providerReservedUsdMicros:null,requiredUsdMicros:null,headroomUsdMicros:null,...(config?{policyVersion:config.policy.version,financeVersion:config.finance.version}:{}),...(diagnostics===true&&failureDiagnostics.has(error)?{diagnostic:failureDiagnostics.get(error)}:{})};}
 }
+// A provider-specific store must insert this observation in the same batch as
+// its admission/credit mutation, and recheck rig_funding_valid_snapshots there.
+// Returning an earlier JS balance comparison would permit concurrent oversales.
+export async function preparePurchaseFundingSnapshot(env,{network=fetch,now=Date.now()}={}){
+ const config=await configuration(env),reading=await fetchBalance(config,network,now);
+ const saved=snapshot(config,reading);
+ return {before:[saved.statement],snapshotId:saved.id};
+}
 export async function prepareFundingAdmission(mappedEnv,{userId,orderId,requestId,pkg,network=fetch,now=Date.now()}={}){
  if(!USER.test(userId||'')||!UUID.test(orderId||'')||typeof requestId!=='string'||!/^[A-Za-z0-9_-]{12,80}$/.test(requestId)||!pkg||!/^[a-z0-9_-]{1,40}$/.test(pkg.id||'')||!whole(pkg.amountCents,1,1000000)||!whole(pkg.credits,1,100000000))throw refused('funding_setup','invalid_request');
  const config=await configuration(mappedEnv),reading=await fetchBalance(config,network,now),owed=await exposure(config.db),status=summary(config,reading,owed);

@@ -44,19 +44,45 @@ For Play review, provide reusable reviewer access and clear English instructions
 
 ## Payment decision and activation gates
 
-| Option | Required implementation before submission |
-| --- | --- |
-| Google Play credit purchases — selected | Integrate Play Billing and server-side purchase validation/crediting, idempotency, pending purchases, refunds/reversals and price display. Do not credit from an unverified client response. The current Mollie flow does not implement this. |
-| Existing credit while purchases are unavailable | Allow login, balance, quoted price and generation using existing RIG credit. Show an honest unavailability message and no nonfunctional purchase button. Preserve the Android channel across login returns and later navigation; never fall back to Mollie. |
-| EEA alternative billing, if separately chosen later | Enrollment, applicable agreements, regional eligibility, alternative-billing APIs and transaction reporting are required. An ordinary Mollie button is insufficient. |
+The selected channel is **Google Play consumable credit purchases on Android**;
+the ordinary website keeps Mollie. Existing RIG credit remains usable when Play
+purchases are unavailable. Preserve the Android channel through login returns and
+navigation; never fall back to Mollie or offer an unconfigured purchase sheet.
+Alternative billing enrollment is not part of this implementation.
 
-Google permits consumption-only apps accessing services bought elsewhere. Selling digital credit inside a Play-distributed app normally requires Play Billing unless a permitted program applies. These rules also apply to browser-backed apps. Verify the final navigation rather than relying on the starting URL or a hidden button. [Payments guidance](https://support.google.com/googleplay/android-developer/answer/10281818?hl=en).
+Google's payments rules also apply to browser-backed apps. Digital purchases
+normally require Play Billing unless an applicable program permits otherwise.
+[Payments guidance](https://support.google.com/googleplay/android-developer/answer/10281818?hl=en),
+[TWA billing integration](https://developer.chrome.com/docs/android/trusted-web-activity/receive-payments-play-billing).
 
-For the EEA program, the current official page requires a registered business and reporting authorized alternative-billing transactions within 24 hours. Google fees remain payable in addition to the payment processor's charges. From 30 June 2026, its table lists **10% for the first US$1M annual earnings**; other tiers/conditions differ. Do not reuse older “standard fee minus 3/4 percentage points” estimates as a current universal rate. Recheck enrollment-specific terms and margin before enabling sales. [EEA alternative billing](https://support.google.com/googleplay/android-developer/answer/12348241?hl=en).
+Implemented source includes Digital Goods/Payment Request, mandatory native account
+binding, authenticated server verification, atomic funded fulfillment, encrypted
+retry material, backend-only consumption, pending/cancelled recovery, authenticated
+RTDN, Voided Purchases and refund/reversal handling. Owner-only Google financial
+evidence is distinct from Mollie invoices and from actual bank settlement. The
+[commerce contract and configuration](google-play-billing-foundation.md) records
+the exact routes, defaults, credentials and private license-test harness.
 
-The existing RIG ledger, price confirmation, generation idempotency and spending protections must remain authoritative. No purchase or paid generation is established by an Android build or by this checklist.
+**Customer purchases remain off by default.** Fixture/native/D1 tests are not
+proof of an actual purchase or a published store app. Activation still requires:
 
-The prepared `/android/` client uses the Digital Goods and Payment Request APIs only after authenticated server configuration enables them and the real Play service is available. It reads Google's localized prices and requires server-confirmed credit before consuming a purchase. **Native preparation tested:** the local, documented two-class extension to Android Browser Helper billing 1.2.0 requires the server binding and forwards it through the actual Google SDK account-ID setter. Eight native tests passed, including request capture and rejection before checkout. The upstream transport drops this field. Real Play receipt/account association remains a release gate; synthetic/native unit tests do not prove it. **Purchases remain disabled** pending the Google fulfillment, funding, refunds and accounting composition. [TWA billing integration](https://developer.chrome.com/docs/android/trusted-web-activity/receive-payments-play-billing).
+- [ ] Console registration/approval and the exact `dev.andyarijs.rig` package,
+  consumable catalog and approved countries. Initial planning is BE/NL, EUR.
+- [ ] Owner-approved actual Google prices for the three wallet values (€5/€10/€25).
+  Synthetic 899/1799/4499-cent fixture prices are not recommendations. Actual
+  after-tax/fee Google revenue must cover wallet face value before credit.
+- [ ] Scoped Publisher credentials, token keyring/HMAC, authenticated Pub/Sub and
+  production schema/bindings. Enable processing separately from new sales;
+  stopping sales must keep recovery running.
+- [ ] Play-distributed certificate/domain association and real device/browser
+  billing availability. The local ABH two-class extension passes the mandatory
+  account ID to Google's SDK; verify that binding in a real Play receipt.
+- [ ] Actual license-tester purchase, pending/cancellation, duplicate confirmation,
+  consumed-purchase recovery and refund in the isolated test DB/harness. TEST
+  receipts must never credit the live wallet. Missing Orders remains review.
+- [ ] First live purchase and settlement reconciliation, with separately recorded
+  approval for that real payment. Google revenue exports are not complete
+  Accountable/Peppol bookkeeping or proof of payout.
 
 ## Account deletion and AI reports
 

@@ -38,6 +38,8 @@ test('Android boot keeps native sign-in/logout in Android and never loads the Mo
   for(const path of ['/api/payments/create','/api/payments/packages','/api/payments/orders/old/reconcile'])await assert.rejects(async()=>f.w.rigRequest(path,{method:'POST'}),/Google Play/);
   assert.equal(f.calls.some(path=>path==='/api/payments/create'),false);
   await f.w.rigRequest('/api/payments/google-play/config');assert.equal(f.calls.at(-1),'/api/payments/google-play/config');
+  for(const path of ['/api/payments/google-play/intents','/api/payments/google-play/status','/api/payments/google-play/status?intentId=11111111-1111-4111-8111-111111111111']){await f.w.rigRequest(path);assert.equal(f.calls.at(-1),path);}
+  for(const path of ['/api/payments/google-play/status?intentId=forged','/api/payments/google-play/status?intentId=11111111-1111-4111-8111-111111111111&purchaseToken=secret','/api/payments/google-play/status?requestId=11111111-1111-4111-8111-111111111111'])await assert.rejects(async()=>f.w.rigRequest(path),/Google Play/);
  }finally{f.close();}
 });
 

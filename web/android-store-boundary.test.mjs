@@ -9,20 +9,22 @@ const identity={'oai-authenticated-user-id':'native-platform-subject','x-rig-exp
 function fixture(){
  const forwarded=[];
  const app=createRigSitesApp({uiFiles:{},fetchImpl:async request=>{
-  forwarded.push(new URL(request.url).pathname);
-  assert.equal(new URL(request.url).pathname,'/api/session','a prepared store endpoint must never forward a purchase or payment');
+  const path=new URL(request.url).pathname;forwarded.push(path);
+  if(path==='/api/payments/google-play/config')return Response.json({enabled:false});
+  if(path==='/api/payments/google-play/confirm')return Response.json({code:'google_play_not_configured'},{status:503});
+  assert.equal(path,'/api/session','only exact signed Google paths may reach the private authority');
   return Response.json({userId:user,currency:'EUR',mode:'live',balanceCents:500,purchasesEnabled:true});
  }});
  return {app,forwarded};
 }
 
-test('unconfigured Play cannot be activated by flags, client tokens or existing Mollie readiness',async()=>{
+test('Play readiness and fulfillment use the private authority, never client flags or Mollie readiness',async()=>{
  const {app,forwarded}=fixture();
  const configuration=await app.fetch(new Request(origin+'/api/payments/google-play/config',{headers:identity}),{...env,RIG_GOOGLE_PLAY_ENABLED:'yes'});
- assert.equal(configuration.status,200);assert.deepEqual(await configuration.json(),{enabled:false});assert.equal(configuration.headers.get('cache-control'),'no-store');
+ assert.equal(configuration.status,200);assert.deepEqual(await configuration.json(),{enabled:false});assert.equal(configuration.headers.get('cache-control'),'private, no-store');
  const confirmation=await app.fetch(new Request(origin+'/api/payments/google-play/confirm',{method:'POST',headers:{...identity,origin,'content-type':'application/json'},body:JSON.stringify({productId:'rig_credit_5',purchaseToken:'unverified-client-receipt',creditsCents:500})}),env);
  assert.equal(confirmation.status,503);assert.equal((await confirmation.json()).code,'google_play_not_configured');
- assert.deepEqual(forwarded,['/api/session','/api/session']);
+ assert.deepEqual(forwarded,['/api/session','/api/payments/google-play/config','/api/session','/api/payments/google-play/confirm']);
 });
 
 test('prepared Play endpoints keep native account, CSRF and query guards',async()=>{

@@ -11,6 +11,7 @@ const encode=value=>new TextEncoder().encode(value);
 const failure=code=>Object.assign(Error('Google Play-aankoop is nog niet beschikbaar.'),{code});
 const tokenOk=value=>typeof value==='string'&&value.length>=8&&value.length<=4096&&!/[^\x21-\x7e]/.test(value);
 const validTime=value=>typeof value==='string'&&value.length<=40&&/^\d{4}-\d{2}-\d{2}T/.test(value)&&Number.isFinite(Date.parse(value));
+const validOrder=value=>value===undefined||typeof value==='string'&&value.length>=1&&value.length<=512&&!/[\u0000-\u001f\u007f]/.test(value);
 async function sha256(value){return hex(new Uint8Array(await crypto.subtle.digest('SHA-256',encode(value))));}
 
 // Server configuration assigns EUR wallet cents; Google supplies the actual
@@ -44,12 +45,20 @@ async function boundedJson(response){
 // Only objects actually produced by a successful server verification may reach
 // the store. JSON copies, client fields and caller-forged receipts are refused.
 export function receiptForGooglePlayProof(proof){
- const data=object(proof)&&proofData.get(proof);if(!data)throw failure('play_proof');
+ const data=object(proof)&&proofData.get(proof);if(!data?.receipt)throw failure('play_proof');
  return data.receipt;
 }
 
+export function purchaseForGooglePlayProof(proof){
+ const data=object(proof)&&proofData.get(proof);if(!data?.purchase)throw failure('play_proof');return data.purchase;
+}
+
+export function notificationPurchaseForGooglePlayProof(proof){
+ const data=object(proof)&&proofData.get(proof);if(!data?.notificationPurchase)throw failure('play_proof');return data.notificationPurchase;
+}
+
 export function createGooglePlayPurchaseVerifier({enabled=false,mode='test',accountKey,siteId,catalog,network,getAccessToken,now=Date.now}={}){
- if(enabled!==true)return Object.freeze({enabled:false,async verify(){throw failure('play_setup')},async accountId(){throw failure('play_setup')},async consume(){throw failure('play_setup')}});
+ if(enabled!==true)return Object.freeze({enabled:false,async verify(){throw failure('play_setup')},async inspect(){throw failure('play_setup')},async inspectOwned(){throw failure('play_setup')},async inspectForNotification(){throw failure('play_setup')},async accountId(){throw failure('play_setup')},async consume(){throw failure('play_setup')}});
  const products=googlePlayCatalog(catalog);
  if(!['test','live'].includes(mode)||typeof network!=='function'||typeof getAccessToken!=='function'||typeof now!=='function')throw failure('play_setup');
  const byId=new Map(products.map(item=>[item.productId,item]));
@@ -62,9 +71,21 @@ export function createGooglePlayPurchaseVerifier({enabled=false,mode='test',acco
   try{return await network('https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'+GOOGLE_PLAY_PACKAGE+path,{method,redirect:'manual',credentials:'omit',headers:{authorization:'Bearer '+access,accept:'application/json'},signal:AbortSignal.timeout(15000)})}
   catch{throw failure('play_provider')}
  }
- async function verify(input){
+ async function inspectForNotification(input){
+  if(!object(input)||!['purchaseToken','productId,purchaseToken'].includes(Object.keys(input).sort().join(','))||input.productId!==undefined&&!byId.has(input.productId)||!tokenOk(input.purchaseToken))throw failure('play_input');
+  const resource=await boundedJson(await request('/purchases/productsv2/tokens/'+encodeURIComponent(input.purchaseToken)));
+  if(resource.kind!=='androidpublisher#productPurchaseV2'||!HEX.test(resource.obfuscatedExternalAccountId??''))throw failure('play_account');
+  const test=Object.hasOwn(resource,'testPurchaseContext');if(mode==='live'&&test||mode==='test'&&(!test||resource.testPurchaseContext?.fopType!=='TEST'))throw failure('play_environment');
+  const items=resource.productLineItem,state=resource.purchaseStateContext?.purchaseState;
+  if(!Array.isArray(items)||items.length!==1||!byId.has(items[0]?.productId)||input.productId!==undefined&&input.productId!==items[0].productId||items[0]?.productOfferDetails?.quantity!==1||Object.hasOwn(items[0].productOfferDetails,'rentOfferDetails')||Object.hasOwn(items[0].productOfferDetails,'preorderOfferDetails')||!['PURCHASED','PENDING','CANCELLED'].includes(state))throw failure('play_product');
+  const verifiedAt=now(),purchasedAt=resource.purchaseCompletionTime===undefined&&state!=='PURCHASED'?null:validTime(resource.purchaseCompletionTime)?Date.parse(resource.purchaseCompletionTime):NaN;
+  if(!Number.isSafeInteger(verifiedAt)||verifiedAt<0||purchasedAt!==null&&(!Number.isSafeInteger(purchasedAt)||purchasedAt<0||purchasedAt>verifiedAt+300000)||!validOrder(resource.orderId))throw failure('play_response');
+  const notificationPurchase=Object.freeze({tokenHash:await sha256(input.purchaseToken),accountId:resource.obfuscatedExternalAccountId,productId:items[0].productId,mode,packageName:GOOGLE_PLAY_PACKAGE,state,purchasedAt,orderId:resource.orderId??null,inspectionId:crypto.randomUUID(),verifiedAt});
+  const proof=Object.freeze({state:'notification_lookup',notificationPurchase});proofData.set(proof,{notificationPurchase,issuer});return proof;
+ }
+ async function inspectWithBinding(input,savedAccountId=null){
   if(!object(input)||Object.keys(input).sort().join(',')!=='productId,purchaseToken,userId'||!USER.test(input.userId||'')||!byId.has(input.productId)||!tokenOk(input.purchaseToken))throw failure('play_input');
-  const {userId,productId,purchaseToken}=input,expected=await accountId(userId);
+  const {userId,productId,purchaseToken}=input,expected=savedAccountId??await accountId(userId);
   const resource=await boundedJson(await request('/purchases/productsv2/tokens/'+encodeURIComponent(purchaseToken)));
   if(resource.kind!=='androidpublisher#productPurchaseV2'||resource.obfuscatedExternalAccountId!==expected)throw failure('play_account');
   const test=Object.hasOwn(resource,'testPurchaseContext');
@@ -75,17 +96,36 @@ export function createGooglePlayPurchaseVerifier({enabled=false,mode='test',acco
   if(offer.quantity!==1||Object.hasOwn(offer,'rentOfferDetails')||Object.hasOwn(offer,'preorderOfferDetails'))throw failure('play_product');
   const state=resource.purchaseStateContext?.purchaseState;
   if(!['PURCHASED','PENDING','CANCELLED'].includes(state))throw failure('play_state');
-  if(state!=='PURCHASED')return Object.freeze({state:state==='PENDING'?'pending':'cancelled'});
-  if(offer.refundableQuantity!==1||!['CONSUMPTION_STATE_YET_TO_BE_CONSUMED','CONSUMPTION_STATE_CONSUMED'].includes(offer.consumptionState))throw failure('play_product');
-  if(!validTime(resource.purchaseCompletionTime)||Date.parse(resource.purchaseCompletionTime)>now()+300000||!['ACKNOWLEDGEMENT_STATE_PENDING','ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED'].includes(resource.acknowledgementState)||resource.orderId!==undefined&&(typeof resource.orderId!=='string'||resource.orderId.length<1||resource.orderId.length>512||/[\u0000-\u001f\u007f]/.test(resource.orderId)))throw failure('play_response');
-  const tokenHash=await sha256(purchaseToken),creditsCents=byId.get(productId).creditsCents;
-  const receipt=Object.freeze({tokenHash,userId,productId,creditsCents,mode,packageName:GOOGLE_PLAY_PACKAGE,accountId:expected,purchasedAt:Date.parse(resource.purchaseCompletionTime),orderId:resource.orderId??null,consumed:offer.consumptionState==='CONSUMPTION_STATE_CONSUMED'});
-  const proof=Object.freeze({state:'verified',receipt});proofData.set(proof,{receipt,purchaseToken,issuer});return proof;
+  const consumed=offer.consumptionState===undefined&&state!=='PURCHASED'?null:offer.consumptionState==='CONSUMPTION_STATE_CONSUMED'?true:offer.consumptionState==='CONSUMPTION_STATE_YET_TO_BE_CONSUMED'?false:undefined;
+  const refundableQuantity=offer.refundableQuantity===undefined&&state!=='PURCHASED'?null:offer.refundableQuantity;
+  if(consumed===undefined||state==='PURCHASED'&&!Number.isInteger(refundableQuantity)||refundableQuantity!==null&&![0,1].includes(refundableQuantity))throw failure('play_product');
+  const purchasedAt=resource.purchaseCompletionTime===undefined&&state!=='PURCHASED'?null:validTime(resource.purchaseCompletionTime)?Date.parse(resource.purchaseCompletionTime):NaN;
+  const acknowledgementState=resource.acknowledgementState===undefined&&state!=='PURCHASED'?null:resource.acknowledgementState;
+  const verifiedAt=now();
+  if(!Number.isSafeInteger(verifiedAt)||verifiedAt<0||state==='PURCHASED'&&acknowledgementState===null||purchasedAt!==null&&(!Number.isFinite(purchasedAt)||purchasedAt>verifiedAt+300000)||acknowledgementState!==null&&!['ACKNOWLEDGEMENT_STATE_PENDING','ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED'].includes(acknowledgementState)||!validOrder(resource.orderId))throw failure('play_response');
+  const tokenHash=await sha256(purchaseToken),creditsCents=byId.get(productId).creditsCents,inspectionId=crypto.randomUUID();
+  const purchase=Object.freeze({state,tokenHash,userId,productId,creditsCents,mode,packageName:GOOGLE_PLAY_PACKAGE,accountId:expected,purchasedAt,orderId:resource.orderId??null,quantity:1,refundableQuantity,consumed,acknowledgementState,inspectionId,verifiedAt});
+  const receipt=state==='PURCHASED'&&refundableQuantity===1?Object.freeze({tokenHash,userId,productId,creditsCents,mode,packageName:GOOGLE_PLAY_PACKAGE,accountId:expected,purchasedAt,orderId:resource.orderId??null,consumed,inspectionId,verifiedAt}):null;
+  const proof=Object.freeze({state:'inspected',purchase});proofData.set(proof,{purchase,receipt,purchaseToken,issuer});return proof;
+ }
+ // Only server-owned immutable intents may provide a historical binding.
+ // The browser input contract still contains exactly userId/productId/token.
+ const inspect=input=>inspectWithBinding(input);
+ async function inspectOwned(input,options){
+  if(!object(options)||Object.keys(options).join(',')!=='accountId'||!HEX.test(options.accountId??''))throw failure('play_binding');
+  return inspectWithBinding(input,options.accountId);
+ }
+ async function verify(input){
+  const inspected=await inspect(input),data=proofData.get(inspected),purchase=data.purchase;
+  if(purchase.state!=='PURCHASED')return Object.freeze({state:purchase.state==='PENDING'?'pending':'cancelled'});
+  if(!data.receipt)throw failure('play_product');
+  const proof=Object.freeze({state:'verified',receipt:data.receipt});proofData.set(proof,data);return proof;
  }
  async function consume(proof,entitlement){
   const receipt=receiptForGooglePlayProof(proof),data=proofData.get(proof);
   if(data.issuer!==issuer||receipt.mode!==mode||!object(entitlement)||entitlement.state!=='credited'||entitlement.tokenHash!==receipt.tokenHash||entitlement.userId!==receipt.userId||entitlement.creditsCents!==receipt.creditsCents||entitlement.eventId!=='google-play:'+receipt.tokenHash)throw failure('play_entitlement');
   if(receipt.consumed||data.consumeState==='consumed')return {state:'already_consumed'};
+  const checkedAt=now();if(!Number.isSafeInteger(checkedAt)||checkedAt<receipt.verifiedAt||checkedAt-receipt.verifiedAt>60000)throw failure('play_consume_reinspect');
   if(data.consumeState==='attempted')throw failure('play_consume_uncertain');
   data.consumeState='attempted';
   const response=await request('/purchases/products/'+encodeURIComponent(receipt.productId)+'/tokens/'+encodeURIComponent(data.purchaseToken)+':consume','POST');
@@ -95,5 +135,5 @@ export function createGooglePlayPurchaseVerifier({enabled=false,mode='test',acco
   data.consumeState='consumed';
   return {state:'consumed'};
  }
- return Object.freeze({enabled:true,mode,products,accountId,verify,consume});
+ return Object.freeze({enabled:true,mode,products,accountId,inspect,inspectOwned,inspectForNotification,verify,consume});
 }

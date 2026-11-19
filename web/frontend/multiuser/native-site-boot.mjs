@@ -29,7 +29,8 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
   if(ended){binding.dispose();unsubscribe();return {dispose:endSession};}
   browser.rigScopedStorage=binding.scopedStorage;browser.rigDraftStorage=binding.draftStorage;
   browser.rigRequest=googlePlay?(path,options={})=>{
-   if(typeof path==='string'&&path.startsWith('/api/payments/')&&!['/api/payments/balance','/api/payments/google-play/config','/api/payments/google-play/confirm'].includes(path))throw Error('Tegoed kopen gaat hier via Google Play.');
+   const googleStatus=typeof path==='string'&&/^\/api\/payments\/google-play\/status(?:\?intentId=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$/.test(path);
+   if(typeof path==='string'&&path.startsWith('/api/payments/')&&!googleStatus&&!['/api/payments/balance','/api/payments/google-play/config','/api/payments/google-play/intents','/api/payments/google-play/confirm'].includes(path))throw Error('Tegoed kopen gaat hier via Google Play.');
    return binding.request(path,options);
   }:binding.request;
   browser.rigOpenVideo=binding.openVideo;browser.rigSessionActive=binding.isActive;
