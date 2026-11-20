@@ -1,7 +1,13 @@
 package dev.andyarijs.rig.data
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
@@ -13,6 +19,9 @@ import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import java.net.UnknownHostException
 
 class NativeRecoveryTest {
     private val user = "u-12345678-1234-4123-8123-123456789abc"
@@ -20,12 +29,13 @@ class NativeRecoveryTest {
     private lateinit var directory: File
     private lateinit var store: TestStore
     private lateinit var api: RigApi
+    private lateinit var client: OkHttpClient
 
     @Before fun setup() {
         server = MockWebServer().apply { start() }
         directory = Files.createTempDirectory("rig-native-test").toFile()
         store = TestStore().apply { saveSession(NativeAuthSession("rig_native_" + "s".repeat(43), System.currentTimeMillis() + 86_400_000, user)) }
-        val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+        client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .addInterceptor { chain ->
                 val original = chain.request()
                 // Production constructs the fixed HTTPS RIG URL; only this
@@ -115,7 +125,7 @@ class NativeRecoveryTest {
         assertEquals("image/jpeg", request.getHeader("Content-Type"))
     }
 
-    @Test fun pkceVerifierAndStateSurviveRestartAndCallbackIsOneUse() = runBlocking {
+    @Test fun pkceSurvivesRestartAndCompletedCallbackIsIdempotentWithoutAnotherExchange() = runBlocking {
         val manager = RigLoginManager(store, api)
         val target = manager.beginAuthorization()
         val pending = store.read("login")!!
@@ -137,8 +147,99 @@ class NativeRecoveryTest {
         assertNull(exchange.getHeader("Authorization"))
         assertEquals(pending.getString("verifier"), JSONObject(exchange.body.readUtf8()).getString("codeVerifier"))
         assertNull(store.read("login"))
+        assertEquals(completed, RigLoginManager(store, api).completeCallbackString(callback))
+        assertEquals(1, server.requestCount)
+        store.saveSession(NativeAuthSession("rig_native_" + "b".repeat(43), System.currentTimeMillis() + 86_400_000, user))
         assertTrue(runCatching { RigLoginManager(store, api).completeCallbackString(callback) }.isFailure)
         assertEquals(1, server.requestCount)
+    }
+
+    private fun beginCallback(manager: RigLoginManager): String {
+        manager.beginAuthorization()
+        return "dev.andyarijs.rig://auth/callback?code=${"c".repeat(43)}&state=${store.read("login")!!.getString("state")}"
+    }
+
+    private fun successfulExchange() = response(JSONObject().put("accessToken", "rig_native_" + "n".repeat(43))
+        .put("tokenType", "Bearer").put("userId", user).put("expiresAt", System.currentTimeMillis() + 86_400_000).put("currency", "EUR").put("mode", "live"))
+
+    @Test fun delayed401FromAnOldCredentialCannotClearOrLogOutTheNewSession() = runBlocking {
+        val seen = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse { seen.countDown(); check(release.await(5, TimeUnit.SECONDS)); return response(JSONObject().put("error", "Meld opnieuw aan."), 401) }
+        }
+        val oldRequest = async(Dispatchers.IO) { runCatching { api.get("/session") } }
+        check(withContext(Dispatchers.IO) { seen.await(5, TimeUnit.SECONDS) })
+        val fresh = NativeAuthSession("rig_native_" + "f".repeat(43), System.currentTimeMillis() + 86_400_000, user)
+        store.saveSession(fresh)
+        release.countDown()
+        assertTrue(oldRequest.await().exceptionOrNull() is RigSessionReplacedException)
+        assertEquals(fresh, store.session())
+    }
+
+    @Test fun unsentExchangePreservesPkceAndRetriesOnlyAfterAnExplicitCallback() = runBlocking {
+        val attempts = AtomicInteger()
+        val beforeHeaders = client.newBuilder().addInterceptor { chain ->
+            if (attempts.getAndIncrement() == 0) throw UnknownHostException("offline fixture")
+            chain.proceed(chain.request())
+        }.build()
+        val authApi = RigApi(store, beforeHeaders)
+        val manager = RigLoginManager(store, authApi)
+        val callback = beginCallback(manager)
+        val verifier = store.read("login")!!.getString("verifier")
+        val failure = runCatching { manager.completeCallbackString(callback) }.exceptionOrNull()
+        assertTrue(failure is RigTransportException && failure.definitelyUnsubmitted)
+        assertEquals("ready", store.read("login")!!.getString("phase"))
+        assertEquals(verifier, store.read("login")!!.getString("verifier"))
+        assertEquals(0, server.requestCount)
+        assertEquals(1, attempts.get())
+        server.enqueue(successfulExchange())
+        RigLoginManager(store, authApi).completeCallbackString(callback)
+        assertEquals(1, server.requestCount)
+        assertEquals(2, attempts.get())
+    }
+
+    @Test fun service503RetainsPkceButNeverBlindlyRepostsTheOneUseCode() = runBlocking {
+        val manager = RigLoginManager(store, api)
+        val callback = beginCallback(manager)
+        val verifier = store.read("login")!!.getString("verifier")
+        server.enqueue(response(JSONObject().put("error", "Tijdelijk niet beschikbaar."), 503))
+        assertTrue(runCatching { manager.completeCallbackString(callback) }.exceptionOrNull() is RigApiException)
+        assertEquals("uncertain", store.read("login")!!.getString("phase"))
+        assertEquals(verifier, store.read("login")!!.getString("verifier"))
+        assertTrue(runCatching { RigLoginManager(store, api).completeCallbackString(callback) }.isFailure)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun lostSuccessResponseCannotCauseAnotherExchangeAfterProcessRestart() = runBlocking {
+        val callback = beginCallback(RigLoginManager(store, api))
+        server.enqueue(successfulExchange().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        val failure = runCatching { RigLoginManager(store, api).completeCallbackString(callback) }.exceptionOrNull()
+        assertTrue(failure is RigTransportException && !failure.definitelyUnsubmitted)
+        assertEquals("uncertain", store.read("login")!!.getString("phase"))
+        assertTrue(runCatching { RigLoginManager(store, api).completeCallbackString(callback) }.isFailure)
+        assertEquals(1, server.requestCount)
+        assertNull(store.read("login-completed"))
+    }
+
+    @Test fun aNewLoginTransactionCannotBeOverwrittenByAnOlderExchangeResponse() = runBlocking {
+        store.clearSession()
+        val seen = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse { seen.countDown(); check(release.await(5, TimeUnit.SECONDS)); return successfulExchange() }
+        }
+        val oldManager = RigLoginManager(store, api)
+        val callback = beginCallback(oldManager)
+        val oldExchange = async(Dispatchers.IO) { runCatching { oldManager.completeCallbackString(callback) } }
+        check(withContext(Dispatchers.IO) { seen.await(5, TimeUnit.SECONDS) })
+        RigLoginManager(store, api).beginAuthorization()
+        val next = store.read("login")!!.getString("state")
+        release.countDown()
+        assertTrue(oldExchange.await().isFailure)
+        assertNull(store.session())
+        assertEquals(next, store.read("login")!!.getString("state"))
+        assertEquals("ready", store.read("login")!!.getString("phase"))
     }
 
     @Test fun callbackRejectsInjectedHostsFragmentsDuplicateAndEncodedFields() {

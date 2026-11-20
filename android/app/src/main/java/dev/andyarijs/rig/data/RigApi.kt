@@ -6,6 +6,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONObject
@@ -17,6 +19,7 @@ import java.util.concurrent.TimeUnit
 /** Bearer credentials go only to the fixed RIG API. In particular redirects
  * are disabled so an upstream media URL can never receive the session token. */
 class RigApi internal constructor(private val store: RigStore, private val client: OkHttpClient = secureClient()) {
+    private data class RequestSession(val accessToken: String)
     companion object {
         private fun secureClient() = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS).writeTimeout(120, TimeUnit.SECONDS)
@@ -43,13 +46,19 @@ class RigApi internal constructor(private val store: RigStore, private val clien
     private suspend fun json(method: String, path: String, data: JSONObject? = null, authenticated: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
         val body = data?.toString()?.toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = builder(path, authenticated).method(method, body).build()
-        client.newCall(request).execute().use { response ->
+        var headersStarted = false
+        val transport = if (authenticated) client else client.newBuilder().eventListener(object : EventListener() {
+            override fun requestHeadersStart(call: Call) { headersStarted = true }
+        }).build()
+        try { transport.newCall(request).execute().use { response ->
             val raw = response.body?.source()?.apply { request(1_048_577) }?.buffer?.readByteArray()
             if (raw == null || raw.size > 1_048_576) throw IOException("RIG kon het antwoord niet veilig lezen.")
             val result = runCatching { JSONObject(String(raw, Charsets.UTF_8)) }.getOrNull()
-                ?: throw RigApiException(response.code, null, "De dienst is tijdelijk niet beschikbaar. Probeer de status later opnieuw.")
-            if (!response.isSuccessful) throw failure(response.code, result, authenticated)
-            result
+            if (!response.isSuccessful) throw failure(response.code, result ?: JSONObject(), request)
+            result ?: throw RigApiException(response.code, null, "De dienst is tijdelijk niet beschikbaar. Probeer de status later opnieuw.")
+        } } catch (error: IOException) {
+            if (!authenticated) throw RigTransportException(!headersStarted, "Je aanmelding kon niet worden bevestigd. Controleer je verbinding.", error)
+            throw error
         }
     }
 
@@ -73,7 +82,7 @@ class RigApi internal constructor(private val store: RigStore, private val clien
             val raw = response.body?.source()?.apply { request(65_537) }?.buffer?.readByteArray()
             if (raw == null || raw.size > 65_536) throw IOException("Het voorbereide bestand kon niet worden gecontroleerd.")
             val result = runCatching { JSONObject(String(raw, Charsets.UTF_8)) }.getOrNull() ?: throw IOException("Het voorbereide bestand kon niet worden gecontroleerd.")
-            if (!response.isSuccessful) throw failure(response.code, result, true)
+            if (!response.isSuccessful) throw failure(response.code, result, request)
             result
         }
     }
@@ -82,8 +91,9 @@ class RigApi internal constructor(private val store: RigStore, private val clien
         require(Regex("^/generations/[A-Za-z0-9_-]{1,100}/video$").matches(path) || Regex("^/video-drafts/[A-Za-z0-9_-]{1,100}/assets/[A-Za-z0-9_-]{1,100}$").matches(path))
         val temp = File(destination.parentFile, destination.name + ".part")
         try {
-            client.newCall(builder(path).get().build()).execute().use { response ->
-                if (!response.isSuccessful) throw failure(response.code, JSONObject(), true)
+            val request = builder(path).get().build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw failure(response.code, JSONObject(), request)
                 val body = response.body ?: throw IOException("Je video is nog niet beschikbaar.")
                 if (body.contentLength() > maxBytes) throw IOException("Je video kon niet veilig worden opgeslagen.")
                 var total = 0L
@@ -104,12 +114,22 @@ class RigApi internal constructor(private val store: RigStore, private val clien
             if (authenticated) {
                 val session = store.session() ?: throw RigApiException(401, "login_required", "Meld je aan om verder te gaan.")
                 header("Authorization", "Bearer ${session.accessToken}")
+                tag(RequestSession::class.java, RequestSession(session.accessToken))
             }
         }
     }
 
-    private fun failure(status: Int, body: JSONObject, authenticated: Boolean): RigApiException {
-        if (status == 401 && authenticated) store.clearSession()
+    private fun failure(status: Int, body: JSONObject, request: Request): Exception {
+        if (status == 401) request.tag(RequestSession::class.java)?.let { used ->
+            val replaced = synchronized(store.transactionLock) {
+                val current = store.session()
+                if (current?.accessToken == used.accessToken) store.clearSessionIfMatches(used.accessToken)
+                current != null && current.accessToken != used.accessToken
+            }
+            // The view layer also reacts to 401 by showing a logged-out UI.
+            // An obsolete response is not a failure of the newer credential.
+            if (replaced) return RigSessionReplacedException()
+        }
         // Server messages are bounded plain text; never surface upstream URLs,
         // request payloads or a stack trace in the customer's interface.
         val message = body.optString("error").takeIf { it.length in 1..400 && !it.contains("https://") && !it.contains("http://") }
@@ -118,3 +138,8 @@ class RigApi internal constructor(private val store: RigStore, private val clien
     }
 
 }
+
+/** Only "before request headers" proves that the one-use code was not sent.
+ * A 503 or lost response can follow a successful server exchange. */
+class RigTransportException(val definitelyUnsubmitted: Boolean, message: String, cause: IOException) : IOException(message, cause)
+class RigSessionReplacedException : Exception("Je aanmelding is intussen vernieuwd. De oude aanvraag is gestopt.")

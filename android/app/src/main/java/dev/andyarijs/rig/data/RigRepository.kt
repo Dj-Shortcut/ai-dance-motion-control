@@ -134,6 +134,7 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
         try { if (signedIn()) api.post("/auth/logout") } finally {
             store.clearSession()
             store.write("login", null)
+            store.write("login-completed", null)
             // Account-scoped unfinished payment/job records stay encrypted so
             // the same user can reconcile them after logging in again.
         }
