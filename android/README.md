@@ -1,7 +1,7 @@
 # RIG voor Android
 
 Zelfstandige Android-app in Kotlin/Jetpack Compose, pakket `dev.andyarijs.rig`,
-versie `0.2.1` (code `3`), Android 9 of nieuwer. De schermen, bestandskeuze,
+versie `0.2.2` (code `4`), Android 9 of nieuwer. De schermen, bestandskeuze,
 fragmentkeuze, videoweergave, uitsnijden en prijsbevestiging zijn native.
 Er is geen WebView of Trusted Web Activity in de actieve app.
 iOS is een latere client van dezelfde servercontracten.
@@ -50,9 +50,10 @@ bewegingsuitsnede wordt lokaal H.264/AAC MP4, maximaal 30 seconden voor Pro of
 15 voor videobewerking, en maximaal 16 MiB per voorbereid bestand. Het ruwe
 4K-bronbestand wordt niet geüpload. Uploads bevatten een controlehash.
 
-Close-up en maximaal drie hoeken zijn echte optionele Pro-referenties. Native
-tekstmaskers en de meervoudige Recast-workflow zijn nog niet geïmplementeerd;
-de native serverconfiguratie biedt ze daarom niet aan. Er is geen stille
+Close-up en maximaal drie hoeken zijn echte optionele Pro-referenties. De directe 1080p-persoonsvervanging gebruikt één portret en een fragment van
+6–15 seconden met het originele geluid, uitsluitend als de server die route
+voor het account aanbiedt. Native tekstmaskers en de meervoudige
+opschoonworkflow zijn nog niet geïmplementeerd en worden niet aangeboden. Er is geen stille
 terugval naar een ander model. De website behoudt zijn eigen mogelijkheden.
 
 ## Opdrachten en proefvervolg

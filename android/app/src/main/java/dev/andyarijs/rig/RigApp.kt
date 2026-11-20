@@ -33,6 +33,11 @@ import dev.andyarijs.rig.data.RigJob
 import dev.andyarijs.rig.data.RigQuote
 import dev.andyarijs.rig.media.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.util.Currency
+import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.text.NumberFormat
@@ -68,8 +73,10 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
             Column(Modifier.statusBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("RIG.", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-                    if (s.session != null) TextButton(onClick = { model.credits(true) }) {
-                        Text(if (s.session!!.funding == "owner-provider") "Eigen Fal-account" else euro(s.session!!.balanceCents))
+                    if (s.session?.funding == "owner-provider") {
+                        RigOwnerBalance(s.providerBalance, s.providerBalanceLoading)
+                    } else if (s.session != null) TextButton(onClick = { model.credits(true) }) {
+                        Text(euro(s.session!!.balanceCents))
                     }
                     TextButton(onClick = { if (s.session == null) onLogin() else account = true }) { Text(if (s.session == null) "Aanmelden" else "Account") }
                 }
@@ -143,9 +150,10 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                             val maxStart = (motion.durationMs - s.duration * 1000L).coerceAtLeast(0)
                             Text("Start", color = Muted, fontSize = 12.sp)
                             Slider(s.startMs.toFloat().coerceIn(0f, maxStart.toFloat().coerceAtLeast(1f)), onValueChange = { model.timing(it.toLong(), s.duration) }, valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f))
-                            val maxDuration = minOf(if(s.quality == "pro") 30 else 15, ((motion.durationMs - s.startMs) / 1000).toInt()).coerceAtLeast(3)
+                            val minimum = if(s.quality == "human-recast") 6 else 3
+                            val maxDuration = minOf(if(s.quality == "pro") 30 else 15, ((motion.durationMs - s.startMs) / 1000).toInt()).coerceAtLeast(minimum)
                             Text("Duur · ${s.duration} seconden", color = Muted, fontSize = 12.sp)
-                            Slider(s.duration.toFloat().coerceIn(3f,maxDuration.toFloat()), { model.timing(s.startMs, it.toInt()) }, valueRange = 3f..maxDuration.toFloat().coerceAtLeast(3.01f), steps = (maxDuration-4).coerceAtLeast(0))
+                            Slider(s.duration.toFloat().coerceIn(minimum.toFloat(),maxDuration.toFloat()), { model.timing(s.startMs, it.toInt()) }, valueRange = minimum.toFloat()..maxDuration.toFloat().coerceAtLeast(minimum + .01f), steps = (maxDuration-minimum-1).coerceAtLeast(0))
                         }
                         TextButton(onClick = { options = true }, modifier = Modifier.padding(vertical = 12.dp)) { Text("Meer opties  +") }
                     }
@@ -153,14 +161,18 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         Progress(2)
                         PageTitle("Waar gebeurt het?", "Kies wat je wilt overnemen.", { model.step(1) })
                         ChoiceCard("Op je foto", "Je neemt de beweging over. De omgeving van je foto blijft het uitgangspunt.", s.quality == "pro", { model.quality("pro") }, s.subject)
-                        if (s.config?.qualities?.contains("edit-standard") != false) ChoiceCard("In de video", "Bewerk de bestaande scène met jouw referentiefoto. Beschrijf precies wie of wat wordt vervangen.", s.quality == "edit-standard", { model.quality("edit-standard") }, s.motion)
-                        if (s.config != null && "edit-standard" !in s.config!!.qualities) Text("Videobewerking is nog niet beschikbaar voor je account.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        val editing = preferredVideoEditQuality(s.config?.qualities.orEmpty())
+                        if (editing != null) ChoiceCard("In de video",
+                            if(editing == "human-recast") "Vervang de persoon in de scène door jou. 1080p · 6–15 seconden, met geluid van de video."
+                            else "Bewerk de bestaande scène met jouw referentiefoto. Beschrijf precies wie of wat wordt vervangen.",
+                            s.quality in setOf("human-recast", "edit-standard"), { model.quality(editing) }, s.motion)
+                        if (s.config != null && editing == null) Text("Videobewerking is nog niet beschikbaar voor je account.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                     }
                     3 -> {
                         Progress(3)
                         PageTitle("Maak het van jou.", "Vertel wat je in het resultaat wilt zien.", { model.step(2) })
                         OutlinedTextField(s.prompt, model::prompt, modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp), placeholder = { Text("Wie zie je, wat doet die en wat blijft hetzelfde?") }, shape = RoundedCornerShape(16.dp), enabled = !s.busy)
-                        Text(if(s.quality == "pro") "Beweging · Pro" else "Video bewerken", color = Accent, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
+                        Text(if(s.quality == "pro") "Beweging · Pro" else if(s.quality == "human-recast") "In de video · 1080p" else "Video bewerken", color = Accent, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
                         val trialSeconds = if(s.quality == "human-recast") 6 else 5
                         if (s.duration > trialSeconds) ChoiceCard("Eerst een proefje", "$trialSeconds seconden. Het proefje gaat ook van je tegoed af.", s.trial, { model.trial(true) })
                         ChoiceCard("Je volledige fragment", "${s.duration} seconden · de prijs volgt na voorbereiding", !s.trial, { model.trial(false) })
@@ -199,7 +211,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 Text("Meer opties", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 s.subject?.let { TextButton(onClick = { crop = "subject"; options = false }) { Text("Jouw beeld uitsnijden") } }
                 s.motion?.let { TextButton(onClick = { crop = "motion"; options = false }) { Text("Bewegingsvideo uitsnijden") } }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Geluid van de video behouden", modifier = Modifier.weight(1f)); Switch(s.keepSound, model::keepSound) }
+                if(s.quality == "human-recast") Text("Met het geluid van de video", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
+                else Row(verticalAlignment = Alignment.CenterVertically) { Text("Geluid van de video behouden", modifier = Modifier.weight(1f)); Switch(s.keepSound, model::keepSound) }
                 if (s.quality == "pro") {
                     HorizontalDivider(Modifier.padding(vertical = 16.dp))
                     Text("Gezicht en hoeken", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -223,6 +236,32 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 onDismiss = { crop = null }, onApply = { model.crop(target == "subject", it); crop = null })
         }
     }
+}
+
+internal fun preferredVideoEditQuality(qualities: List<String>): String? = when {
+    "human-recast" in qualities -> "human-recast"
+    "edit-standard" in qualities -> "edit-standard"
+    else -> null
+}
+
+@Composable internal fun RigOwnerBalance(balance: dev.andyarijs.rig.data.RigProviderBalance?, loading: Boolean = false) {
+    var fresh by remember(balance) { mutableStateOf(balance?.isFresh() == true) }
+    LaunchedEffect(balance) {
+        fresh = balance?.isFresh() == true
+        if (fresh && balance != null) {
+            delay((balance.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+            fresh = false
+        }
+    }
+    val label = when {
+        fresh && balance != null -> NumberFormat.getCurrencyInstance(Locale.forLanguageTag("nl-BE")).apply {
+            currency = Currency.getInstance("USD")
+        }.format(BigDecimal.valueOf(balance.availableUsdMicros, 6).setScale(2, RoundingMode.DOWN))
+        loading -> "Saldo laden…"
+        else -> "Saldo niet beschikbaar"
+    }
+    Text(label, color = if(fresh) Accent else Muted, fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("rig-owner-balance").padding(horizontal = 12.dp, vertical = 8.dp))
 }
 
 @Composable private fun StartCard(number: String, label: String, modifier: Modifier) {

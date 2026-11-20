@@ -95,3 +95,12 @@ test('native relay rejects browser origins, missing credentials, unknown routes 
  ]){const f=fixture();assert.equal((await f.fetch(path,init)).status,status,path);assert.equal(f.calls.length,0,path);}
  const limited=fixture({limit:false});assert.equal((await limited.fetch('/api/native/session',{headers:{authorization:token}})).status,429);assert.equal(limited.calls.length,0);
 });
+
+test('native wallet display is an exact authenticated GET, without widening owner finance routes',async()=>{
+ const token='Bearer rig_native_'+'n'.repeat(43),f=fixture();
+ assert.equal((await f.fetch('/api/native/provider-balance',{headers:{authorization:token,'x-rig-owner':'yes',cookie:'forged=true'}})).status,200);
+ assert.equal(f.calls[0].url,origin+'/api/native/provider-balance');assert.equal(f.calls[0].headers.get('authorization'),token);assert.equal(f.calls[0].headers.get('cookie'),null);assert.equal(f.calls[0].headers.get('x-rig-owner'),null);
+ for(const [path,method]of [['/api/native/provider-balance?owner=yes','GET'],['/api/native/provider-balance','POST'],['/api/native/owner/finance/funding','GET']]){
+  const denied=fixture();assert.equal((await denied.fetch(path,{method,headers:{authorization:token},...(method==='POST'?{body:'{}'}:{})})).status,404);assert.equal(denied.calls.length,0);
+ }
+});

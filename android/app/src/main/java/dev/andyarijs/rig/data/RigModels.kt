@@ -122,8 +122,8 @@ data class RigQuote(
             require(!edit || value.optString("transferPolicy") == TEMPORARY_TRANSFER)
             require(edit || !value.has("transferPolicy"))
             require(request.quality != "human-recast" || value.optString("outputResolution") == "1080P")
-            // Multi-step cleanup/recast preparation needs a native implementation;
-            // never present it as a supported one-call generation.
+            // Direct Recast is a normal generation. A cleanup workflow also
+            // needs client processing; never treat that as a one-call request.
             require(value.optString("workflowVersion") != "rig-workflow-v2")
             val ownProvider = funding == "owner-provider"
             val cents = if (ownProvider) null else value.safeInteger("priceCents")

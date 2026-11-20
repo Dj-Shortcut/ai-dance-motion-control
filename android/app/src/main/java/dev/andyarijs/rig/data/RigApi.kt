@@ -32,7 +32,7 @@ class RigApi internal constructor(private val store: RigStore, private val clien
             val plain = path.substringBefore('?')
             val query = path.substringAfter('?', "")
             if (query.isNotEmpty() && !(plain == "/payments/google-play/status" && Regex("^intentId=[a-f0-9-]{36}$").matches(query))) return false
-            return plain in setOf("/session", "/video-config", "/assets", "/generation-quotes", "/generations", "/generations/recent", "/video-drafts", "/auth/exchange", "/auth/logout", "/security", "/security/registration/options", "/security/registration/verify", "/security/verification/options", "/owner/security", "/owner/security/verification/options", "/payments/google-play/config", "/payments/google-play/intents", "/payments/google-play/confirm", "/payments/google-play/status") ||
+            return plain in setOf("/session", "/video-config", "/provider-balance", "/assets", "/generation-quotes", "/generations", "/generations/recent", "/video-drafts", "/auth/exchange", "/auth/logout", "/security", "/security/registration/options", "/security/registration/verify", "/security/verification/options", "/owner/security", "/owner/security/verification/options", "/payments/google-play/config", "/payments/google-play/intents", "/payments/google-play/confirm", "/payments/google-play/status") ||
                 Regex("^/generations/[A-Za-z0-9_-]{1,100}(/video|/draft)?$").matches(plain) ||
                 Regex("^/generation-intents/[A-Za-z0-9_-]{1,100}/reconcile$").matches(plain) ||
                 Regex("^/video-drafts/[A-Za-z0-9_-]{1,100}/assets/[A-Za-z0-9_-]{1,100}$").matches(plain)
@@ -44,6 +44,7 @@ class RigApi internal constructor(private val store: RigStore, private val clien
     suspend fun exchange(code: String, verifier: String): JSONObject = json("POST", "/auth/exchange", JSONObject().put("code", code).put("codeVerifier", verifier), authenticated = false)
 
     private suspend fun json(method: String, path: String, data: JSONObject? = null, authenticated: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
+        require(path != "/provider-balance" || method == "GET") { "Het Fal-saldo kan alleen worden gelezen." }
         val body = data?.toString()?.toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = builder(path, authenticated).method(method, body).build()
         var headersStarted = false

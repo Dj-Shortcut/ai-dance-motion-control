@@ -64,11 +64,20 @@ not a secret and never a client-supplied trust override.
 
 ## Current native feature gate
 
-Direct Pro/standard motion and configured video editing use existing handlers.
-Human Recast and the multi-step local cleanup workflow are excluded from native
-configuration until their Android processing stages exist. The backend rejects
-native creation/confirmation of these workflows explicitly. It never changes to
-a different model silently. Existing website workflows remain unchanged.
+Direct Pro/standard motion, configured video editing and direct 1080P Human
+Recast use the existing handlers. The native interface prefers the already
+configured Recast route for person replacement, using one portrait, original
+audio and a 6–15 second fragment. It does not enable a provider flag or silently
+change to another model. Multi-step cleanup remains excluded; native requests
+containing workflow/cleanup markers and confirmation of stored workflow quotes
+are rejected. Existing website workflows remain unchanged.
+
+The native owner header reads only GET `/api/native/provider-balance`. The server
+checks the pinned owner before consulting Fal and returns only verified
+`availableUsdMicros`, USD currency and the observation/freshness times. Customers
+retain their own EUR wallet and cannot read provider credit. The owner amount is
+plain text, updates only while the app is foregrounded and becomes unavailable
+when stale or unreadable; a failure never manufactures zero credit.
 
 Verification lives in `native-auth.test.mjs`, `native-auth-workerd.test.mjs` and
 `production-ingress.test.mjs`. Tests cover real D1 redemption races/replay,

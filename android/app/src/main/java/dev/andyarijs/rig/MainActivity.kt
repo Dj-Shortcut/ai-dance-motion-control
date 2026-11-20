@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); handleCallback(intent) }
     override fun onResume() { super.onResume(); model.resume() }
+    override fun onPause() { model.pause(); super.onPause() }
     private fun handleCallback(intent: Intent?) {
         val uri = intent?.data ?: return
         if (intent.action != Intent.ACTION_VIEW) return

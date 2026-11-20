@@ -3,6 +3,7 @@
 import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesHmac,sitesDigest,sitesRequestBodyLimit,sitesPreparationWrite,sitesGooglePlayPath,sitesCustomerSecurityPath,sitesVideoDraftPath} from './sites-bridge-protocol.mjs';
 import {authenticateNativeSession,exchangeNativeAuthorization,revokeNativeSession} from './native-auth.mjs';
 import {nativeTransportEnvironment,configuredAndroidOrigin} from './native-passkey.mjs';
+import {handleNativeProviderBalance} from './native-provider-balance.mjs';
 const PREFIX='/api/native';
 const UUID='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const HASH=/^[a-f0-9]{64}$/;
@@ -16,7 +17,7 @@ export function nativeApiPath(path,method){
  if(sitesGooglePlayPath(mapped,method)||sitesCustomerSecurityPath(mapped,method)||sitesVideoDraftPath(mapped,method))return mapped;
  if(method==='GET'&&mapped==='/api/owner/security'||method==='POST'&&mapped==='/api/owner/security/verification/options')return mapped;
  if(method==='GET'){
-  if(['/api/session','/api/video-config','/api/generations/recent'].includes(mapped))return mapped;
+  if(['/api/session','/api/video-config','/api/generations/recent','/api/provider-balance'].includes(mapped))return mapped;
   if(new RegExp('^/api/generations/'+UUID+'(?:/video)?$').test(mapped))return mapped;
   if(u.pathname==='/api/estimate/fal'&&u.search)return mapped;
  }
@@ -53,7 +54,7 @@ async function signedRequest(req,env,session,path){
  return new Request(bridge.RIG_SITES_BRIDGE_ORIGIN+path,{method:req.method,headers,redirect:'manual',...(body?{body,duplex:'half'}:{})});
 }
 
-export async function handleNativeApi(req,env,{db,dispatch}={}){
+export async function handleNativeApi(req,env,{db,dispatch,network=fetch}={}){
  const url=new URL(req.url),path=url.pathname+url.search;
  if(url.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||url.hash||url.username||url.password||!nativePath(path,req.method))return json({error:'Niet gevonden.'},404);
  if(req.headers.has('origin'))return json({error:'Gebruik de RIG-app voor deze aanvraag.'},403);
@@ -61,6 +62,7 @@ export async function handleNativeApi(req,env,{db,dispatch}={}){
   const result=await exchangeNativeAuthorization(db,await data(req));return result?json(result):denied();
  }
  const session=await authenticateNativeSession(db,req.headers.get('authorization'));if(!session)return denied();
+ if(path==='/api/native/provider-balance')return handleNativeProviderBalance(req,env,{userId:session.userId,network});
  if(path==='/api/native/auth/logout'){
   const value=await data(req);if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length)return json({error:'Controleer je aanvraag.'},400);
   await revokeNativeSession(db,session);return json({signedOut:true});
@@ -69,7 +71,7 @@ export async function handleNativeApi(req,env,{db,dispatch}={}){
  let signed;try{signed=await signedRequest(req,env,session,target);}catch{return json({error:'Controleer het bestand of je aanvraag.'},400);}
  if(target==='/api/generation-quotes'){
   let value;try{value=await signed.clone().json();}catch{return json({error:'Controleer je aanvraag.'},400);}
-  if(value?.quality==='human-recast'||value?.workflowVersion!==undefined||Object.hasOwn(value??{},'cleanupMaskId'))return json({code:'native_workflow_not_supported',error:'Deze videobewerking is nog niet beschikbaar in de Android-app. Gebruik hiervoor de RIG-website.'},409);
+  if(value?.workflowVersion!==undefined||Object.hasOwn(value??{},'cleanupMaskId'))return json({code:'native_workflow_not_supported',error:'Deze videobewerking is nog niet beschikbaar in de Android-app. Gebruik hiervoor de RIG-website.'},409);
  }
  if(target==='/api/generations'&&req.method==='POST'){
   let value;try{value=await signed.clone().json();}catch{return json({error:'Controleer je aanvraag.'},400);}
@@ -94,7 +96,7 @@ export async function handleNativeApi(req,env,{db,dispatch}={}){
   const value=await result.json(),ready=Boolean(configuredAndroidOrigin(env));
   if(target==='/api/session')return json({...value,nativeSecurityReady:ready});
   const {cleanup,...config}=value;
-  return json({...config,...(Array.isArray(config.qualities)?{qualities:config.qualities.filter(quality=>['standard','pro','edit-standard'].includes(quality))}:{}),nativeSecurityReady:ready,...(!ready?{enabled:false,code:'android_passkey_not_configured'}:{})});
+  return json({...config,...(Array.isArray(config.qualities)?{qualities:config.qualities.filter(quality=>['standard','pro','edit-standard','human-recast'].includes(quality))}:{}),nativeSecurityReady:ready,...(!ready?{enabled:false,code:'android_passkey_not_configured'}:{})});
  }
  return result;
 }

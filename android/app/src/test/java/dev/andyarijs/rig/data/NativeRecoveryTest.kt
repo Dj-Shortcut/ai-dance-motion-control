@@ -263,6 +263,72 @@ class NativeRecoveryTest {
         assertNotNull(store.pending(user))
     }
 
+    private fun providerBalancePayload() = JSONObject().put("availableUsdMicros", 9_370_000).put("currency", "USD")
+        .put("fetchedAt", System.currentTimeMillis()).put("expiresAt", System.currentTimeMillis() + 30_000)
+
+    @Test fun providerBalanceUsesOnlyAnAuthenticatedGetAndNeverAWriteOrFallback() = runBlocking {
+        server.enqueue(response(providerBalancePayload()))
+        assertEquals(9_370_000L, repository().providerBalance().availableUsdMicros)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/api/native/provider-balance", request.path)
+        assertEquals("Bearer rig_native_" + "s".repeat(43), request.getHeader("Authorization"))
+        assertTrue(runCatching { api.post("/provider-balance") }.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun providerBalanceDeniedOrUnavailableDoesNotInventZeroOrEndAValidSession() = runBlocking {
+        for (status in listOf(403, 503)) {
+            server.enqueue(response(JSONObject().put("error", "Het saldo is niet beschikbaar."), status))
+            val error = runCatching { repository().providerBalance() }.exceptionOrNull()
+            assertTrue(error is RigApiException && error.status == status)
+            assertNotNull(store.session())
+        }
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test fun aLateOwnerBalanceCannotLeakIntoAnotherSignedInAccount() = runBlocking {
+        val seen = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse { seen.countDown(); check(release.await(5, TimeUnit.SECONDS)); return response(providerBalancePayload()) }
+        }
+        val oldRequest = async(Dispatchers.IO) { runCatching { repository().providerBalance() } }
+        check(withContext(Dispatchers.IO) { seen.await(5, TimeUnit.SECONDS) })
+        val otherUser = "u-12345678-1234-4123-8123-123456789abd"
+        store.saveSession(NativeAuthSession("rig_native_" + "o".repeat(43), System.currentTimeMillis() + 86_400_000, otherUser))
+        release.countDown()
+        assertTrue(oldRequest.await().isFailure)
+        assertEquals(otherUser, store.session()!!.userId)
+    }
+
+    @Test fun directRecastQuoteUsesTheConfiguredRouteWithoutAnO3FallbackOrGeneration() = runBlocking {
+        server.enqueue(response(JSONObject().put("enabled", true).put("funding", "owner-provider")
+            .put("qualities", org.json.JSONArray(listOf("pro", "human-recast")))))
+        server.enqueue(response(JSONObject().put("id", "recast-quote-1").put("quality", "human-recast")
+            .put("durationSeconds", 6).put("billedSeconds", 6).put("outputResolution", "1080P")
+            .put("funding", "owner-provider").put("providerCurrency", "USD").put("providerEstimateUsdMicros", 2_700_000)
+            .put("transferPolicy", "fal-temporary-links-v1").put("approvalToken", "a".repeat(43)).put("idempotencyKey", "intent-recast-1")))
+        val request = RigQuoteRequest("portrait-1", "source-video-1", "human-recast", "Vervang de persoon door mij; behoud de beweging, camera en mondbeweging.", keepSound = true)
+        val result = repository().quote(request)
+        assertEquals("human-recast", result.raw.getString("quality"))
+        assertEquals("1080P", result.raw.getString("outputResolution"))
+        assertEquals("/api/native/video-config", server.takeRequest().path)
+        val outgoing = server.takeRequest()
+        assertEquals("POST", outgoing.method)
+        assertEquals("/api/native/generation-quotes", outgoing.path)
+        val body = JSONObject(outgoing.body.readUtf8())
+        assertEquals("human-recast", body.getString("quality"))
+        assertEquals("portrait-1", body.getString("imageId"))
+        assertEquals("source-video-1", body.getString("videoId"))
+        assertTrue(body.getBoolean("keepSound"))
+        assertTrue(body.isNull("faceId"))
+        assertEquals(0, body.getJSONArray("angleIds").length())
+        assertFalse(body.has("cleanupMaskId"))
+        assertFalse(body.has("workflowVersion"))
+        assertEquals(2, server.requestCount)
+    }
+
     private class TestStore : RigStore {
         private val values = mutableMapOf<String, String>()
         override fun write(name: String, value: JSONObject?) { if (value == null) values.remove(name) else values[name] = value.toString() }

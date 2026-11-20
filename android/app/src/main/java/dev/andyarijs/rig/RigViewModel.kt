@@ -21,6 +21,7 @@ import kotlin.math.min
 
 data class RigScreenState(
     val step: Int = 0, val session: RigSession? = null, val config: RigVideoConfig? = null,
+    val providerBalance: RigProviderBalance? = null, val providerBalanceLoading: Boolean = false,
     val subject: NativeMediaSource? = null, val motion: NativeMediaSource? = null,
     val frameMs: Long = 0, val startMs: Long = 0, val duration: Int = 5,
     val subjectCrop: NormalizedCrop = NormalizedCrop.FULL, val motionCrop: NormalizedCrop = NormalizedCrop.FULL,
@@ -48,6 +49,8 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     private var draftRestored = false
     private var activeUser: String? = null
     private var resuming: Job? = null
+    private var foreground = true
+    private var balancePolling: Job? = null
 
     init {
         media.pruneCache()
@@ -76,6 +79,8 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         mutable.update {
             it.copy(
                 session = if (signedOut) null else it.session,
+                providerBalance = if(signedOut) null else it.providerBalance,
+                providerBalanceLoading = if(signedOut) false else it.providerBalanceLoading,
                 quote = if (uncertain || signedOut) null else it.quote,
                 pendingSubmission = uncertain,
                 error = if (uncertain) "De ontvangst van je videoaanvraag is nog niet bevestigd. Controleer de status."
@@ -106,11 +111,14 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     }
     fun step(step: Int) { if (!mutable.value.busy) mutable.update { it.copy(step = step, error = null) } }
     fun prompt(value: String) = change(mediaChanged = false) { it.copy(prompt = value.take(1900)) }
-    fun quality(value: String) = change { it.copy(quality = value, duration = min(it.duration, if (value == "pro") 30 else 15), trial = false) }
-    fun keepSound(value: Boolean) = change { it.copy(keepSound = value) }
+    fun quality(value: String) = change {
+        it.copy(quality = value, duration = it.duration.coerceIn(if(value == "human-recast") 6 else 3, if(value == "pro") 30 else 15),
+            keepSound = if(value == "human-recast") true else it.keepSound, trial = false)
+    }
+    fun keepSound(value: Boolean) = change { it.copy(keepSound = if(it.quality == "human-recast") true else value) }
     fun trial(value: Boolean) = change { it.copy(trial = value) }
     fun frame(value: Long) = change { it.copy(frameMs = value) }
-    fun timing(start: Long, duration: Int) = change { it.copy(startMs = start, duration = duration) }
+    fun timing(start: Long, duration: Int) = change { it.copy(startMs = start, duration = duration.coerceIn(if(it.quality == "human-recast") 6 else 3, if(it.quality == "pro") 30 else 15)) }
     fun crop(subject: Boolean, crop: NormalizedCrop) = change { if (subject) it.copy(subjectCrop = crop) else it.copy(motionCrop = crop) }
     fun removeReference(index: Int) = change { if (index < 0) it.copy(face = null, angles = emptyList()) else it.copy(angles = it.angles.filterIndexed { n, _ -> n != index }) }
     fun history(visible: Boolean) { mutable.update { it.copy(showHistory = visible) }; if (visible) work("Video’s ophalen") { val jobs = repository.recent(); mutable.update { it.copy(history = jobs) } } }
@@ -122,7 +130,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         if (target in setOf("face", "angle")) check(!source.isVideo) { "Kies een foto. Een beeld uit je referentievideo voeg je toe met ‘Gebruik dit beeld’." }
         mutable.update { current -> when (target) {
             "subject" -> current.copy(subject = source, subjectCrop = NormalizedCrop.FULL, frameMs = 0, quote = null)
-            "motion" -> current.copy(motion = source, motionCrop = NormalizedCrop.FULL, startMs = 0, duration = min((source.durationMs / 1000).toInt(), if (current.quality == "pro") 30 else 15).coerceAtLeast(3), quote = null)
+            "motion" -> current.copy(motion = source, motionCrop = NormalizedCrop.FULL, startMs = 0, duration = min((source.durationMs / 1000).toInt(), if (current.quality == "pro") 30 else 15).coerceAtLeast(if(current.quality == "human-recast") 6 else 3), quote = null)
             "face" -> current.copy(face = source, quote = null)
             else -> { check(current.face != null) { "Voeg eerst een close-up toe." }; check(current.angles.size < 3); current.copy(angles = current.angles + source, quote = null) }
         } }
@@ -165,6 +173,8 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         finally { mutable.update { it.copy(busy = false) } }
     }
     fun resume() {
+        foreground = true
+        restartBalancePolling()
         if (!repository.signedIn() || running?.isActive == true || mutable.value.busy || resuming?.isActive == true) return
         resuming = viewModelScope.launch {
             try {
@@ -183,8 +193,38 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
             mutable.value = RigScreenState()
         }
         activeUser = session.userId
-        mutable.update { it.copy(session = session.copy(funding = config.funding), config = config) }
+        mutable.update { it.copy(session = session.copy(funding = config.funding), config = config,
+            providerBalance = it.providerBalance?.takeIf { config.funding == "owner-provider" && it.isFresh() }) }
+        restartBalancePolling()
         if (!draftRestored) { draftRestored = true; restoreDraft() }
+    }
+    fun pause() {
+        foreground = false
+        balancePolling?.cancel()
+        balancePolling = null
+        mutable.update { it.copy(providerBalanceLoading = false) }
+    }
+    private fun restartBalancePolling() {
+        balancePolling?.cancel()
+        balancePolling = null
+        val user = mutable.value.session?.takeIf { it.funding == "owner-provider" }?.userId ?: return
+        if(!foreground || repository.store.session()?.userId != user) return
+        balancePolling = viewModelScope.launch {
+            while(foreground && repository.store.session()?.userId == user && mutable.value.session?.userId == user && mutable.value.session?.funding == "owner-provider") {
+                mutable.update { it.copy(providerBalanceLoading = true) }
+                try {
+                    val balance = repository.providerBalance()
+                    repository.checkUser(user)
+                    mutable.update { if(it.session?.userId == user && it.session.funding == "owner-provider") it.copy(providerBalance = balance, providerBalanceLoading = false) else it }
+                } catch(e: CancellationException) { throw e }
+                catch(e: Exception) {
+                    if(repository.store.session()?.userId == user) mutable.update { if(it.session?.userId == user) it.copy(providerBalance = null, providerBalanceLoading = false) else it }
+                    else if(repository.store.session() == null) mutable.update { it.copy(session = null, providerBalance = null, providerBalanceLoading = false) }
+                }
+                val remaining = mutable.value.providerBalance?.let { it.expiresAt - System.currentTimeMillis() - 2_000L }
+                delay(if(remaining == null) 15_000L else remaining.coerceIn(1_000L, 20_000L))
+            }
+        }
     }
     fun prepareQuote() = work("Je gekozen beelden voorbereiden") {
         val s = mutable.value
@@ -199,6 +239,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         }
         val subject = s.subject ?: error("Kies je foto of een beeld uit je eigen video.")
         val motion = s.motion ?: error("Kies de bewegingsvideo.")
+        if(s.quality == "human-recast") check(s.duration in 6..15 && s.startMs + s.duration * 1000L <= motion.durationMs && s.keepSound) { "Kies voor deze bewerking een fragment van 6 tot 15 seconden met het originele geluid." }
         val primary = if (subject.isVideo) media.prepareFrame(subject, s.frameMs, s.subjectCrop) else media.prepareImage(subject, s.subjectCrop)
         val face = s.face?.takeIf { s.quality == "pro" }?.let { media.prepareImage(it) }
         val angles = s.angles.takeIf { s.quality == "pro" }.orEmpty().map { media.prepareImage(it) }
@@ -259,7 +300,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
                     currentCoroutineContext().ensureActive()
                     mutable.update { it.copy(result = result, fullAvailable = draft?.optBoolean("available") == true) }
                 }
-                val freshSession = repository.session(); mutable.update { it.copy(session = freshSession.copy(funding = it.config?.funding ?: freshSession.funding)) }
+                val freshSession = repository.session(); mutable.update { it.copy(session = freshSession.copy(funding = it.config?.funding ?: freshSession.funding)) }; restartBalancePolling()
             } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) }
         }
     }

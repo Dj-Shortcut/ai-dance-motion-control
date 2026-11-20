@@ -74,6 +74,30 @@ class RigContractsTest {
         assertThrows(Exception::class.java) { recast.copy(faceId = "face-1").toJson() }
     }
 
+    @Test fun configuredDirectRecastUsesOnePortraitWithoutCleanupOrClientModelOverrides() {
+        val config = RigVideoConfig.fromJson(JSONObject().put("enabled", true).put("funding", "owner-provider")
+            .put("qualities", org.json.JSONArray(listOf("pro", "human-recast"))))
+        assertTrue("human-recast" in config.qualities)
+        assertFalse("edit-standard" in config.qualities)
+        val recast = request.copy(quality = "human-recast", keepSound = true, faceId = null, angleIds = emptyList())
+        val payload = recast.toJson()
+        assertEquals("human-recast", payload.getString("quality"))
+        assertTrue(payload.getBoolean("keepSound"))
+        assertTrue(payload.isNull("faceId"))
+        assertEquals(0, payload.getJSONArray("angleIds").length())
+        assertEquals(TEMPORARY_TRANSFER, payload.getString("transferPolicy"))
+        for (serverOnly in listOf("resolution", "enhance_realism", "enable_safety_checker", "workflowVersion", "cleanupMaskId")) assertFalse(payload.has(serverOnly))
+        val raw = quote().apply { remove("priceCents"); remove("currency") }.put("quality", "human-recast")
+            .put("durationSeconds", 5.98).put("billedSeconds", 6).put("outputResolution", "1080P")
+            .put("funding", "owner-provider").put("providerCurrency", "USD").put("providerEstimateUsdMicros", 2_700_000)
+            .put("transferPolicy", TEMPORARY_TRANSFER)
+        val direct = RigQuote.fromJson(raw, recast, "owner-provider")
+        assertEquals(2_700_000L, direct.providerEstimateUsdMicros)
+        assertEquals(TEMPORARY_TRANSFER, direct.confirmationPayload().getString("transferConsent"))
+        assertThrows(Exception::class.java) { RigQuote.fromJson(JSONObject(raw.toString()).put("durationSeconds", 4.99).put("billedSeconds", 5), recast, "owner-provider") }
+        assertThrows(Exception::class.java) { RigQuote.fromJson(JSONObject(raw.toString()).put("workflowVersion", "rig-workflow-v2"), recast, "owner-provider") }
+    }
+
     @Test fun unsupportedCleanupWorkflowIsNeverPresentedAsOneCallGeneration() {
         assertThrows(Exception::class.java) { RigQuote.fromJson(quote().put("workflowVersion", "rig-workflow-v2"), request) }
     }

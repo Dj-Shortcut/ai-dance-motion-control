@@ -40,7 +40,7 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    const u=new URL(req.url);
    if(u.pathname==='/api/native'||u.pathname.startsWith('/api/native/')){
     const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
-    return await handleNativeApi(req,env,{db:mapped.DB,dispatch});
+    return await handleNativeApi(req,env,{db:mapped.DB,dispatch,network});
    }
    if(u.pathname==='/api/internal/native-auth/authorize'){
     const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();

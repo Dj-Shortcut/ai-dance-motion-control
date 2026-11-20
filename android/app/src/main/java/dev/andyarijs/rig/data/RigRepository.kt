@@ -25,6 +25,15 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
 
     suspend fun videoConfig(): RigVideoConfig = RigVideoConfig.fromJson(api.get("/video-config"))
 
+    suspend fun providerBalance(): RigProviderBalance {
+        val user = requireSession().userId
+        // The server checks its pinned owner before reading Fal. Never infer
+        // owner authority from a client flag or return a synthetic fallback.
+        val value = api.get("/provider-balance")
+        checkUser(user)
+        return RigProviderBalance.fromJson(value)
+    }
+
     suspend fun upload(kind: String, file: File, durationSeconds: Int? = null, keepSound: Boolean = true): String {
         val user = requireSession().userId
         val result = api.upload(kind, file, durationSeconds, keepSound)
