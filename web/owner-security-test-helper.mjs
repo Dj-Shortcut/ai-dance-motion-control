@@ -12,8 +12,8 @@ const count=value=>{const output=Buffer.alloc(4);output.writeUInt32BE(value);ret
 export function createTestAuthenticator({userHandle=encoded(Buffer.from('test-only-owner')),credentialId=encoded(randomBytes(32))}={}){
  const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),jwk=pair.publicKey.export({format:'jwk'});
  const publicKey=isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,bytes(jwk.x)],[-3,bytes(jwk.y)]]));
- function clientData(type,options,{origin=OWNER_ORIGIN,challenge=options.challenge,crossOrigin=false,topOrigin}={}){
-  return Buffer.from(JSON.stringify({type,challenge,origin,crossOrigin,...(topOrigin===undefined?{}:{topOrigin})}));
+ function clientData(type,options,{origin=OWNER_ORIGIN,challenge=options.challenge,crossOrigin=false,topOrigin,omitCrossOrigin=false}={}){
+  return Buffer.from(JSON.stringify({type,challenge,origin,...(omitCrossOrigin?{}:{crossOrigin}),...(topOrigin===undefined?{}:{topOrigin})}));
  }
  function assertion(options,overrides={}){
   const data=clientData('webauthn.get',options,overrides),authenticatorData=Buffer.concat([sha(overrides.rpId??OWNER_RP_ID),Buffer.from([overrides.flags??0x05]),count(overrides.counter??0)]),signature=sign('SHA256',Buffer.concat([authenticatorData,sha(data)]),pair.privateKey);

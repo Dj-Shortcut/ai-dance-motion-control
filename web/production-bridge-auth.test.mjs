@@ -108,3 +108,10 @@ test('busy media preparation preserves identity and never buffers or releases an
  assert.equal(reads,0);assert.equal(releases,0);
  const session=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/session',method:'GET'}),env);assert.equal(session.userId,who.userId);
 });
+
+test('native authorization issuance is server-only and needs its own explicit signature capability',async()=>{
+ const env=await environment(),path='/api/internal/native-auth/authorize',body=JSON.stringify({challenge:'c'.repeat(43)});
+ for(const opts of [{},{allowGeneration:true},{allowFinance:true},{allowSecurity:true},{allowCustomerSecurity:true},{allowAccountActivity:true}])assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path}),env,opts),null);
+ const auth=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path}),env,{allowNativeAuthorization:true});assert.match(auth.userId,/^u-/);assert.equal(auth.request.url,SITE+path);
+ assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path:path+'?userId=victim'}),env,{allowNativeAuthorization:true}),null);
+});

@@ -24,6 +24,7 @@ export function sitesRequestBodyLimit(path,method){return method==='GET'?0:sites
 // This path is for a server-derived platform profile. Sites' public browser API
 // must explicitly refuse it even though its server producer can sign it.
 export function sitesInternalAccountActivityPath(path,method){return method==='POST'&&path==='/api/internal/account-activity'}
+export function sitesInternalNativeAuthorizationPath(path,method){return method==='POST'&&path==='/api/internal/native-auth/authorize';}
 const HASH=/^[a-f0-9]{64}$/,SITE=/^appgprj_[a-zA-Z0-9]{20,80}$/;
 const hex=data=>Array.from(new Uint8Array(data),x=>x.toString(16).padStart(2,'0')).join('');
 export const sitesDigest=async data=>hex(await crypto.subtle.digest('SHA-256',data));
@@ -79,6 +80,7 @@ export function sitesPath(path,method){
  if(sitesWorkflowPath(path,method))return true;
  if(sitesVideoDraftPath(path,method))return true;
  if(sitesInternalAccountActivityPath(path,method))return true;
+ if(sitesInternalNativeAuthorizationPath(path,method))return true;
  if(method==='GET')return ['/api/session','/api/video-config','/api/sponsor-invitations/status','/api/generations/recent'].includes(path)||u.pathname==='/api/estimate/fal'||/^\/api\/generations\/[A-Za-z0-9_-]{1,100}(?:\/video)?$/.test(path);
  return ['/api/sponsor-invitations/redeem','/api/assets','/api/generation-quotes','/api/generations','/api/chatgpt/quote-approvals','/api/chatgpt/quote-approvals/consume','/api/generations/a5db90b7-7558-40bf-a013-2e121d056f2d/verify-gateway'].includes(path)||/^\/api\/generation-intents\/[A-Za-z0-9_-]{1,100}\/reconcile$/.test(path)||/^\/api\/generations\/[0-9a-f-]{36}\/verify-inputs$/.test(path);
 }

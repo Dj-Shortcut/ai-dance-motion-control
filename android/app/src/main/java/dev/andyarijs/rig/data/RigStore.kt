@@ -1,0 +1,29 @@
+package dev.andyarijs.rig.data
+
+import org.json.JSONObject
+
+/** Persistence boundary. Android uses RigSecureStore; tests can model a
+ * process restart against the exact same durable records without a real key. */
+interface RigStore {
+    fun write(name: String, value: JSONObject?)
+    fun read(name: String): JSONObject?
+
+    fun session(now: Long = System.currentTimeMillis()): NativeAuthSession? {
+        val value = read("session") ?: return null
+        val session = runCatching { NativeAuthSession(value.getString("accessToken"), value.getLong("expiresAt"), value.getString("userId")) }.getOrNull()
+        if (session == null || session.expiresAt <= now || !RIG_NATIVE_TOKEN.matches(session.accessToken) || !RIG_USER.matches(session.userId)) {
+            write("session", null); return null
+        }
+        return session
+    }
+
+    fun saveSession(value: NativeAuthSession) {
+        require(RIG_NATIVE_TOKEN.matches(value.accessToken) && RIG_USER.matches(value.userId) && value.expiresAt > System.currentTimeMillis())
+        write("session", JSONObject().put("accessToken", value.accessToken).put("expiresAt", value.expiresAt).put("userId", value.userId))
+    }
+
+    fun clearSession() = write("session", null)
+    fun pending(userId: String): PendingGeneration? = read("generation-$userId")?.let { runCatching { PendingGeneration.fromJson(it) }.getOrNull() }?.takeIf { it.userId == userId }
+    fun savePending(value: PendingGeneration) = write("generation-${value.userId}", value.toJson())
+    fun clearPending(userId: String) = write("generation-$userId", null)
+}

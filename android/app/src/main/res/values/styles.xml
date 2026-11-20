@@ -7,9 +7,4 @@
         <item name="android:navigationBarColor">@color/rig_background</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
-    <style name="RigLauncherTheme" parent="RigTheme">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:backgroundDimEnabled">false</item>
-    </style>
 </resources>
