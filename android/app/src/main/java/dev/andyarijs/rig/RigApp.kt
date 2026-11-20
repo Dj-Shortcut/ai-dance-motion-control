@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -35,6 +36,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import dev.andyarijs.rig.data.RigJob
 import dev.andyarijs.rig.data.RigQuote
+import dev.andyarijs.rig.data.ACCOUNT_DELETION_REQUEST
+import dev.andyarijs.rig.data.REPORT_DETAILS_LIMIT
+import dev.andyarijs.rig.data.RigContentReportReason
 import dev.andyarijs.rig.media.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -52,6 +56,7 @@ private val Border = Color(0xff2e383c)
 private val Ink = Color(0xffeef2f0)
 private val Muted = Color(0xffa9b3b0)
 private val Accent = Color(0xff8fe3b8)
+private const val PRIVACY_URL = "https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/privacy"
 private val scheme = darkColorScheme(primary = Accent, onPrimary = Color(0xff0d1f17), background = Background,
     surface = Surface, onSurface = Ink, onBackground = Ink, outline = Border, secondary = Accent)
 internal fun euro(cents: Long) = NumberFormat.getCurrencyInstance(Locale.forLanguageTag("nl-BE")).format(cents / 100.0)
@@ -66,6 +71,11 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     var options by remember { mutableStateOf(false) }
     var crop by remember { mutableStateOf<String?>(null) }
     var account by remember { mutableStateOf(false) }
+    val openPrivacy: () -> Unit = {
+        account = false
+        runCatching { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(PRIVACY_URL)) }
+            .onFailure(model::showError)
+    }
     var referenceTarget by remember { mutableStateOf("face") }
     val ownPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { model.select(it, "subject") } }
     val motionPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { model.select(it, "motion") } }
@@ -147,6 +157,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                             StartCard("01", "Jouw beeld", Modifier.weight(1f)); StartCard("02", "Beweging", Modifier.weight(1f)); StartCard("03", "Jouw video", Modifier.weight(1f))
                         }
                         Text("De prijs staat vast vóór je bevestigt.", color = Accent, fontSize = 14.sp)
+                        if (s.session == null) TextButton(onClick = openPrivacy,
+                            modifier = Modifier.testTag("rig-start-privacy")) { Text("Privacy", color = Muted, fontSize = 13.sp) }
                     }
                     1 -> {
                         Progress(1)
@@ -213,13 +225,28 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                             Text("Je video is klaar. Je volledige selectie kon niet worden gecontroleerd.", color = Muted)
                             TextButton(onClick = model::retryDraftLookup, enabled = !s.busy) { Text("Selectie opnieuw controleren") }
                         }
+                        if (job?.completed == true) TextButton(onClick = model::openVideoReport,
+                            enabled = !s.busy, modifier = Modifier.testTag("rig-report-video")) {
+                            Text("Inhoud melden", color = Muted, fontSize = 13.sp)
+                        }
                     }
                 }
                 Spacer(Modifier.height(20.dp))
             }
         }
         if (s.quote != null) QuoteDialog(s.quote!!, s.needsRegistration, s.busy, model::closeQuote, onRegister, onConfirm)
-        if (account) AlertDialog(onDismissRequest = { account = false }, title = { Text("Je RIG-account") }, text = { Text("Je RIG-tegoed en video’s horen bij hetzelfde account als op de website.") }, confirmButton = { TextButton(onClick = { account = false; model.logout() }) { Text("Afmelden") } }, dismissButton = { TextButton(onClick = { account = false }) { Text("Sluiten") } })
+        if (account) AlertDialog(onDismissRequest = { account = false }, title = { Text("Je RIG-account") }, text = {
+            Column {
+                Text("Je RIG-tegoed en video’s horen bij hetzelfde account als op de website.")
+                TextButton(onClick = openPrivacy, modifier = Modifier.testTag("rig-privacy")) { Text("Privacy") }
+                TextButton(onClick = { account = false; model.openAccountDeletionRequest() }, enabled = !s.busy,
+                    modifier = Modifier.testTag("rig-delete-account")) { Text("Account verwijderen") }
+            }
+        }, confirmButton = { TextButton(onClick = { account = false; model.logout() }) { Text("Afmelden") } }, dismissButton = { TextButton(onClick = { account = false }) { Text("Sluiten") } })
+        s.accountRequest?.let { request ->
+            AccountRequestDialog(request, model::closeAccountRequest, model::submitAccountRequest,
+                model::reportReason, model::reportDetails)
+        }
         if (options) ModalBottomSheet(onDismissRequest = { options = false }, containerColor = Surface) {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding()) {
                 Text("Meer opties", fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -250,6 +277,61 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 onDismiss = { crop = null }, onApply = { model.crop(target == "subject", it); crop = null })
         }
     }
+}
+
+@Composable private fun AccountRequestDialog(request: RigAccountRequestDialog, close: () -> Unit,
+    submit: () -> Unit, reason: (RigContentReportReason) -> Unit, details: (String) -> Unit) {
+    val deletion = request.type == ACCOUNT_DELETION_REQUEST
+    var reasonsExpanded by remember(request.requestId) { mutableStateOf(false) }
+    AlertDialog(onDismissRequest = { if (!request.busy) close() },
+        title = { Text(if (deletion) "Account verwijderen" else "Inhoud melden") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val receipt = request.receipt
+                if (receipt != null) {
+                    Text(receipt.acknowledgement, modifier = Modifier.testTag("rig-request-receipt"))
+                    Text("Ontvangstnummer: ${receipt.id}", style = MaterialTheme.typography.bodySmall, color = Muted)
+                    if (deletion) Text("Dit bevestigt de ontvangst van je verzoek. Je account is nog niet verwijderd.",
+                        style = MaterialTheme.typography.bodySmall)
+                } else {
+                    if (deletion) {
+                        Text("Vraag om je RIG-account en bijbehorende gegevens te verwijderen. Dit verstuurt een verzoek; je account wordt niet meteen verwijderd.")
+                        Text("Verplichte administratie kan bewaard blijven.", style = MaterialTheme.typography.bodySmall, color = Muted)
+                    } else {
+                        Text("Meld ongepaste of schadelijke inhoud in deze video.")
+                        Box {
+                            OutlinedButton(onClick = { reasonsExpanded = true }, enabled = !request.busy) {
+                                Text(request.reason?.label ?: "Kies een reden")
+                            }
+                            DropdownMenu(expanded = reasonsExpanded, onDismissRequest = { reasonsExpanded = false }) {
+                                RigContentReportReason.entries.forEach { item ->
+                                    DropdownMenuItem(text = { Text(item.label) }, onClick = { reason(item); reasonsExpanded = false })
+                                }
+                            }
+                        }
+                        OutlinedTextField(value = request.details, onValueChange = details, enabled = !request.busy,
+                            modifier = Modifier.fillMaxWidth().testTag("rig-report-details"),
+                            label = { Text("Extra uitleg (optioneel)") }, minLines = 2, maxLines = 3,
+                            supportingText = { Text("${request.details.codePointCount(0, request.details.length)}/$REPORT_DETAILS_LIMIT") })
+                    }
+                    if (request.busy) Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text("Je verzoek controleren…", style = MaterialTheme.typography.bodySmall)
+                    }
+                    request.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("rig-request-error")) }
+                }
+            }
+        },
+        confirmButton = {
+            if (request.receipt != null) TextButton(onClick = close, enabled = !request.busy) { Text("Sluiten") }
+            else TextButton(onClick = submit,
+                enabled = !request.busy && (deletion || request.reason != null)) {
+                Text(if (deletion) "Verwijderverzoek sturen" else "Melding versturen")
+            }
+        },
+        dismissButton = { if (request.receipt == null) TextButton(onClick = close, enabled = !request.busy) { Text("Annuleren") } })
 }
 
 internal fun preferredVideoEditQuality(qualities: List<String>): String? = when {

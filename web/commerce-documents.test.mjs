@@ -34,7 +34,7 @@ test('every public page works without an account and has restrictive document he
   const html=await response.text();
   assert.match(html,/^<!doctype html><html lang="nl">/);
   assert.match(html,/<meta name="viewport"/);
-  assert.match(html,path==='/privacy'?/Versie rig-privacy-2026-11-19-v1 · 19 november 2026/:/Versie rig-commerce-2026-11-09-v2/);
+  assert.match(html,path==='/privacy'?/Versie rig-privacy-2026-11-20-v1 · 20 november 2026/:/Versie rig-commerce-2026-11-09-v2/);
   for(const link of ['/',...paths])assert.ok(html.includes('href="'+link+'"'),path+' links '+link);
   assert.doesNotMatch(html,/<script|<iframe|<form|on(?:load|error|click)=/i);
   assert.match(html,/info@andyarijs\.dev/);
@@ -45,7 +45,27 @@ test('account visibility disclosure has its own version without changing purchas
  const privacy=await commerceDocument('/privacy').text(),terms=await commerceDocument('/voorwaarden').text();
  assert.match(privacy,/aanmeldplatform je naam en e-mailadres/);assert.match(privacy,/eerste bezoek/);assert.match(privacy,/laatst actief/);
  assert.match(privacy,/Alleen de beheerder/);assert.match(privacy,/Een sessiecontrole geldt niet als een nieuwe login/);
- assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/rig-privacy-2026-11-19-v1/);
+ assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/rig-privacy-2026-11-20-v1/);
+});
+
+test('Android privacy describes actual account storage, Play proof and manual data requests separately from website payments',async()=>{
+ const privacy=await commerceDocument('/privacy').text(),terms=await commerceDocument('/voorwaarden').text();
+ for(const text of ['Android Keystore','Google Play','aankoopbewijs','afgeschermde accountkoppeling','Mollie op de website','RIG ontvangt geen vingerafdruk','/account/verwijderen','bevoegde beheerder','geen automatische verwijdering'])assert.ok(privacy.includes(text),text);
+ assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/<h2>Android en Google Play/);
+});
+
+test('public account deletion resource explains scope and retention and starts only an authenticated explicit request',async()=>{
+ const response=commerceDocument('/account/verwijderen'),html=await response.text();
+ assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.equal(response.headers.get('content-security-policy'),"default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+ for(const text of ['Accountverwijdering · RIG','RIG-account','bijbehorende persoonsgegevens','Android-app van je telefoon hebt verwijderd','ChatGPT-account wordt niet verwijderd','Wettelijk noodzakelijke financiële','info@andyarijs.dev','/signin-with-chatgpt?return_to=%2Faccount%2Fverwijderen','/multiuser/account-deletion.js'])assert.ok(html.includes(text),text);
+ assert.match(html,/<form id="deletionForm" hidden>/);assert.match(html,/<input id="deletionConfirm" type="checkbox" disabled>/);assert.match(html,/<button id="deletionSubmit" type="submit" disabled>/);
+ assert.doesNotMatch(html,/<script(?! src="\/multiuser\/account-deletion\.js" defer>)/);
+ const app=createRigSitesApp({uiFiles:{},fetchImpl:async()=>{throw Error('Public resource must not contact a provider');}});
+ const env={RIG_SITES_PRODUCER_ORIGIN:'https://rig.test'};
+ assert.equal((await app.fetch(new Request('https://rig.test/account/verwijderen'),env)).status,200);
+ for(const suffix of ['?userId=someone','?fbclid=track','/'])assert.equal((await app.fetch(new Request('https://rig.test/account/verwijderen'+suffix),env)).status,404);
+ assert.equal((await app.fetch(new Request('https://rig.test/account/verwijderen',{method:'POST'}),env)).status,404);
 });
 
 test('Sites serves seller documents before authenticated account and provider work',async()=>{

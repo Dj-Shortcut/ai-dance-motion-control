@@ -4,7 +4,7 @@ import {ensureFixtures} from './generate-fixtures.mjs';
 // Explicit regression gates. Operator/deployment scripts are never executed.
 const groups={
  unit:[
-  'native-auth','native-login-origin-fixture','native-provider-balance',
+  'native-auth','native-login-origin-fixture','native-provider-balance','account-service-path','account-deletion-page-ui','owner-account-service-ui',
   'android-site-entry','android-store-boundary','google-play-payments-ui','google-play-purchases','google-play-financial','google-play-inspection','google-play-oauth-vault','google-play-push-rtdn','google-play-publisher','google-play-commerce-protocol','google-play-license-harness','google-play-accounting',
   'browser-preparation-capability-ui','screen-recording-crop-ui','browser-cleanup-preparation','browser-cleanup-aac','browser-cleanup-compositor','browser-cleanup-ui','browser-cleanup-client','overlay-cleanup-contract','workflow-client-contract','workflow-inputs','workflow-runtime',
   'invoice-pdf','invoice-mail','commerce-documents','commerce-ui','commerce-routes','owner-administration-operations','owner-administration-ui','owner-users-ui','owner-users-query','native-account-activity','profit-policy','owner-security-client','owner-finance-ui','mollie-checkout-url','edit-mode-ui','human-recast-ui','guided-flow-ui','mobile-generation-lifecycle-ui','large-media-ui','local-media-security-ui','owner-provider-ui','native-site-ui','multiuser-trim-ui','video-capability','ui-lifecycle','invitation-ui',
@@ -15,7 +15,7 @@ const groups={
   'credit-ledger-paging','webhook-bridge','webhook-worker','owner-fal-guard','closed-video-worker','sites-provider-relay','production-ingress'
  ],
  workerd:[
-  'native-auth-workerd',
+  'native-auth-workerd','account-service-requests-workerd',
   'google-play-credit-store-workerd','google-play-fulfillment-store-workerd','google-play-license-test-funding-workerd','google-play-license-harness-workerd','google-play-commerce-workerd','google-play-accounting-workerd',
   'provider-admission-workerd','customer-security-workerd','video-drafts-workerd','router-rate-limit-workerd',
   'production-workflow-stores-workerd','production-workflow-client-workerd','workflow-runner-workerd','workflow-budget-workerd','workflow-http-workerd','funding-admission-workerd','funding-coverage-workerd','owner-funding-coverage-workerd','funding-production-boundary-workerd','funding-compression-workerd',

@@ -4,7 +4,7 @@ import {createChatgptFilePreparer} from './rig-chatgpt-files.mjs';
 import {commerceDocument} from './commerce-documents.mjs';
 import {CLEANUP_STATIC_ASSETS,OCR_WORKER_POLICY} from './cleanup-static-assets.mjs';
 import {handleNativeSiteLogin} from './native-sites-login.mjs';
-import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesRequestBodyLimit,sitesPreparationWrite,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
+import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesAccountServicePath,sitesRequestBodyLimit,sitesPreparationWrite,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
@@ -151,6 +151,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    const googleConfirm=req.method==='POST'&&url.pathname==='/api/payments/google-play/confirm'&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
    if(!production&&(sitesFinancePath(url.pathname+url.search,req.method)||sitesAdministrationPath(url.pathname+url.search,req.method)||sitesOwnerSecurityPath(url.pathname+url.search,req.method)||sitesCustomerSecurityPath(url.pathname+url.search,req.method)))return reject(404);
+   if(!production&&sitesAccountServicePath(url.pathname+url.search,req.method))return reject(404);
    if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead&&!googleConfig&&!googleConfirm)return reject(404);
    if(!paymentRead&&!googleConfig&&!googleConfirm&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
    let ctx;try{ctx=await context(req,env)}catch{return json({error:'RIG is tijdelijk niet beschikbaar.'},503)}

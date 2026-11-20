@@ -22,6 +22,8 @@ import {handleOwnerUsers,handleAccountActivity} from './owner-users.mjs';
 import {createGooglePlayCommerce,GOOGLE_PLAY_RTND_PATH} from './google-play-commerce.mjs';
 import {handleGooglePlayAccounting} from './google-play-accounting.mjs';
 import {handleNativeApi} from './native-api.mjs';
+import {handleAccountServiceRequest,handleOwnerAccountServiceRequests} from './account-service-requests.mjs';
+import {sitesAccountServicePath,ACCOUNT_SERVICE_OWNER_PATH} from './account-service-path.mjs';
 import {issueNativeAuthorization} from './native-auth.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
@@ -73,6 +75,18 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     authenticated=await authenticateProductionSites(req,env,{allowCustomerSecurity:true});
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
     return handleCustomerSecurity(authenticated.request,env,{userId:authenticated.userId});
+   }
+   if(u.pathname===ACCOUNT_SERVICE_OWNER_PATH){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleOwnerAccountServiceRequests(authenticated.request,env,{userId:authenticated.userId});
+   }
+   if(sitesAccountServicePath(u.pathname+u.search,req.method)){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowAccountService:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleAccountServiceRequest(authenticated.request,env,{userId:authenticated.userId});
    }
    if(u.pathname.startsWith('/api/owner/accounting')||u.pathname.startsWith('/api/owner/recovery')||u.pathname==='/api/owner/support'||u.pathname.startsWith('/api/owner/invoices')){
     if(!await validateProductionTenant(env))return unavailable();

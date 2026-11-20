@@ -10,7 +10,7 @@
  const recordTypes={'invoice':'Factuur','accounting-entry':'Boekingsreferentie'},delivery={'prepared':'Referentie klaargezet','recorded-in-accountable':'Zelf verwerkt in Accountable','peppol-sent-manually':'Zelf via Peppol verzonden'};
  const caseStatuses={'investigating':'In onderzoek','waiting-provider':'Wacht op aanbieder','reviewed':'Onderzocht, uitkomst apart beoordelen'};
  const states={creating:'Wordt aangemaakt',open:'Nog niet betaald',paid:'Betaald',expired:'Verlopen',failed:'Mislukt',unknown:'Onbekende uitkomst',credit_pending_review:'Tegoed in onderzoek',reversal_review:'Terugboeking in onderzoek',submitting:'Wordt verstuurd',queued:'In verwerking'};
- let disposed=false,root=null,onChanged=()=>{},accounting=null,recovery=null,users=null;
+ let disposed=false,root=null,onChanged=()=>{},accounting=null,recovery=null,users=null,services=null;
  const urls=new Set(),timers=new Set();
  const current=()=>!disposed&&window.rigRequest===binding.request&&window.rigSessionActive===binding.active&&binding.active()===true;
  const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(cls)node.className=cls;return node;};
@@ -20,10 +20,10 @@
  function onPageHide(event){if(event.persisted!==true||!current())dispose();}
  function dispose(){
   if(disposed)return;disposed=true;
-  for(const state of [accounting,recovery,users])if(state){state.loadId++;state.actionId++;}
+  for(const state of [accounting,recovery,users,services])if(state){state.loadId++;state.actionId++;}
   if(accounting?.verifying||recovery?.verifying)window.rigOwnerVerification?.cancel?.();
   for(const url of urls)URL.revokeObjectURL(url);urls.clear();for(const timer of timers)clearTimeout(timer);timers.clear();
-  root?.replaceChildren();root=null;accounting=null;recovery=null;users=null;
+  root?.replaceChildren();root=null;accounting=null;recovery=null;users=null;services=null;
   window.removeEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.removeEventListener('click',dispose);
  }
  function check(){if(!current()){dispose();throw Error('Je aanmelding is gewijzigd.');}}
@@ -205,11 +205,48 @@
   state.previous.addEventListener('click',()=>{if(state.loading||!state.previousCursors.length)return;void loadUsers({query:state.query,cursor:state.previousCursors.at(-1),previousCursors:state.previousCursors.slice(0,-1),page:state.page-1});});
   state.next.addEventListener('click',()=>{if(state.loading||!state.nextCursor)return;void loadUsers({query:state.query,cursor:state.nextCursor,previousCursors:[...state.previousCursors,state.cursor],page:state.page+1});});
  }
+ const serviceReasons={sexual:'Seksuele inhoud',violence:'Geweld',hate:'Haat of discriminatie',unsafe:'Onveilige inhoud',other:'Andere inhoudsmelding'};
+ const serviceCursor=value=>value===null||typeof value==='string'&&/^\d{1,16}\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+ function validServiceRequest(item){
+  const common=item&&UUID.test(item.id||'')&&['account-deletion','video-report'].includes(item.type)&&item.status==='pending'&&item.actionPerformed===false&&typeof item.replayed==='boolean'&&userTimestamp(item.createdAt)&&typeof item.acknowledgement==='string'&&item.acknowledgement.length>0&&item.acknowledgement.length<=500&&/^u-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(item.userId||'')&&(item.displayName===null||typeof item.displayName==='string'&&item.displayName.length<=120)&&(item.email===null||typeof item.email==='string'&&item.email.length<=254)&&typeof item.details==='string'&&[...item.details].length<=1000;
+  if(!common)return false;
+  return item.type==='account-deletion'?item.reason===null&&!item.jobId:Object.hasOwn(serviceReasons,item.reason)&&UUID.test(item.jobId||'');
+ }
+ function serviceControls(state){state.refresh.disabled=state.loading;state.previous.disabled=state.loading||!state.previousCursors.length;state.next.disabled=state.loading||!state.nextCursor;}
+ async function loadServices({cursor=null,previousCursors=[]}={}){
+  const state=services;if(!current()||!state||state.loading||!serviceCursor(cursor))return;const token=++state.loadId;state.loading=true;serviceControls(state);message(state,'Verzoeken ophalen…');
+  try{
+   const data=await request('/api/owner/account-service-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));
+   if(!current()||services!==state||token!==state.loadId)return;
+   if(data?.limit!==50||!Array.isArray(data.requests)||data.requests.length>50||!data.requests.every(validServiceRequest)||!serviceCursor(data.nextCursor)||data.nextCursor!==null&&data.nextCursor===cursor)throw Error('Het verzoekenoverzicht kon niet worden gecontroleerd.');
+   state.loaded=true;state.cursor=cursor;state.previousCursors=previousCursors;state.nextCursor=data.nextCursor;state.output.replaceChildren();
+   if(!data.requests.length)state.output.append(el('p','Geen open account- of videomeldingen op deze pagina.','finance-empty'));
+   for(const item of data.requests){
+    const article=el('article',undefined,'finance-section');article.dataset.accountServiceRequest=item.id;
+    article.append(el('h3',item.type==='account-deletion'?'Accountverwijdering aangevraagd':'Video gemeld'),el('p','Ontvangen: '+userDate(item.createdAt)),el('p','Referentie: '+item.id),el('strong',item.displayName||'Naam nog niet gedeeld'));
+    if(item.email)article.append(el('p',item.email));article.append(el('small',item.userId));
+    if(item.jobId)article.append(el('p','Video: '+item.jobId),el('p',serviceReasons[item.reason]));
+    if(item.details)article.append(el('p',item.details));
+    article.append(el('p',item.acknowledgement),el('p','Handmatige opvolging nodig. Dit verzoek heeft nog geen gegevens verwijderd, terugbetaling uitgevoerd of account afgesloten.','finance-policy-note'));
+    state.output.append(article);
+   }
+   message(state,'Bijgewerkt. De oudste open verzoeken staan eerst. Controleer identiteit, lopende opdrachten en noodzakelijke bewaarplichten vóór de afhandeling.');
+  }catch(error){if(current()&&services===state&&token===state.loadId)message(state,error.message||'Verzoeken ophalen is niet gelukt.',true);}
+  finally{if(current()&&services===state&&token===state.loadId){state.loading=false;serviceControls(state);}}
+ }
+ function mountServices(container){
+  const state=services=panel(container,'Account- en videomeldingen');state.details.id='ownerAccountServices';state.cursor=null;state.previousCursors=[];state.nextCursor=null;
+  state.previous=el('button','Vorige verzoeken');state.next=el('button','Volgende verzoeken');state.previous.type=state.next.type='button';state.previous.dataset.servicePrevious='true';state.next.dataset.serviceNext='true';state.refresh.dataset.serviceRefresh='true';state.bar.append(state.previous,state.next);serviceControls(state);
+  state.details.addEventListener('toggle',()=>{if(current()&&services===state&&state.details.open&&!state.loaded&&!state.loading)void loadServices();});state.refresh.addEventListener('click',()=>void loadServices());
+  state.previous.addEventListener('click',()=>{if(!state.loading&&state.previousCursors.length)void loadServices({cursor:state.previousCursors.at(-1),previousCursors:state.previousCursors.slice(0,-1)});});
+  state.next.addEventListener('click',()=>{if(!state.loading&&state.nextCursor)void loadServices({cursor:state.nextCursor,previousCursors:[...state.previousCursors,state.cursor]});});
+ }
  function mount(container,options={}){
   if(!current()){dispose();return;}if(root===container)return;if(root)root.replaceChildren();root=container;onChanged=typeof options.onChanged==='function'?options.onChanged:()=>{};container.replaceChildren();
   accounting=panel(container,'Administratie voor Accountable');accounting.month=field(accounting.bar,'Maand administratie (leeg = alle)','ownerAccountingMonth','month');accounting.details.addEventListener('toggle',()=>{if(current()&&accounting?.details.open&&!accounting.loaded&&!accounting.loading)void loadAccounting();});accounting.refresh.addEventListener('click',()=>void loadAccounting());accounting.month.addEventListener('change',()=>{if(accounting.details.open)void loadAccounting();});
   recovery=panel(container,'Probleemgevallen en klantvragen');recovery.details.addEventListener('toggle',()=>{if(current()&&recovery?.details.open&&!recovery.loaded&&!recovery.loading)void loadRecovery();});recovery.refresh.addEventListener('click',()=>void loadRecovery());
   mountUsers(container);
+  mountServices(container);
  }
  window.addEventListener('pagehide',onPageHide);document.getElementById('authLogout')?.addEventListener('click',dispose);window.rigOwnerAdministration={mount,dispose};
 })();

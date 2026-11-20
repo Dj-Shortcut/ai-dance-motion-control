@@ -1,5 +1,7 @@
 import {sitesUsersPath} from './owner-users-query.mjs';
+import {sitesAccountServicePath,ownerAccountServicePath} from './account-service-path.mjs';
 export {sitesUsersPath} from './owner-users-query.mjs';
+export {sitesAccountServicePath} from './account-service-path.mjs';
 // Shared server-only protocol. The producer must derive `subject` exclusively
 // from Sites-authenticated request context, never a browser/tool argument.
 export const SITES_PROTOCOL='rig-sites-bridge-v1';
@@ -52,6 +54,7 @@ export function sitesFinancePath(path,method){
 }
 export function sitesAdministrationPath(path,method){
  if(typeof path!=='string')return false;
+ if(ownerAccountServicePath(path,method))return true;
  if(sitesUsersPath(path,method))return true;
  if(method==='GET'&&/^\/api\/owner\/accounting\/(?:google-play|export\/google-play\.csv)(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path))return true;
  if(method==='GET')return /^\/api\/owner\/invoices(?:\/export\.zip)?(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path)||/^\/api\/owner\/invoices\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/pdf$/.test(path)||/^\/api\/owner\/accounting(?:\/export\/(?:purchases|credit-events|costs|estimates)\.csv)?(?:\?month=20\d{2}-(?:0[1-9]|1[0-2]))?$/.test(path)||['/api/owner/recovery','/api/owner/support'].includes(path);
@@ -77,6 +80,7 @@ export function sitesPath(path,method){
  if(sitesAdministrationPath(path,method))return true;
  if(sitesOwnerSecurityPath(path,method))return true;
  if(sitesCustomerSecurityPath(path,method))return true;
+ if(sitesAccountServicePath(path,method))return true;
  if(sitesWorkflowPath(path,method))return true;
  if(sitesVideoDraftPath(path,method))return true;
  if(sitesInternalAccountActivityPath(path,method))return true;

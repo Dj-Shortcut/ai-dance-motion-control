@@ -14,6 +14,7 @@ const browser=await build({entryPoints:[join(root,'frontend/multiuser/native-sit
 const googlePlay=await build({entryPoints:[join(root,'frontend/multiuser/google-play-payments.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const security=await build({entryPoints:[join(root,'frontend/multiuser/owner-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const customerSecurity=await build({entryPoints:[join(root,'frontend/multiuser/customer-security-client.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
+const accountDeletion=await build({entryPoints:[join(root,'frontend/multiuser/account-deletion-page.mjs')],bundle:true,format:'iife',platform:'browser',target:'es2022',write:false,logLevel:'silent'});
 const cleanup=await build({entryPoints:[join(root,'frontend/multiuser/cleanup-client.mjs')],bundle:true,format:'esm',platform:'browser',target:'es2022',write:false,logLevel:'silent',legalComments:'eof'});
 const names=['index.html','style.css','media.js','app.js','flow.js','payments.js','generation-ui.js','owner-administration.js','finance.js','screen-recording-crop.mjs','cleanup-contract.mjs','cleanup-status.css','cleanup-overlay-editor.css'];
 const files=Object.fromEntries(await Promise.all(names.map(async name=>[`/multiuser/${name}`,await readFile(join(root,'frontend/multiuser',name),'utf8')])));
@@ -59,6 +60,7 @@ files['/multiuser/auth-bundle.js']=browser.outputFiles[0].text;
 files['/multiuser/google-play-payments.js']=googlePlay.outputFiles[0].text;
 files['/multiuser/owner-security.js']=security.outputFiles[0].text;
 files['/multiuser/customer-security.js']=customerSecurity.outputFiles[0].text;
+files['/multiuser/account-deletion.js']=accountDeletion.outputFiles[0].text;
 files['/multiuser/cleanup-client.js']=cleanup.outputFiles[0].text;
 await mkdir(join(output,'dist/server'),{recursive:true});
 await mkdir(join(output,'.openai'),{recursive:true});

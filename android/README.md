@@ -1,7 +1,7 @@
 # RIG voor Android
 
 Zelfstandige Android-app in Kotlin/Jetpack Compose, pakket `dev.andyarijs.rig`,
-versie `0.2.3` (code `5`), Android 9 of nieuwer. De schermen, bestandskeuze,
+versie `0.2.4` (code `6`), Android 9 of nieuwer. De schermen, bestandskeuze,
 fragmentkeuze, videoweergave, uitsnijden en prijsbevestiging zijn native.
 Er is geen WebView of Trusted Web Activity in de actieve app.
 iOS is een latere client van dezelfde servercontracten.
@@ -20,7 +20,7 @@ externe ondertekening ongetekend en niet geschikt als bewijs van Play-publicatie
 Sleutels en lokale SDK-instellingen horen buiten Git. De oude vendored
 browser-helpermodule is historische bron en wordt niet meer gebouwd of gebruikt.
 
-`0.2.3` is een kandidaat, nog niet op de eigenaarstelefoon geïnstalleerd. De
+`0.2.4` is een kandidaat, nog niet op de eigenaarstelefoon geïnstalleerd. De
 voortgangsweergave bewaart nu de toestand van haar eigen renderbeurt: een oude
 tekencallback leest geen inmiddels gewiste voortgang uit de volgende toestand.
 De NullPointerException is vóór de correctie gereproduceerd in de gecompileerde
@@ -32,14 +32,17 @@ niet dat dit de enige oorzaak van de gemelde Redmi-crash was.
 Een gewone update over de bestaande telefooninstallatie vereist hetzelfde
 ondertekeningscertificaat. De oorspronkelijke ontwikkelsleutel is momenteel
 niet teruggevonden; gebruik daarom geen nieuw gegenereerde debug-APK als
-telefoonupdate. Een release zonder debugfuncties is gebouwd maar ongetekend.
-Bewaar een herstelde of toekomstige distributiesleutel blijvend buiten tijdelijke
-mappen en Git, met een private back-up. Controleer het certificaat vóór overdracht.
+telefoonupdate. Er is inmiddels een nieuwe blijvende uploadsleutel met een
+geverifieerde private kopie op dezelfde Mac. Deze sleutel en de wachtwoorden
+staan buiten Git en tijdelijke mappen. Google Play beheert een afzonderlijke
+app-ondertekeningssleutel. De eigenaar heeft de eenmalige herinstallatie
+goedgekeurd; er is nog geen telefoon verwijderd of vervangen.
 
 ## Aanmelden en beveiliging
 
-Alleen de externe ChatGPT/Sites-aanmelding opent een browser. Daarna komt de
-gebruiker terug in de native app. Een eenmalige code, PKCE en een controle van de
+De externe ChatGPT/Sites-aanmelding en de openbare privacyinformatie openen een
+browser. Na de aanmelding komt de gebruiker terug in de native app. Een eenmalige
+code, PKCE en een controle van de
 bewaarde state verbinden de aanmelding met precies dat toestelverzoek. De app
 verzamelt geen ChatGPT-wachtwoorden en leest geen browsercookies.
 
@@ -99,11 +102,28 @@ Nieuwe Google-aankopen blijven uit totdat Console, producten, prijzen,
 servercredentials en echte Play-tests zijn afgerond. Een sideload-APK is geen
 werkende Play-winkel. Zie de afzonderlijke release- en betalingsdocumenten.
 
+## Accountverzoeken en videomeldingen
+
+De privacyinformatie is bereikbaar vóór aanmelden en vanuit Account. Een
+aangemelde gebruiker kan in de app accountverwijdering aanvragen en een eigen
+afgeronde video melden. Alleen een echt serverontvangstbewijs bevestigt de
+aanvraag. Bij een onzekere ontvangst wordt dezelfde aanvraagcode hergebruikt;
+een accountwissel maakt een oud antwoord ongeldig. Deze acties veranderen geen
+tegoed en starten geen generatie. De beheerder behandelt verzoeken in de
+afzonderlijke, alleen-lezen wachtrij van Financiën. De openbare pagina
+`/account/verwijderen` beschrijft ook de gevolgen en wettelijke bewaring.
+
+De bron vereist migratie `0020_account_service_requests.sql` en een bijpassende
+backend/Sites-publicatie. Zie `docs/account-service-requests.md`. Een aanvraag
+voert zelf geen onomkeerbare verwijdering uit en is geen bewijs van afhandeling.
+
 ## Bewijsgrenzen
 
 Unit- en providerfixtures bewijzen geen betaalde Fal-uitvoer of echte Google-
 aankoop. Test apart: native emulator, eigen telefoon, echte aanmelding/terugkeer,
 passkey, schermvergrendeling, prijs, betaalde generatie en proefvervolg. De
 Android-instrumentatietests kunnen de eigen `ik.mp4` lokaal verwerken zonder
-netwerk of Fal-kosten. Accountverwijdering, AI-resultaatmeldingen, reviewer access
-en Play-formulieren blijven releasepoorten vóór een publieke winkelrelease.
+netwerk of Fal-kosten. Publicatie en echte opvolging van accountverzoeken en
+videomeldingen, reviewer access en Play-formulieren blijven releasepoorten vóór
+een publieke winkelrelease. De bestaande `0.2.3`-bundel staat uitsluitend als
+concept in de interne Play-track; die upload bewijst geen beschikbare installatie.

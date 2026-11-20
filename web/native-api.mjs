@@ -1,6 +1,6 @@
 // A deliberately small native transport for the existing private handlers.
 // Authentication and server-side re-signing never expose the Sites bridge key.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesHmac,sitesDigest,sitesRequestBodyLimit,sitesPreparationWrite,sitesGooglePlayPath,sitesCustomerSecurityPath,sitesVideoDraftPath} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesHmac,sitesDigest,sitesRequestBodyLimit,sitesPreparationWrite,sitesGooglePlayPath,sitesCustomerSecurityPath,sitesVideoDraftPath,sitesAccountServicePath} from './sites-bridge-protocol.mjs';
 import {authenticateNativeSession,exchangeNativeAuthorization,revokeNativeSession} from './native-auth.mjs';
 import {nativeTransportEnvironment,configuredAndroidOrigin} from './native-passkey.mjs';
 import {handleNativeProviderBalance} from './native-provider-balance.mjs';
@@ -14,7 +14,7 @@ export function nativeApiPath(path,method){
  if(typeof path!=='string'||path.length>1200||!path.startsWith(PREFIX+'/')||/[#\\\r\n]/.test(path)||!['GET','POST'].includes(method))return null;
  const mapped='/api'+path.slice(PREFIX.length);let u;try{u=new URL(mapped,'https://rig.invalid');}catch{return null;}
  if(u.origin!=='https://rig.invalid'||u.pathname+u.search!==mapped)return null;
- if(sitesGooglePlayPath(mapped,method)||sitesCustomerSecurityPath(mapped,method)||sitesVideoDraftPath(mapped,method))return mapped;
+ if(sitesGooglePlayPath(mapped,method)||sitesCustomerSecurityPath(mapped,method)||sitesVideoDraftPath(mapped,method)||sitesAccountServicePath(mapped,method))return mapped;
  if(method==='GET'&&mapped==='/api/owner/security'||method==='POST'&&mapped==='/api/owner/security/verification/options')return mapped;
  if(method==='GET'){
   if(['/api/session','/api/video-config','/api/generations/recent','/api/provider-balance'].includes(mapped))return mapped;

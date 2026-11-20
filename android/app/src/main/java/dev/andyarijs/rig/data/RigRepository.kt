@@ -139,6 +139,32 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
         return file
     }
 
+    suspend fun accountDeletionRequests(session: NativeAuthSession = requireSession()): List<RigAccountRequestReceipt> {
+        val response = api.get("/account-deletion-requests", session)
+        api.checkSession(session)
+        val requests = response.getJSONArray("requests")
+        require(response.safeInteger("limit") == 20L && requests.length() <= 20)
+        return (0 until requests.length()).map {
+            RigAccountRequestReceipt.fromJson(requests.getJSONObject(it), ACCOUNT_DELETION_REQUEST)
+        }
+    }
+
+    suspend fun requestAccountDeletion(requestId: String, session: NativeAuthSession = requireSession()): RigAccountRequestReceipt {
+        val body = deletionRequestBody(requestId)
+        val response = api.post("/account-deletion-requests", body, session)
+        api.checkSession(session)
+        return RigAccountRequestReceipt.fromJson(response, ACCOUNT_DELETION_REQUEST)
+    }
+
+    suspend fun reportVideo(jobId: String, requestId: String, reason: RigContentReportReason, details: String,
+        session: NativeAuthSession = requireSession()): RigAccountRequestReceipt {
+        require(RIG_REQUEST_ID.matches(jobId)) { "Deze video kan niet worden gemeld." }
+        val body = videoReportBody(requestId, reason, details)
+        val response = api.post("/generations/$jobId/reports", body, session)
+        api.checkSession(session)
+        return RigAccountRequestReceipt.fromJson(response, VIDEO_REPORT_REQUEST, jobId)
+    }
+
     suspend fun logout() {
         try { if (signedIn()) api.post("/auth/logout") } finally {
             store.clearSession()

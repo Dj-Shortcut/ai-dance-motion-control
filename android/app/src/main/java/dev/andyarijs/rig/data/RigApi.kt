@@ -36,10 +36,13 @@ class RigApi internal constructor(private val store: RigStore, client: OkHttpCli
             if (path.length !in 1..500 || path.any { it == '\\' || it == '#' || it == '%' || it == '\r' || it == '\n' } || path.contains("..")) return false
             val plain = path.substringBefore('?')
             val query = path.substringAfter('?', "")
+            if ('?' in path && query.isEmpty()) return false
             if (query.isNotEmpty() && !(plain == "/payments/google-play/status" && Regex("^intentId=[a-f0-9-]{36}$").matches(query))) return false
             return plain in setOf("/session", "/video-config", "/provider-balance", "/assets", "/generation-quotes", "/generations", "/generations/recent", "/video-drafts", "/auth/exchange", "/auth/logout", "/security", "/security/registration/options", "/security/registration/verify", "/security/verification/options", "/owner/security", "/owner/security/verification/options", "/payments/google-play/config", "/payments/google-play/intents", "/payments/google-play/confirm", "/payments/google-play/status") ||
                 Regex("^/generations/[A-Za-z0-9_-]{1,100}(/video|/draft)?$").matches(plain) ||
                 Regex("^/generation-intents/[A-Za-z0-9_-]{1,100}/reconcile$").matches(plain) ||
+                plain == "/account-deletion-requests" ||
+                Regex("^/generations/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/reports$").matches(plain) ||
                 Regex("^/video-drafts/[A-Za-z0-9_-]{1,100}/assets/[A-Za-z0-9_-]{1,100}$").matches(plain)
         }
     }
@@ -50,6 +53,8 @@ class RigApi internal constructor(private val store: RigStore, client: OkHttpCli
 
     private suspend fun json(method: String, path: String, data: JSONObject? = null, authenticated: Boolean = true, session: NativeAuthSession? = null): JSONObject = withContext(Dispatchers.IO) {
         require(path != "/provider-balance" || method == "GET") { "Het Fal-saldo kan alleen worden gelezen." }
+        require(path != "/account-deletion-requests" || method in setOf("GET", "POST"))
+        require(!path.endsWith("/reports") || method == "POST") { "Een videomelding kan alleen worden verstuurd." }
         val body = data?.toString()?.toRequestBody("application/json; charset=utf-8".toMediaType())?.let {
             if (path == "/auth/exchange") OneShotBody(it) else it
         }

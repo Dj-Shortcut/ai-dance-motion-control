@@ -17,7 +17,20 @@ import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 import kotlin.math.min
+
+data class RigAccountRequestDialog(
+    val type: String,
+    val accountUserId: String,
+    val requestId: String = UUID.randomUUID().toString(),
+    val jobId: String? = null,
+    val reason: RigContentReportReason? = null,
+    val details: String = "",
+    val busy: Boolean = false,
+    val error: String? = null,
+    val receipt: RigAccountRequestReceipt? = null,
+)
 
 data class RigScreenState(
     val step: Int = 0, val session: RigSession? = null, val config: RigVideoConfig? = null,
@@ -34,6 +47,7 @@ data class RigScreenState(
     val draftLookupFailed: Boolean = false,
     val history: List<RigJob> = emptyList(), val showHistory: Boolean = false,
     val showCredits: Boolean = false, val needsRegistration: Boolean = false,
+    val accountRequest: RigAccountRequestDialog? = null,
 )
 
 class RigViewModel internal constructor(app: Application, val repository: RigRepository) : AndroidViewModel(app) {
@@ -52,6 +66,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     private var resuming: Job? = null
     private var foreground = true
     private var balancePolling: Job? = null
+    private var accountRequestJob: Job? = null
 
     init {
         media.pruneCache()
@@ -102,6 +117,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         poll?.cancel()
         resuming?.cancel()
         balancePolling?.cancel()
+        accountRequestJob?.cancel()
         fullPrepared = null
         restoredFullRequest = null
         activeUser = null
@@ -117,6 +133,98 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         }
     }
     fun clearError() { mutable.update { it.copy(error = null) } }
+
+    fun openAccountDeletionRequest() {
+        val dialog = openAccountRequest(ACCOUNT_DELETION_REQUEST) ?: return
+        accountRequestWork(dialog) { session -> repository.accountDeletionRequests(session).firstOrNull() }
+    }
+
+    fun openVideoReport() {
+        val job = mutable.value.job?.takeIf { it.completed && RIG_REQUEST_ID.matches(it.id) } ?: return
+        openAccountRequest(VIDEO_REPORT_REQUEST, job.id)
+    }
+
+    private fun openAccountRequest(type: String, jobId: String? = null): RigAccountRequestDialog? {
+        if (mutable.value.accountRequest?.busy == true) return null
+        return try {
+            val session = repository.requireSession()
+            check(session.userId == mutable.value.session?.userId) { "Je account is gewijzigd. Open het verzoek opnieuw." }
+            RigAccountRequestDialog(type, session.userId, jobId = jobId).also { dialog ->
+                accountRequestJob?.cancel()
+                mutable.update { it.copy(accountRequest = dialog) }
+            }
+        } catch (error: Exception) { showError(error); null }
+    }
+
+    fun closeAccountRequest() {
+        if (mutable.value.accountRequest?.busy != true) mutable.update { it.copy(accountRequest = null) }
+    }
+
+    fun reportReason(reason: RigContentReportReason) = editVideoReport { it.copy(reason = reason) }
+
+    fun reportDetails(value: String) {
+        val text = value.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+        val end = text.offsetByCodePoints(0, minOf(REPORT_DETAILS_LIMIT, text.codePointCount(0, text.length)))
+        editVideoReport { it.copy(details = text.substring(0, end)) }
+    }
+
+    private fun editVideoReport(edit: (RigAccountRequestDialog) -> RigAccountRequestDialog) {
+        mutable.update { state ->
+            val current = state.accountRequest ?: return@update state
+            if (current.type != VIDEO_REPORT_REQUEST || current.busy || current.receipt != null) return@update state
+            val next = edit(current)
+            if (next.reason == current.reason && next.details == current.details) state
+            else state.copy(accountRequest = next.copy(requestId = UUID.randomUUID().toString(), error = null))
+        }
+    }
+
+    fun submitAccountRequest() {
+        val dialog = mutable.value.accountRequest ?: return
+        if (dialog.busy || dialog.receipt != null) return
+        if (dialog.type == VIDEO_REPORT_REQUEST && dialog.reason == null) {
+            mutable.update { it.copy(accountRequest = dialog.copy(error = "Kies eerst een reden.")) }
+            return
+        }
+        accountRequestWork(dialog) { session ->
+            if (dialog.type == ACCOUNT_DELETION_REQUEST) repository.requestAccountDeletion(dialog.requestId, session)
+            else repository.reportVideo(requireNotNull(dialog.jobId), dialog.requestId, requireNotNull(dialog.reason), dialog.details, session)
+        }
+    }
+
+    private fun accountRequestWork(dialog: RigAccountRequestDialog,
+        action: suspend (NativeAuthSession) -> RigAccountRequestReceipt?) {
+        if (mutable.value.accountRequest?.requestId != dialog.requestId || mutable.value.accountRequest?.busy == true) return
+        fun changeDialog(update: (RigAccountRequestDialog) -> RigAccountRequestDialog) {
+            mutable.update { state ->
+                val current = state.accountRequest
+                if (current?.requestId == dialog.requestId && state.session?.userId == dialog.accountUserId)
+                    state.copy(accountRequest = update(current)) else state
+            }
+        }
+        val session = try {
+            repository.requireSession().also { check(it.userId == dialog.accountUserId) { "Je account is gewijzigd. Open het verzoek opnieuw." } }
+        } catch (error: Exception) {
+            if (error is RigApiException && error.status == 401) showError(error)
+            else changeDialog { it.copy(error = "Je account kon niet worden gecontroleerd. Open het verzoek opnieuw.") }
+            return
+        }
+        changeDialog { it.copy(busy = true, error = null) }
+        accountRequestJob = viewModelScope.launch {
+            try {
+                val receipt = action(session)
+                repository.api.checkSession(session)
+                changeDialog { it.copy(receipt = receipt) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (error is RigApiException && error.status == 401) showError(error)
+                else changeDialog { it.copy(error = when (error) {
+                    is RigApiException, is RigSessionReplacedException, is RigStorageUnavailable -> error.message
+                    is IllegalArgumentException -> error.message?.takeIf { message -> message.startsWith("Gebruik maximaal") }
+                    else -> null
+                } ?: "Je verzoek kon niet worden bevestigd. Probeer het opnieuw.") }
+            } finally { changeDialog { it.copy(busy = false) } }
+        }
+    }
     private fun change(mediaChanged: Boolean = true, block: (RigScreenState) -> RigScreenState) {
         val current = mutable.value
         if (current.busy) return
@@ -410,6 +518,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         val user = activeUser ?: mutable.value.session?.userId
         poll?.cancel()
         resuming?.cancel()
+        accountRequestJob?.cancel()
         try {
             repository.logout()
         } finally {
