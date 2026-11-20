@@ -53,6 +53,10 @@ test('redirects, errors, non-JSON and oversized responses cannot produce proof o
  for(const response of responses){const f=await purchaseFixture({response});await assert.rejects(f.verifier.verify(f.input),e=>!String(e).includes(token));}
  const f=await purchaseFixture({networkError:true});await assert.rejects(f.verifier.verify(f.input),e=>e.code==='play_provider'&&!String(e).includes(token));
 });
+test('definitive token rejections are distinct from retryable provider failures',async()=>{
+ for(const status of [400,404,410,422]){const f=await purchaseFixture({response:()=>Response.json({error:'rejected'},{status})});await assert.rejects(f.verifier.verify(f.input),{code:'play_rejected'});}
+ for(const status of [401,403,408,429,500]){const f=await purchaseFixture({response:()=>Response.json({error:'unavailable'},{status})});await assert.rejects(f.verifier.verify(f.input),{code:'play_provider'});}
+});
 test('consume requires exact durable entitlement and runs at most once per proof',async()=>{
  const f=await purchaseFixture(),proof=await f.verifier.verify(f.input),r=proof.receipt;
  const entitlement={state:'credited',tokenHash:r.tokenHash,userId:USER,creditsCents:500,eventId:'google-play:'+r.tokenHash};

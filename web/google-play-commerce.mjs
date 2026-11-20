@@ -18,7 +18,7 @@ export const GOOGLE_PLAY_RTND_PATH=BASE+'/rtdn';
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'private, no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const unavailable=()=>json({code:'google_play_not_configured',error:'Aankopen via Google Play zijn nog niet beschikbaar.'},503);
 const sha=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),v=>v.toString(16).padStart(2,'0')).join('');
-const invalidCodes=new Set(['play_input','play_account','play_environment','play_product','play_state']);
+const invalidCodes=new Set(['play_input','play_account','play_environment','play_product','play_state','play_rejected']);
 async function readJSON(req,max=8192){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')||''))throw Error('body');
  const length=req.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>max))throw Error('body');
@@ -156,7 +156,7 @@ export function createGooglePlayCommerce({network=fetch,clock=Date.now,tenant=va
   const proof=await c.verifier.inspectForNotification({purchaseToken:raw,...(row.product_id?{productId:row.product_id}:{})}),p=notificationPurchaseForGooglePlayProof(proof);
   const intent=await c.store.findIntentForProvider({accountId:p.accountId,productId:p.productId,purchasedAt:p.purchasedAt??null,tokenHash:row.token_hash});
   if(!intent){await refundOrphan(c,row,raw);return;}
-  await c.store.queueVerification({userId:intent.user_id,intentId:intent.id,productId:p.productId,tokenHash:row.token_hash,sealedToken:row.sealed_token,now:clock()});
+  await c.store.queueVerification({userId:intent.user_id,intentId:intent.id,productId:p.productId,tokenHash:row.token_hash,sealedToken:row.sealed_token,notificationProof:proof,now:clock()});
   const result=await finishReceipt(c,{intentId:intent.id,userId:intent.user_id,productId:p.productId,purchaseToken:raw,tokenHash:row.token_hash,sealedToken:row.sealed_token});
   if(!result.providerChecked)throw Error('provider_unavailable');
   await c.store.finishNotification({messageId:row.message_id,now:clock()});

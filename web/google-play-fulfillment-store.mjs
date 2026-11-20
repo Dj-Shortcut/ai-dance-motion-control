@@ -1,6 +1,6 @@
 // All methods are private server composition points. HTTP bodies cannot supply
 // provider capabilities, funding statements, verified money or encrypted tokens.
-import {GOOGLE_PLAY_PACKAGE,purchaseForGooglePlayProof} from './google-play-purchases.mjs';
+import {GOOGLE_PLAY_PACKAGE,notificationPurchaseForGooglePlayProof,purchaseForGooglePlayProof} from './google-play-purchases.mjs';
 import {reversalForGooglePlayProof,orderForGooglePlayProof} from './google-play-publisher.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const USER=/^u-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -14,6 +14,8 @@ const error=code=>Object.assign(Error('Je Google Play-aankoop wordt gecontroleer
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const activeStates=['prepared','verifying','pending','credited'];
 const unfinishedStates=['pending','verified','refund_required','review'];
+const MAX_VERIFICATION_FAILURES=5;
+const VERIFICATION_RETRY_DELAYS=[60000,300000,900000,3600000];
 function financeJSON(value){if(value===null||value===undefined)return null;if(!object(value)||value.version!==1||value.source!=='google_order_v1')throw error('play_financial_record');const json=JSON.stringify(value);if(json.length>32768)throw error('play_financial_record');return json;}
 function fundingProof(value){if(!object(value)||!UUID.test(value.snapshotId||'')||!Array.isArray(value.before)||value.before.length!==1||typeof value.before[0]?.bind!=='function')throw error('play_funding_snapshot');return value;}
 
@@ -54,21 +56,28 @@ export function createGooglePlayFulfillmentStore(db,{mode='live',clock=Date.now}
   ]);}catch{const raced=await intent(requestId,userId);if(raced&&raced.product_id===productId&&raced.account_id===accountId&&raced.credit_cents===creditsCents)return projection(raced);throw error('play_funding_unavailable');}
   return projection(await intent(requestId,userId));
  }
- async function queueVerification({userId,intentId,productId,tokenHash,sealedToken,now=clock()}={}){
+ async function queueVerification({userId,intentId,productId,tokenHash,sealedToken,notificationProof,now=clock()}={}){
   if(!USER.test(userId||'')||!UUID.test(intentId||'')||!PRODUCTS.has(productId)||!HASH.test(tokenHash||'')||!sealed(sealedToken)||!timestamp(now))throw error('play_verification');await assertEnvironment();
   const row=await intent(intentId,userId);if(!row||row.product_id!==productId)throw error('play_intent');
+  if(notificationProof!==undefined){
+   const p=notificationPurchaseForGooglePlayProof(notificationProof);
+   if(p.accountId!==row.account_id||p.productId!==productId||p.tokenHash!==tokenHash||p.mode!==mode||p.packageName!==GOOGLE_PLAY_PACKAGE)throw error('play_provider_binding');
+  }
   const existing=await receipt(tokenHash);if(existing){if(existing.user_id!==userId||existing.intent_id!==intentId||existing.product_id!==productId)throw error('play_token_conflict');return projection(row);}
   try{await db.batch([
    statement("INSERT INTO rig_google_play_attempts(intent_id,token_hash,sealed_token,state,next_check_at,created_at,updated_at) SELECT ?,?,?,'queued',?,?,? WHERE "+environment+" AND (SELECT COUNT(*) FROM rig_google_play_attempts WHERE intent_id=?)<5 ON CONFLICT(intent_id,token_hash) DO UPDATE SET next_check_at=excluded.next_check_at,updated_at=excluded.updated_at WHERE rig_google_play_attempts.state='queued'",intentId,tokenHash,sealedToken,now,now,now,mode,intentId),
-   statement("UPDATE rig_google_play_intents SET state='verifying',updated_at=? WHERE id=? AND user_id=? AND state='prepared'",now,intentId,userId),
-   guard("EXISTS(SELECT 1 FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=? AND state IN ('queued','verified'))",[intentId,tokenHash])
+   statement("UPDATE rig_google_play_intents SET state='verifying',updated_at=? WHERE id=? AND user_id=? AND state='prepared' AND EXISTS(SELECT 1 FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=? AND state IN ('queued','verified'))",now,intentId,userId,intentId,tokenHash),
+   // A Google-proven notification can proceed to owned verification without
+   // reopening the exhausted attempt for confirmation or background retries.
+   guard("EXISTS(SELECT 1 FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=? AND (state IN ('queued','verified') OR (?=1 AND state='invalid' AND attempts>=? AND last_error='provider_unavailable')))",[intentId,tokenHash,notificationProof===undefined?0:1,MAX_VERIFICATION_FAILURES])
   ]);}catch{throw error('play_verification_unconfirmed');}
   return projection(await intent(intentId,userId));
  }
  async function verificationFailed({intentId,tokenHash,definitive=false,code='provider_unavailable',now=clock()}={}){
   if(!UUID.test(intentId||'')||!HASH.test(tokenHash||'')||!timestamp(now)||!['provider_unavailable','invalid_token','account_mismatch','product_mismatch','environment_mismatch','purchase_invalid'].includes(code))throw error('play_verification');await assertEnvironment();
+  const retryAt=VERIFICATION_RETRY_DELAYS.map(delay=>now+delay);
   await db.batch([
-   statement("UPDATE rig_google_play_attempts SET state=?,attempts=attempts+1,next_check_at=?,last_error=?,updated_at=? WHERE intent_id=? AND token_hash=? AND state='queued'",definitive?'invalid':'queued',now+60000,code,now,intentId,tokenHash),
+   statement("UPDATE rig_google_play_attempts SET state=CASE WHEN ?=1 OR attempts+1>=? THEN 'invalid' ELSE 'queued' END,attempts=attempts+1,next_check_at=CASE attempts WHEN 0 THEN ? WHEN 1 THEN ? WHEN 2 THEN ? ELSE ? END,last_error=?,updated_at=? WHERE intent_id=? AND token_hash=? AND state='queued'",definitive?1:0,MAX_VERIFICATION_FAILURES,...retryAt,code,now,intentId,tokenHash),
    statement("UPDATE rig_google_play_intents SET state=CASE WHEN expires_at>? THEN 'prepared' ELSE 'expired' END,updated_at=? WHERE id=? AND state='verifying' AND NOT EXISTS(SELECT 1 FROM rig_google_play_attempts WHERE intent_id=? AND state='queued')",now,now,intentId,intentId),
    guard('1')
   ]);

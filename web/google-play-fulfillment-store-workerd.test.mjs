@@ -52,6 +52,28 @@ test('unverified retry tokens expire their backing hold; verified Google pending
   assert.equal((await f.db.prepare('SELECT payable_order_cents n FROM rig_funding_exposure').first()).n,500);assert.equal((await f.store.ownedStatus({userId:USER,intentId:j.intentId})).intent.state,'pending');
  }finally{await f.mf.dispose()}
 });
+test('unverified provider failures back off and become terminal after a bounded number of checks',async()=>{
+ const f=await googlePlayFulfillmentFixture();try{
+  const i=await f.prepare(),{proof}=await f.inspect(),p=purchaseForGooglePlayProof(proof),started=Date.now(),delays=[60000,300000,900000,3600000];
+  await f.store.queueVerification({intentId:i.intentId,userId:USER,productId:i.productId,tokenHash:p.tokenHash,sealedToken,now:started});
+  for(let attempt=0;attempt<delays.length;attempt++){
+   const checkedAt=started+attempt+1;await f.store.verificationFailed({intentId:i.intentId,tokenHash:p.tokenHash,now:checkedAt});
+   const row=await f.db.prepare('SELECT state,attempts,next_check_at FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=?').bind(i.intentId,p.tokenHash).first();
+   assert.deepEqual(row,{state:'queued',attempts:attempt+1,next_check_at:checkedAt+delays[attempt]});
+  }
+  await f.store.verificationFailed({intentId:i.intentId,tokenHash:p.tokenHash,now:started+5});
+  assert.deepEqual(await f.db.prepare('SELECT state,attempts,last_error FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=?').bind(i.intentId,p.tokenHash).first(),{state:'invalid',attempts:5,last_error:'provider_unavailable'});
+  await assert.rejects(f.store.queueVerification({intentId:i.intentId,userId:USER,productId:i.productId,tokenHash:p.tokenHash,sealedToken,now:started+6}),{code:'play_verification_unconfirmed'});
+  assert.equal((await f.store.due({now:started+7200000})).attempts.length,0);const status=(await f.store.ownedStatus({userId:USER,intentId:i.intentId})).intent;assert.equal(status.state,'prepared');assert.equal(status.recoveryPending,false);
+ }finally{await f.mf.dispose()}
+});
+test('a definitive provider rejection terminates its verification attempt immediately',async()=>{
+ const f=await googlePlayFulfillmentFixture();try{
+  const i=await f.prepare(),{proof}=await f.inspect(),p=purchaseForGooglePlayProof(proof),checkedAt=Date.now();
+  await f.store.queueVerification({intentId:i.intentId,userId:USER,productId:i.productId,tokenHash:p.tokenHash,sealedToken,now:checkedAt});await f.store.verificationFailed({intentId:i.intentId,tokenHash:p.tokenHash,definitive:true,code:'purchase_invalid',now:checkedAt+1});
+  assert.deepEqual(await f.db.prepare('SELECT state,attempts,last_error FROM rig_google_play_attempts WHERE intent_id=? AND token_hash=?').bind(i.intentId,p.tokenHash).first(),{state:'invalid',attempts:1,last_error:'purchase_invalid'});assert.equal((await f.store.due({now:checkedAt+7200000})).attempts.length,0);
+ }finally{await f.mf.dispose()}
+});
 test('Google-proven payment credits once, preserving backing and never making a Mollie order',async()=>{
  const f=await googlePlayFulfillmentFixture();try{
   const i=await f.prepare(),{proof}=await f.inspect();const [a,b]=await Promise.all([f.grant(i.intentId,proof),f.grant(i.intentId,proof)]);
