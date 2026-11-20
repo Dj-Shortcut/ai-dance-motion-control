@@ -156,7 +156,7 @@ export function createGooglePlayCommerce({network=fetch,clock=Date.now,tenant=va
   const proof=await c.verifier.inspectForNotification({purchaseToken:raw,...(row.product_id?{productId:row.product_id}:{})}),p=notificationPurchaseForGooglePlayProof(proof);
   const intent=await c.store.findIntentForProvider({accountId:p.accountId,productId:p.productId,purchasedAt:p.purchasedAt??null,tokenHash:row.token_hash});
   if(!intent){await refundOrphan(c,row,raw);return;}
-  await c.store.queueVerification({userId:intent.user_id,intentId:intent.id,productId:p.productId,tokenHash:row.token_hash,sealedToken:row.sealed_token,now:clock()});
+  await c.store.queueVerification({userId:intent.user_id,intentId:intent.id,productId:p.productId,tokenHash:row.token_hash,sealedToken:row.sealed_token,notificationProof:proof,now:clock()});
   const result=await finishReceipt(c,{intentId:intent.id,userId:intent.user_id,productId:p.productId,purchaseToken:raw,tokenHash:row.token_hash,sealedToken:row.sealed_token});
   if(!result.providerChecked)throw Error('provider_unavailable');
   await c.store.finishNotification({messageId:row.message_id,now:clock()});

@@ -14,7 +14,7 @@ async function fixture(){
  const mf=new Miniflare({cf:false,modules:true,script:'export default {fetch(){return new Response(null,{status:404})}}',compatibilityDate:'2026-01-01',d1Databases:['DB']}),db=await mf.getD1Database('DB');
  await sql(db,'./production-schema.sql');await sql(db,'./production-migrations/0015_funding_coverage.sql');await sql(db,'./production-migrations/0018_google_play_fulfillment.sql');
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();await db.prepare("UPDATE rig_funding_policy SET enabled=1,expected_username='fixture-team' WHERE id=1").run();
- let at=Date.now(),purchasedAt=null,consumed=false,refunded=false,pending=false,orderFailure=false,consumeUncertain=false,balance=100,net='5',priceNanos=990000000,orderState='PROCESSED';
+ let at=Date.now(),purchasedAt=null,consumed=false,refunded=false,pending=false,orderFailure=false,consumeUncertain=false,balance=100,net='5',priceNanos=990000000,orderState='PROCESSED',purchaseUnavailable=false;
  const calls=[],env={PRODUCTION_DB:db,DB:db,RIG_PRODUCTION_SITE_ID:site,RIG_PRODUCTION_BRIDGE_ORIGIN:bridge,RIG_PUBLIC_ORIGIN:origin,RIG_GOOGLE_PLAY_PROCESSING_ENABLED:'yes',RIG_GOOGLE_PLAY_SALES_ENABLED:'yes',RIG_GOOGLE_PLAY_ACCOUNT_HMAC_KEY:accountKey,RIG_GOOGLE_PLAY_TOKEN_KEY_ID:'fixture1',RIG_GOOGLE_PLAY_TOKEN_KEYS_JSON:JSON.stringify({fixture1:Buffer.alloc(32,7).toString('base64url')}),RIG_GOOGLE_PLAY_PUBSUB_AUDIENCE:bridge+'/api/payments/google-play/rtdn',RIG_GOOGLE_PLAY_PUBSUB_SUBSCRIPTION:'projects/fixture-project/subscriptions/rig-play',RIG_FUNDING_COVERAGE_ENABLED:'yes',FAL_KEY:'fixture-generation-key',RIG_GOOGLE_PLAY_PRICES:JSON.stringify({version:'rig-play-prices-v1',currency:'EUR',products:[{productId,creditsCents:500,priceCents:899},{productId:'rig_credit_10',creditsCents:1000,priceCents:1799},{productId:'rig_credit_25',creditsCents:2500,priceCents:4499}]})};
  const accountId=await googlePlayAccountId({key:accountKey,userId:USER,siteId:site,mode:'live'}),money=(units,nanos=0)=>({currencyCode:'EUR',units,nanos});
  const network=async(url,init={})=>{
@@ -31,13 +31,14 @@ async function fixture(){
    return Response.json({orderId,purchaseToken:token,state:refunded?'REFUNDED':orderState,createTime:new Date(purchasedAt??at).toISOString(),lastEventTime:new Date(at).toISOString(),total:money('8',priceNanos),tax:money('1',560330579),developerRevenueInBuyerCurrency:money(net,200000000),lineItems:[{productId,total:money('8',priceNanos),oneTimePurchaseDetails:{quantity:1}}]});
   }
   purchasedAt??=at;
+  if(purchaseUnavailable)return Response.json({error:'temporary'},{status:503});
   return Response.json({kind:'androidpublisher#productPurchaseV2',obfuscatedExternalAccountId:accountId,purchaseStateContext:{purchaseState:pending?'PENDING':'PURCHASED'},productLineItem:[{productId,productOfferDetails:{quantity:1,refundableQuantity:refunded?0:1,consumptionState:consumed?'CONSUMPTION_STATE_CONSUMED':'CONSUMPTION_STATE_YET_TO_BE_CONSUMED'}}],...(pending?{}:{purchaseCompletionTime:new Date(purchasedAt).toISOString()}),acknowledgementState:'ACKNOWLEDGEMENT_STATE_PENDING',orderId});
  };
  const commerce=createGooglePlayCommerce({network,clock:()=>at,tenant:async()=>({DB:db,RIG_PUBLIC_ORIGIN:origin}),limiter:async()=>true,adapters:{oauth:{getAccessToken:async()=> 'fixture_access_token_123456789'},push:{verifyAuthorization:async value=>{if(value!=='Bearer fixture-signed')throw Error('invalid')}}}});
  async function request(path,{user=USER,body,method=body?'POST':'GET'}={}){return commerce.handleUser(new Request(origin+'/api/payments/google-play/'+path,{method,headers:{origin,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env,{userId:user});}
  async function prepare(){const id=crypto.randomUUID(),res=await request('intents',{body:{productId,requestId:id}});assert.equal(res.status,201,await res.clone().text());return {id,intent:await res.json()};}
  const confirm=id=>request('confirm',{body:{intentId:id,productId,purchaseToken:token}});
- return {mf,db,env,commerce,request,prepare,confirm,calls,advance:n=>{at+=n;},dueNow:async()=>{at=Date.now();await db.prepare('UPDATE rig_google_play_receipts SET next_check_at=1').run();await db.prepare('UPDATE rig_google_play_attempts SET next_check_at=1').run();},set:opts=>{if('pending'in opts)pending=opts.pending;if('orderFailure'in opts)orderFailure=opts.orderFailure;if('consumeUncertain'in opts)consumeUncertain=opts.consumeUncertain;if('balance'in opts)balance=opts.balance;if('net'in opts)net=opts.net;if('orderState'in opts)orderState=opts.orderState;},balance:async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) n FROM rig_ledger WHERE user_id=?').bind(USER).first()).n};
+ return {mf,db,env,commerce,request,prepare,confirm,calls,now:()=>at,advance:n=>{at+=n;},setPurchaseUnavailable:value=>{purchaseUnavailable=value;},dueNow:async()=>{at=Date.now();await db.prepare('UPDATE rig_google_play_receipts SET next_check_at=1').run();await db.prepare('UPDATE rig_google_play_attempts SET next_check_at=1').run();},set:opts=>{if('pending'in opts)pending=opts.pending;if('orderFailure'in opts)orderFailure=opts.orderFailure;if('consumeUncertain'in opts)consumeUncertain=opts.consumeUncertain;if('balance'in opts)balance=opts.balance;if('net'in opts)net=opts.net;if('orderState'in opts)orderState=opts.orderState;},balance:async()=> (await db.prepare('SELECT COALESCE(SUM(delta),0) n FROM rig_ledger WHERE user_id=?').bind(USER).first()).n};
 }
 test('Google verified purchase credits exactly once before server consumption; recovery does not create Mollie orders',async()=>{
  const f=await fixture();try{
@@ -79,6 +80,38 @@ test('only an authenticated Google notification is durably queued; its body alon
   assert.equal((await f.commerce.handleNotification(req('Bearer attacker'),f.env)).status,401);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_google_play_notifications').first()).n,0);
   assert.equal((await f.commerce.handleNotification(req('Bearer fixture-signed'),f.env)).status,200);assert.equal(await f.balance(),0);const row=await f.db.prepare('SELECT * FROM rig_google_play_notifications').first();assert.doesNotMatch(JSON.stringify(row),new RegExp(token));assert.equal(row.state,'queued');
   const stats=await f.commerce.collect(f.env,{limit:2});assert.equal(stats.unavailable,0);assert.equal(await f.balance(),500);assert.equal((await (await f.request('status?intentId='+id)).json()).intent.state,'credited');
+ }finally{await f.mf.dispose()}
+});
+test('Google-proven notification recovers a purchase after five transient verification failures',async()=>{
+ const f=await fixture();try{
+  const {id}=await f.prepare();
+  f.setPurchaseUnavailable(true);
+  assert.equal((await f.confirm(id)).status,202);
+  for(let retry=0;retry<4;retry++){
+   await f.dueNow();
+   assert.equal((await f.commerce.collect(f.env)).unavailable,1);
+  }
+  const attempt=()=>f.db.prepare('SELECT state,attempts,last_error FROM rig_google_play_attempts WHERE intent_id=?').bind(id).first();
+  assert.deepEqual(await attempt(),{state:'invalid',attempts:5,last_error:'provider_unavailable'});
+  f.setPurchaseUnavailable(false);
+  assert.equal((await f.confirm(id)).status,503);
+  assert.equal((await f.commerce.collect(f.env)).checked,0);
+  assert.equal(await f.balance(),0);
+
+  const data=Buffer.from(JSON.stringify({version:'1.0',packageName:'dev.andyarijs.rig',eventTimeMillis:String(f.now()),oneTimeProductNotification:{version:'1.0',notificationType:1,sku:productId,purchaseToken:token}})).toString('base64');
+  const envelope={subscription:f.env.RIG_GOOGLE_PLAY_PUBSUB_SUBSCRIPTION,message:{messageId:'fixture-exhausted-verification',data}};
+  const notify=()=>f.commerce.handleNotification(new Request(bridge+'/api/payments/google-play/rtdn',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer fixture-signed'},body:JSON.stringify(envelope)}),f.env);
+  assert.equal((await notify()).status,200);
+  const stats=await f.commerce.collect(f.env);
+  assert.equal(stats.notifications,1);
+  assert.equal(stats.unavailable,0);
+  assert.equal((await attempt()).state,'verified');
+  assert.equal((await f.db.prepare('SELECT state FROM rig_google_play_notifications').first()).state,'complete');
+  assert.equal(await f.balance(),500);
+  assert.equal((await notify()).status,200);
+  await f.commerce.collect(f.env);
+  assert.equal(await f.balance(),500);
+  assert.equal(f.calls.filter(c=>c.url.includes(':consume')).length,1);
  }finally{await f.mf.dispose()}
 });
 test('a partial refund after consumption remains durable review and blocks spending without clawing back the entire credit',async()=>{
