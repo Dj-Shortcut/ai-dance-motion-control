@@ -1,7 +1,7 @@
 # RIG voor Android
 
 Zelfstandige Android-app in Kotlin/Jetpack Compose, pakket `dev.andyarijs.rig`,
-versie `0.2.2` (code `4`), Android 9 of nieuwer. De schermen, bestandskeuze,
+versie `0.2.3` (code `5`), Android 9 of nieuwer. De schermen, bestandskeuze,
 fragmentkeuze, videoweergave, uitsnijden en prijsbevestiging zijn native.
 Er is geen WebView of Trusted Web Activity in de actieve app.
 iOS is een latere client van dezelfde servercontracten.
@@ -19,6 +19,22 @@ Het test-APK staat in `app/build/outputs/apk/debug/`. De releasebundel is zonder
 externe ondertekening ongetekend en niet geschikt als bewijs van Play-publicatie.
 Sleutels en lokale SDK-instellingen horen buiten Git. De oude vendored
 browser-helpermodule is historische bron en wordt niet meer gebouwd of gebruikt.
+
+`0.2.3` is een kandidaat, nog niet op de eigenaarstelefoon geïnstalleerd. De
+voortgangsweergave bewaart nu de toestand van haar eigen renderbeurt: een oude
+tekencallback leest geen inmiddels gewiste voortgang uit de volgende toestand.
+De NullPointerException is vóór de correctie gereproduceerd in de gecompileerde
+`0.2.2`-callback en blijft na de correctie uit bij vier toestandsovergangen.
+Een Android-test controleert daarnaast dat een afgewezen bevestigingsaanvraag
+de app, prijs en selectie bewaart en geen generatie verstuurt. Dit bewijst nog
+niet dat dit de enige oorzaak van de gemelde Redmi-crash was.
+
+Een gewone update over de bestaande telefooninstallatie vereist hetzelfde
+ondertekeningscertificaat. De oorspronkelijke ontwikkelsleutel is momenteel
+niet teruggevonden; gebruik daarom geen nieuw gegenereerde debug-APK als
+telefoonupdate. Een release zonder debugfuncties is gebouwd maar ongetekend.
+Bewaar een herstelde of toekomstige distributiesleutel blijvend buiten tijdelijke
+mappen en Git, met een private back-up. Controleer het certificaat vóór overdracht.
 
 ## Aanmelden en beveiliging
 
