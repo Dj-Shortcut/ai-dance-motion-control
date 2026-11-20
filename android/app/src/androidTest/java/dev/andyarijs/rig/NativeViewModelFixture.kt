@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
 /** The production ViewModel and repository run with an isolated store and in-process HTTP responses. */
 internal class NativeViewModelFixture(
     funding: String = "credits",
+    qualities: List<String> = listOf("pro", "standard"),
     setupStore: (RigStore) -> Unit = {},
     download: (Request) -> ByteArray? = { null },
     respond: (Request) -> Pair<Int, JSONObject>,
@@ -51,7 +52,7 @@ internal class NativeViewModelFixture(
             "/api/native/session" -> 200 to JSONObject().put("userId", user).put("balanceCents", 500)
                 .put("currency", "EUR").put("mode", "live").put("funding", funding)
             "/api/native/video-config" -> 200 to JSONObject().put("enabled", true).put("funding", funding)
-                .put("qualities", JSONArray(listOf("pro", "standard")))
+                .put("qualities", JSONArray(qualities))
             else -> respond(request)
         }
         response.code(status).body(body.toString().toResponseBody("application/json".toMediaType())).build()
