@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,7 +26,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -94,7 +98,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         0 -> "Maak een video"
                         1, 2 -> "Verder"
                         3 -> if (s.session == null) "Aanmelden en prijs bekijken" else "Bekijk de prijs"
-                        else -> if (s.fullAvailable) "Volledige versie maken" else if (s.job?.terminal == false) "Controleer status" else "Nog eentje"
+                        else -> if (s.job?.terminal == false) "Controleer status" else "Nog eentje"
                     }
                     val enabled = !s.busy && (s.pendingSubmission || when (s.step) {
                         1 -> s.subject != null && s.motion != null
@@ -102,11 +106,15 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         3 -> s.prompt.isNotBlank()
                         else -> true
                     })
-                    Button(enabled = enabled, onClick = {
+                    if (s.step == 4 && s.fullAvailable && !s.pendingSubmission) {
+                        TextButton(onClick = model::continueFull, enabled = enabled, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                            Text("Volledige versie maken")
+                        }
+                    } else Button(enabled = enabled, onClick = {
                         if (s.pendingSubmission) model.checkSubmission() else when (s.step) {
                             0, 1, 2 -> model.step(s.step + 1)
                             3 -> if (s.session == null) onLogin() else model.prepareQuote()
-                            else -> if (s.fullAvailable) model.continueFull() else if (s.job?.terminal == false) model.checkStatus() else model.newVideo()
+                            else -> if (s.job?.terminal == false) model.checkStatus() else model.newVideo()
                         }
                     }, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)) { Text(label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
                 }
@@ -147,9 +155,9 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         MediaCard("Bewegingsvideo", s.motion, s.startMs, {}, { motionPicker.launch(arrayOf("video/*")) })
                         s.motion?.let { motion ->
                             Text("Fragment · ${seconds(s.startMs)} tot ${seconds(s.startMs + s.duration * 1000L)}", color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
-                            val maxStart = (motion.durationMs - s.duration * 1000L).coerceAtLeast(0)
+                            val maxStart = (motion.durationMs - RigMediaLimits.exportLengthMs(s.duration)).coerceAtLeast(0)
                             Text("Start", color = Muted, fontSize = 12.sp)
-                            Slider(s.startMs.toFloat().coerceIn(0f, maxStart.toFloat().coerceAtLeast(1f)), onValueChange = { model.timing(it.toLong(), s.duration) }, valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f))
+                            Slider(s.startMs.toFloat().coerceIn(0f, maxStart.toFloat()), onValueChange = { model.timing(it.toLong().coerceAtMost(maxStart), s.duration) }, enabled = maxStart > 0, valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f))
                             val minimum = if(s.quality == "human-recast") 6 else 3
                             val maxDuration = minOf(if(s.quality == "pro") 30 else 15, ((motion.durationMs - s.startMs) / 1000).toInt()).coerceAtLeast(minimum)
                             Text("Duur · ${s.duration} seconden", color = Muted, fontSize = 12.sp)
@@ -199,6 +207,10 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         }
                         if (job?.state == "failed") Text(job.raw.optString("error", "Deze video kon niet worden gemaakt. Controleer je tegoed en de opdrachtstatus."), color = Muted)
                         if (s.fullAvailable) Text("Je volledige selectie staat nog klaar. Je krijgt eerst een nieuwe prijs.", color = Muted, modifier = Modifier.padding(top = 12.dp))
+                        if (s.draftLookupFailed) {
+                            Text("Je video is klaar. Je volledige selectie kon niet worden gecontroleerd.", color = Muted)
+                            TextButton(onClick = model::retryDraftLookup, enabled = !s.busy) { Text("Selectie opnieuw controleren") }
+                        }
                     }
                 }
                 Spacer(Modifier.height(20.dp))
@@ -312,16 +324,46 @@ internal fun preferredVideoEditQuality(qualities: List<String>): String? = when 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable internal fun NativeVideo(uri: Uri, positionMs: Long, onPosition: (Long) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val player = remember(uri) { ExoPlayer.Builder(context).build().apply { setMediaItem(MediaItem.fromUri(uri)); prepare(); playWhenReady=false; seekTo(positionMs) } }
-    DisposableEffect(player) { onDispose { player.release() } }
-    LaunchedEffect(positionMs) { if(kotlin.math.abs(player.currentPosition-positionMs)>1000) player.seekTo(positionMs) }
-    // Report pauses/seeks, not a timer that invalidates the selected frame on each redraw.
-    DisposableEffect(player) {
-        val listener = object : androidx.media3.common.Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) { if(!isPlaying) onPosition(player.currentPosition) }
-            override fun onPositionDiscontinuity(oldPosition: androidx.media3.common.Player.PositionInfo,newPosition: androidx.media3.common.Player.PositionInfo,reason: Int) { if(reason==androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) onPosition(newPosition.positionMs) }
+    val owner = LocalLifecycleOwner.current
+    val reportPosition by rememberUpdatedState(onPosition)
+    var player by remember(uri) { mutableStateOf<ExoPlayer?>(null) }
+    var resumePosition by rememberSaveable(uri.toString()) { mutableLongStateOf(positionMs) }
+    var lastInput by rememberSaveable(uri.toString()) { mutableLongStateOf(positionMs) }
+    var reportedPosition by remember(uri) { mutableStateOf<Long?>(null) }
+    LifecycleStartEffect(uri, lifecycleOwner = owner) {
+        val active = ExoPlayer.Builder(context).build()
+        active.setMediaItem(MediaItem.fromUri(uri), resumePosition)
+        active.prepare()
+        fun report(position: Long) {
+            reportedPosition = position
+            reportPosition(position)
         }
-        player.addListener(listener); onDispose { player.removeListener(listener) }
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) { if (!isPlaying) report(active.currentPosition) }
+            override fun onPositionDiscontinuity(oldPosition: androidx.media3.common.Player.PositionInfo, newPosition: androidx.media3.common.Player.PositionInfo, reason: Int) {
+                if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) report(newPosition.positionMs)
+            }
+        }
+        active.addListener(listener)
+        player = active
+        onStopOrDispose {
+            resumePosition = active.currentPosition
+            active.removeListener(listener)
+            if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && active.isPlaying) report(resumePosition)
+            player = null
+            active.release()
+        }
+    }
+    LaunchedEffect(uri, positionMs) {
+        if (positionMs != lastInput) {
+            lastInput = positionMs
+            val active = player
+            if (active == null || !active.isPlaying || reportedPosition != positionMs) {
+                resumePosition = positionMs
+                if (active != null && active.currentPosition != positionMs) active.seekTo(positionMs)
+            }
+            reportedPosition = null
+        }
     }
     AndroidView(factory = { PlayerView(it).apply { this.player=player; useController=true; setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING) } },update={it.player=player},modifier=modifier)
 }

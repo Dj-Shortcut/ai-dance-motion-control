@@ -31,6 +31,7 @@ data class RigScreenState(
     val error: String? = null, val quote: RigQuote? = null, val job: RigJob? = null,
     val pendingSubmission: Boolean = false,
     val result: File? = null, val fullAvailable: Boolean = false,
+    val draftLookupFailed: Boolean = false,
     val history: List<RigJob> = emptyList(), val showHistory: Boolean = false,
     val showCredits: Boolean = false, val needsRegistration: Boolean = false,
 )
@@ -65,29 +66,48 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         viewModelScope.launch {
             var previous = ""
             billing.state.collect { value ->
-                if(value.message != previous && value.message.startsWith("Je aankoop is bevestigd") && repository.signedIn()) {
-                    runCatching { refreshAccount() }.onFailure { showError(it) }
+                if(value.message != previous && value.message.startsWith("Je aankoop is bevestigd")) {
+                    try { if (repository.signedIn()) refreshAccount() }
+                    catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) }
                 }
                 previous = value.message
             }
         }
     }
     fun showError(error: Throwable) {
-        val signedOut = error is RigApiException && error.status == 401
-        val pending = repository.store.session()?.let { repository.store.pending(it.userId) }
+        val pending = try {
+            if (error is RigStorageUnavailable) throw error
+            val session = repository.store.session()
+            if (session == null && (activeUser != null || mutable.value.session != null)) {
+                clearExpiredAccount(error.message ?: "Meld je opnieuw aan om verder te gaan.")
+                return
+            }
+            session?.let { repository.store.pending(it.userId) }
+        } catch (e: RigStorageUnavailable) {
+            mutable.update { it.copy(error = e.message) }
+            return
+        }
         val uncertain = pending != null && pending.jobId == null
         mutable.update {
             it.copy(
-                session = if (signedOut) null else it.session,
-                providerBalance = if(signedOut) null else it.providerBalance,
-                providerBalanceLoading = if(signedOut) false else it.providerBalanceLoading,
-                quote = if (uncertain || signedOut) null else it.quote,
+                quote = if (uncertain) null else it.quote,
                 pendingSubmission = uncertain,
                 error = if (uncertain) "De ontvangst van je videoaanvraag is nog niet bevestigd. Controleer de status."
                         else error.message?.take(350) ?: "Dit lukte niet. Probeer het opnieuw.",
-                busy = false, progress = null,
             )
         }
+    }
+    private fun clearExpiredAccount(message: String) {
+        running?.cancel()
+        poll?.cancel()
+        resuming?.cancel()
+        balancePolling?.cancel()
+        fullPrepared = null
+        restoredFullRequest = null
+        activeUser = null
+        draftRestored = false
+        // The foreground operation releases its own busy/progress state in finally.
+        mutable.update { RigScreenState(error = message, busy = it.busy, progress = it.progress, stage = it.stage) }
     }
     fun closeQuote() { if (!mutable.value.busy) mutable.update { it.copy(quote = null) } }
     fun saveResult(uri: Uri) = work("Video bewaren") {
@@ -107,13 +127,22 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
             fullPrepared = null
             restoredFullRequest = null
         }
-        persistDraft()
+        try { persistDraft() } catch (e: RigStorageUnavailable) { showError(e) }
     }
     fun step(step: Int) { if (!mutable.value.busy) mutable.update { it.copy(step = step, error = null) } }
     fun prompt(value: String) = change(mediaChanged = false) { it.copy(prompt = value.take(1900)) }
-    fun quality(value: String) = change {
-        it.copy(quality = value, duration = it.duration.coerceIn(if(value == "human-recast") 6 else 3, if(value == "pro") 30 else 15),
-            keepSound = if(value == "human-recast") true else it.keepSound, trial = false)
+    fun quality(value: String) {
+        val current = mutable.value
+        if (current.busy) return
+        if (value == "human-recast" && current.quality != value && current.motion != null &&
+            current.motion.durationMs - current.startMs < RigMediaLimits.exportLengthMs(6)) {
+            mutable.update { it.copy(error = "Kies voor deze bewerking een fragment met minstens 6 seconden vanaf het beginpunt.") }
+            return
+        }
+        change {
+            it.copy(quality = value, duration = it.duration.coerceIn(if(value == "human-recast") 6 else 3, if(value == "pro") 30 else 15),
+                keepSound = if(value == "human-recast") true else it.keepSound, trial = false)
+        }
     }
     fun keepSound(value: Boolean) = change { it.copy(keepSound = if(it.quality == "human-recast") true else value) }
     fun trial(value: Boolean) = change { it.copy(trial = value) }
@@ -126,7 +155,10 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     fun select(uri: Uri, target: String) = work("Bestand openen") {
         runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         val source = media.inspect(uri)
-        if (target == "motion") check(source.isVideo) { "Kies een bewegingsvideo." }
+        if (target == "motion") {
+            check(source.isVideo) { "Kies een bewegingsvideo." }
+            RigMediaLimits.requireMotionLength(source.durationMs, mutable.value.quality)
+        }
         if (target in setOf("face", "angle")) check(!source.isVideo) { "Kies een foto. Een beeld uit je referentievideo voeg je toe met ‘Gebruik dit beeld’." }
         mutable.update { current -> when (target) {
             "subject" -> current.copy(subject = source, subjectCrop = NormalizedCrop.FULL, frameMs = 0, quote = null)
@@ -147,11 +179,9 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         persistDraft()
     }
     fun beginLogin(): Uri {
-        persistDraft()
         val uri = repository.login.beginLogin()
-        if(mutable.value.session == null) repository.store.read("draft-anonymous")?.let { draft ->
-            repository.store.write("draft-login", JSONObject(draft.toString()).put("loginState", uri.getQueryParameter("state")))
-        }
+        val draft = if (activeUser == null && mutable.value.session == null) repository.store.read("draft-anonymous") else null
+        repository.store.write("draft-login", draft?.put("loginState", uri.getQueryParameter("state")))
         return uri
     }
     suspend fun completeLogin(uri: Uri) {
@@ -175,9 +205,13 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     fun resume() {
         foreground = true
         restartBalancePolling()
-        if (!repository.signedIn() || running?.isActive == true || mutable.value.busy || resuming?.isActive == true) return
+        if (running?.isActive == true || mutable.value.busy || resuming?.isActive == true) return
         resuming = viewModelScope.launch {
             try {
+                if (!repository.signedIn()) {
+                    if (activeUser != null) clearExpiredAccount("Meld je opnieuw aan om verder te gaan.")
+                    return@launch
+                }
                 refreshAccount()
                 recoverSubmission()
                 if (mutable.value.showCredits) billing.refresh()
@@ -208,18 +242,19 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         balancePolling?.cancel()
         balancePolling = null
         val user = mutable.value.session?.takeIf { it.funding == "owner-provider" }?.userId ?: return
-        if(!foreground || repository.store.session()?.userId != user) return
+        if(!foreground) return
         balancePolling = viewModelScope.launch {
-            while(foreground && repository.store.session()?.userId == user && mutable.value.session?.userId == user && mutable.value.session?.funding == "owner-provider") {
+            while(foreground && mutable.value.session?.userId == user && mutable.value.session?.funding == "owner-provider") {
                 mutable.update { it.copy(providerBalanceLoading = true) }
                 try {
+                    repository.checkUser(user)
                     val balance = repository.providerBalance()
                     repository.checkUser(user)
                     mutable.update { if(it.session?.userId == user && it.session.funding == "owner-provider") it.copy(providerBalance = balance, providerBalanceLoading = false) else it }
                 } catch(e: CancellationException) { throw e }
                 catch(e: Exception) {
-                    if(repository.store.session()?.userId == user) mutable.update { if(it.session?.userId == user) it.copy(providerBalance = null, providerBalanceLoading = false) else it }
-                    else if(repository.store.session() == null) mutable.update { it.copy(session = null, providerBalance = null, providerBalanceLoading = false) }
+                    mutable.update { if(it.session?.userId == user) it.copy(providerBalance = null, providerBalanceLoading = false) else it }
+                    if (e is RigStorageUnavailable || e is RigApiException && e.status == 401) { showError(e); return@launch }
                 }
                 val remaining = mutable.value.providerBalance?.let { it.expiresAt - System.currentTimeMillis() - 2_000L }
                 delay(if(remaining == null) 15_000L else remaining.coerceIn(1_000L, 20_000L))
@@ -229,12 +264,14 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     fun prepareQuote() = work("Je gekozen beelden voorbereiden") {
         val s = mutable.value
         check(s.session != null) { "Meld je aan om je prijs te bekijken." }
+        val session = repository.requireSession()
+        if (s.session.userId != session.userId) throw RigSessionReplacedException()
         check(s.config?.enabled == true) { "Video maken is tijdelijk niet beschikbaar." }
         check(s.quality in s.config.qualities) { "Deze verwerking is nog niet beschikbaar voor je account." }
         check(s.prompt.isNotBlank()) { "Beschrijf eerst wat je wilt zien." }
         restoredFullRequest?.let { request ->
             mutable.update { it.copy(stage = "Je volledige video berekenen") }
-            readyQuote(repository.quote(request.copy(prompt = s.prompt)), false)
+            readyQuote(repository.quote(request.copy(prompt = s.prompt), session), false, session)
             return@work
         }
         val subject = s.subject ?: error("Kies je foto of een beeld uit je eigen video.")
@@ -251,22 +288,23 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         val clip = if (trial) media.prepareMotion(motion, s.startMs, trialSeconds, s.motionCrop, s.keepSound,
             minSide = if (s.quality in setOf("edit-standard", "human-recast")) 720 else 0, maxDurationSeconds = if(s.quality == "pro") 30 else 15) { progress -> mutable.update { it.copy(progress = progress) } } else full
         mutable.update { it.copy(stage = "Je gekozen fragment veilig uploaden", progress = null) }
-        val imageId = repository.upload("image", primary.file)
-        val faceId = face?.let { repository.upload("face", it.file) }
-        val angleIds = angles.map { repository.upload("angle", it.file) }
-        val videoId = repository.upload("video", clip.file, clip.durationSeconds, s.keepSound)
+        val imageId = repository.upload("image", primary.file, session = session)
+        val faceId = face?.let { repository.upload("face", it.file, session = session) }
+        val angleIds = angles.map { repository.upload("angle", it.file, session = session) }
+        val videoId = repository.upload("video", clip.file, clip.durationSeconds, s.keepSound, session)
         val request = RigQuoteRequest(imageId, videoId, s.quality, s.prompt, s.keepSound, false, faceId, angleIds)
         mutable.update { it.copy(stage = "Je prijs berekenen") }
-        val quote = repository.quote(request)
+        val quote = repository.quote(request, session)
         if (trial) {
             mutable.update { it.copy(stage = "Je volledige fragment bewaren") }
-            val fullId = repository.upload("video", full.file, full.durationSeconds, s.keepSound)
-            repository.saveDraft(request.fullDraft(quote.id, fullId, s.duration, s.startMs))
+            val fullId = repository.upload("video", full.file, full.durationSeconds, s.keepSound, session)
+            repository.saveDraft(request.fullDraft(quote.id, fullId, s.duration, s.startMs), session)
         }
-        readyQuote(quote, trial)
+        readyQuote(quote, trial, session)
     }
-    private suspend fun readyQuote(quote: RigQuote, trial: Boolean) {
-        val device = if(quote.funding in setOf("credits", "owner-provider")) security.status(quote.funding == "owner-provider") else JSONObject().put("configured", true)
+    private suspend fun readyQuote(quote: RigQuote, trial: Boolean, session: NativeAuthSession) {
+        val device = if(quote.funding in setOf("credits", "owner-provider")) security.status(quote.funding == "owner-provider", session) else JSONObject().put("configured", true)
+        repository.api.checkSession(session)
         mutable.update { it.copy(quote = quote, fullAvailable = trial, needsRegistration = quote.funding == "credits" && !device.optBoolean("configured")) }
     }
 
@@ -288,7 +326,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         finally { mutable.update { it.copy(busy = false) } }
     }
     private fun accept(job: RigJob) {
-        mutable.update { it.copy(job = job, step = 4, quote = null, showHistory = false, result = null, fullAvailable = false) }
+        mutable.update { it.copy(job = job, step = 4, quote = null, showHistory = false, result = null, fullAvailable = false, draftLookupFailed = false) }
         poll?.cancel()
         poll = viewModelScope.launch {
             try {
@@ -296,15 +334,34 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
                 while (!current.terminal) { delay(5000); current = repository.job(current.id); mutable.update { it.copy(job = current) } }
                 if (current.completed) {
                     val result = repository.download(current)
-                    val draft = runCatching { repository.draft(current.id) }.getOrNull()
                     currentCoroutineContext().ensureActive()
-                    mutable.update { it.copy(result = result, fullAvailable = draft?.optBoolean("available") == true) }
+                    mutable.update { if (it.job?.id == current.id) it.copy(result = result) else it }
+                    checkDraftAvailability(current.id)
                 }
                 val freshSession = repository.session(); mutable.update { it.copy(session = freshSession.copy(funding = it.config?.funding ?: freshSession.funding)) }; restartBalancePolling()
             } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) }
         }
     }
     fun open(job: RigJob) = accept(job)
+    fun retryDraftLookup() = work("Je volledige selectie controleren") {
+        val state = mutable.value
+        if (state.draftLookupFailed && state.result != null) state.job?.let { checkDraftAvailability(it.id) }
+    }
+
+    private suspend fun checkDraftAvailability(jobId: String) {
+        val available = try {
+            repository.draft(jobId).getBoolean("available")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (e is RigApiException && e.status == 401) throw e
+            null
+        }
+        currentCoroutineContext().ensureActive()
+        mutable.update {
+            if (it.job?.id == jobId) it.copy(fullAvailable = available == true, draftLookupFailed = available == null) else it
+        }
+    }
     fun checkSubmission() = work("Je videoaanvraag controleren") { recoverSubmission() }
     private suspend fun recoverSubmission() {
         val job = repository.recoverPending()
@@ -319,9 +376,10 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     }
     fun checkStatus() { val job = mutable.value.job; if (job != null) work("Status controleren") { accept(repository.job(job.id)) } else resume() }
     fun continueFull() = work("Je volledige fragment terughalen") {
-        val user = repository.requireSession().userId
+        val session = repository.requireSession()
+        if (mutable.value.session?.userId != session.userId) throw RigSessionReplacedException()
         val job = mutable.value.job ?: error("Open eerst je proefje.")
-        val draft = repository.draft(job.id)
+        val draft = repository.draft(job.id, session)
         check(draft.optBoolean("available")) { "De privébewaring van dit fragment is verlopen. Je proefvideo blijft beschikbaar." }
         val request = RigQuoteRequest.fromJson(draft.getJSONObject("request"))
         check(!draft.optBoolean("cleanup")) { "Dit fragment gebruikt een verwerking die nog niet in Android beschikbaar is. Open het op de website." }
@@ -330,13 +388,13 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         val match = Regex("^/api/(?:native/)?video-drafts/([a-f0-9-]{36})/assets/([a-f0-9-]{36})$").matchEntire(videoPath) ?: error("Dit bewaarde fragment kon niet worden gecontroleerd.")
         check(match.groupValues[2] == request.videoId)
         val draftId = match.groupValues[1]
-        val imageFile = repository.downloadDraftAsset(draftId, request.imageId, "image")
-        val videoFile = repository.downloadDraftAsset(draftId, request.videoId, "video")
+        val imageFile = repository.downloadDraftAsset(draftId, request.imageId, "image", session)
+        val videoFile = repository.downloadDraftAsset(draftId, request.videoId, "video", session)
         val subject = media.inspect(Uri.fromFile(imageFile)); val motion = media.inspect(Uri.fromFile(videoFile))
-        val face = request.faceId?.let { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "face"))) }
-        val angles = request.angleIds.map { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "angle"))) }
+        val face = request.faceId?.let { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "face", session))) }
+        val angles = request.angleIds.map { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "angle", session))) }
         currentCoroutineContext().ensureActive()
-        repository.checkUser(user)
+        repository.api.checkSession(session)
         restoredFullRequest = request
         mutable.update { it.copy(subject = subject, motion = motion, face = face, angles = angles, duration = draft.getInt("selectedSeconds"), startMs = 0, frameMs = 0, subjectCrop = NormalizedCrop.FULL, motionCrop = NormalizedCrop.FULL, prompt = request.prompt, quality = request.quality, keepSound = request.keepSound, trial = false, quote = null, step = 3, result = null, job = null, fullAvailable = false) }
         persistDraft()
@@ -359,7 +417,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
             repository.store.write("draft-login", null)
         }
     }
-    fun newVideo() { if (mutable.value.busy) return; mutable.update { it.copy(step = 1, result = null, job = null, quote = null, fullAvailable = false, trial = false) } }
+    fun newVideo() { if (mutable.value.busy) return; mutable.update { it.copy(step = 1, result = null, job = null, quote = null, fullAvailable = false, draftLookupFailed = false, trial = false) } }
     private fun work(stage: String, block: suspend () -> Unit) {
         if (running?.isActive == true || mutable.value.busy) return
         running = viewModelScope.launch {

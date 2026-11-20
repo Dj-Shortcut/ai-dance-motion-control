@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlayConfigurationTest {
+    @Test fun completedCancellationUsesAFreshRequestButUncertainStatesKeepTheSameId() {
+        val old = JSONObject().put("productId", "rig_credit_5").put("accountId", "account").put("intentId", "old-id")
+        for (state in listOf("cancelled", "canceled", "refunded", "expired")) {
+            val intent = JSONObject().put("state", state).put("recoveryPending", false)
+            java.util.UUID.fromString(playPurchaseRequestId(old, intent, "rig_credit_5", "account"))
+            intent.put("recoveryPending", true)
+            assertEquals("old-id", playPurchaseRequestId(old, intent, "rig_credit_5", "account"))
+        }
+        assertEquals("old-id", playPurchaseRequestId(old, null, "rig_credit_5", "account"))
+    }
     private fun config() = JSONObject().put("enabled", true).put("recoveryReady", true).put("currency", "EUR")
         .put("mode", "live").put("accountId", "a".repeat(64)).put("products", JSONArray().put(JSONObject()
             .put("productId", "rig_credit_5").put("creditsCents", 500).put("priceCents", 899)))

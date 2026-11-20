@@ -125,6 +125,96 @@ class NativeRecoveryTest {
         assertEquals("image/jpeg", request.getHeader("Content-Type"))
     }
 
+    @Test fun switchingAccountBetweenPreparedAssetsStopsTheRemainingRequests() = runBlocking {
+        val session = requireNotNull(store.session())
+        val prepared = File(directory, "prepared.jpg").apply { writeBytes(byteArrayOf(1, 2)) }
+        server.enqueue(response(JSONObject().put("id", "first-image").put("kind", "image").put("status", "ready")))
+        val repo = repository()
+        assertEquals("first-image", repo.upload("image", prepared, session = session))
+        assertEquals("Bearer " + session.accessToken, server.takeRequest().getHeader("Authorization"))
+        val other = NativeAuthSession("rig_native_" + "o".repeat(43), session.expiresAt, "u-12345678-1234-4123-8123-123456789abd")
+        store.saveSession(other)
+        assertTrue(runCatching { repo.upload("face", prepared, session = session) }.exceptionOrNull() is RigSessionReplacedException)
+        val selection = RigQuoteRequest("first-image", "video-1", prompt = "Neem de beweging over.")
+        assertTrue(runCatching { repo.quote(selection, session) }.exceptionOrNull() is RigSessionReplacedException)
+        assertTrue(runCatching { repo.saveDraft(JSONObject(), session) }.exceptionOrNull() is RigSessionReplacedException)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun changedCredentialAfterHashingStopsUploadBeforeTransmission() = runBlocking {
+        val session = requireNotNull(store.session())
+        val replacement = session.copy(accessToken = "rig_native_" + "n".repeat(43))
+        val changingClient = client.newBuilder().addInterceptor { chain ->
+            store.saveSession(replacement)
+            chain.proceed(chain.request())
+        }.build()
+        val prepared = File(directory, "prepared.jpg").apply { writeBytes(byteArrayOf(1, 2)) }
+        val failure = runCatching { RigApi(store, changingClient).upload("image", prepared, session = session) }.exceptionOrNull()
+        assertTrue(failure is RigSessionReplacedException)
+        assertEquals(0, server.requestCount)
+        assertEquals(replacement, store.session())
+    }
+
+    @Test fun overlappingDownloadsHaveIndependentTemporaryFiles() = runBlocking {
+        val firstStarted = CountDownLatch(1)
+        val secondStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val releaseSecond = CountDownLatch(1)
+        val count = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (count.incrementAndGet() == 1) {
+                    firstStarted.countDown()
+                    check(releaseFirst.await(10, TimeUnit.SECONDS))
+                    return MockResponse().setResponseCode(503)
+                }
+                secondStarted.countDown()
+                check(releaseSecond.await(10, TimeUnit.SECONDS))
+                return MockResponse().setBody("complete video")
+            }
+        }
+        val path = "/generations/job-1/video"
+        val target = File(directory, "video.mp4")
+        val first = async(Dispatchers.IO) { runCatching { api.download(path, target) } }
+        try {
+            check(firstStarted.await(5, TimeUnit.SECONDS))
+            val second = async(Dispatchers.IO) { api.download(path, target) }
+            check(secondStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(2, directory.listFiles().orEmpty().count { it.extension == "part" })
+            releaseFirst.countDown()
+            assertTrue(first.await().isFailure)
+            assertEquals(1, directory.listFiles().orEmpty().count { it.extension == "part" })
+            releaseSecond.countDown()
+            assertEquals("complete video", second.await().readText())
+            assertArrayEquals(arrayOf(target), directory.listFiles())
+        } finally {
+            releaseFirst.countDown()
+            releaseSecond.countDown()
+        }
+    }
+
+    @Test fun accountChangeWhileMediaIsInFlightDiscardsTheOldResult() = runBlocking {
+        val initial = requireNotNull(store.session())
+        val other = NativeAuthSession("rig_native_" + "o".repeat(43), initial.expiresAt, "u-12345678-1234-4123-8123-123456789abd")
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                store.saveSession(other)
+                return if (request.path == "/api/native/assets") response(JSONObject().put("id", "asset-1").put("status", "ready"))
+                    else MockResponse().setBody("video")
+            }
+        }
+        val prepared = File(directory, "prepared.jpg").apply { writeBytes(byteArrayOf(1, 2)) }
+        assertTrue(runCatching { repository().upload("image", prepared, session = initial) }.exceptionOrNull() is RigSessionReplacedException)
+        assertEquals("Bearer " + initial.accessToken, server.takeRequest().getHeader("Authorization"))
+
+        store.saveSession(initial)
+        val target = File(directory, "result.mp4")
+        assertTrue(runCatching { api.download("/generations/job-1/video", target, session = initial) }.exceptionOrNull() is RigSessionReplacedException)
+        assertEquals("Bearer " + initial.accessToken, server.takeRequest().getHeader("Authorization"))
+        assertFalse(target.exists())
+        assertArrayEquals(arrayOf(prepared), directory.listFiles())
+    }
+
     @Test fun pkceSurvivesRestartAndCompletedCallbackIsIdempotentWithoutAnotherExchange() = runBlocking {
         val manager = RigLoginManager(store, api)
         val target = manager.beginAuthorization()
@@ -203,11 +293,27 @@ class NativeRecoveryTest {
         val manager = RigLoginManager(store, api)
         val callback = beginCallback(manager)
         val verifier = store.read("login")!!.getString("verifier")
-        server.enqueue(response(JSONObject().put("error", "Tijdelijk niet beschikbaar."), 503))
+        server.enqueue(response(JSONObject().put("error", "Tijdelijk niet beschikbaar."), 503).setHeader("Retry-After", "0"))
+        server.enqueue(successfulExchange())
         assertTrue(runCatching { manager.completeCallbackString(callback) }.exceptionOrNull() is RigApiException)
         assertEquals("uncertain", store.read("login")!!.getString("phase"))
         assertEquals(verifier, store.read("login")!!.getString("verifier"))
         assertTrue(runCatching { RigLoginManager(store, api).completeCallbackString(callback) }.isFailure)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun cleanupFailureAfterCommitDoesNotFailOrRepeatTheSignIn() = runBlocking {
+        val manager = RigLoginManager(store, api)
+        val callback = beginCallback(manager)
+        store.failLoginDeletion = true
+        server.enqueue(successfulExchange())
+        val session = manager.completeCallbackString(callback)
+        assertEquals(session, store.session())
+        assertNotNull(store.read("login"))
+        assertEquals(session, RigLoginManager(store, api).completeCallbackString(callback))
+        store.failLoginDeletion = false
+        assertEquals(session, RigLoginManager(store, api).completeCallbackString(callback))
+        assertNull(store.read("login"))
         assertEquals(1, server.requestCount)
     }
 
@@ -331,7 +437,11 @@ class NativeRecoveryTest {
 
     private class TestStore : RigStore {
         private val values = mutableMapOf<String, String>()
-        override fun write(name: String, value: JSONObject?) { if (value == null) values.remove(name) else values[name] = value.toString() }
+        var failLoginDeletion = false
+        override fun write(name: String, value: JSONObject?) {
+            if (failLoginDeletion && name == "login" && value == null) throw IllegalStateException("Fixture storage error")
+            if (value == null) values.remove(name) else values[name] = value.toString()
+        }
         override fun read(name: String): JSONObject? = values[name]?.let(::JSONObject)
     }
 }

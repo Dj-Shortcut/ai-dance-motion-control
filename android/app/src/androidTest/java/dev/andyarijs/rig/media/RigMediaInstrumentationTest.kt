@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -63,7 +64,15 @@ class RigMediaInstrumentationTest {
             assertEquals(1280, source.height)
             assertTrue(source.durationMs >= 8900)
             val frame = preparer.prepareFrame(source, 5000)
-            try { assertEquals("image/jpeg", frame.mimeType); assertNull(frame.durationSeconds); assertNotEquals(sourceFile, frame.file) }
+            try {
+                assertEquals("image/jpeg", frame.mimeType)
+                assertNull(frame.durationSeconds)
+                val photo = BitmapFactory.decodeFile(frame.file.absolutePath)
+                val pixel = photo.getPixel(photo.width / 2, photo.height / 2)
+                photo.recycle()
+                assertTrue("Frame at five seconds must show the magenta marker",
+                    Color.red(pixel) > 180 && Color.green(pixel) < 80 && Color.blue(pixel) > 180)
+            }
             finally { frame.file.delete() }
             val crop = NormalizedCrop(.25f, .25f, .75f, .75f)
             val motion = preparer.prepareMotion(source, 2000, 5, crop, keepSound = true)
@@ -80,6 +89,15 @@ class RigMediaInstrumentationTest {
                 assertTrue(verified.hasAudio)
                 assertTrue(trackMimes(motion.file).contains("video/avc"))
                 assertTrue(trackMimes(motion.file).contains("audio/mp4a-latm"))
+                val reader = MediaMetadataRetriever()
+                try {
+                    reader.setDataSource(motion.file.absolutePath)
+                    val first = requireNotNull(reader.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST))
+                    val pixel = first.getPixel(first.width / 2, first.height / 2)
+                    first.recycle()
+                    assertTrue("Export starting at two seconds must start with the yellow marker",
+                        Color.red(pixel) > 180 && Color.green(pixel) > 180 && Color.blue(pixel) < 80)
+                } finally { reader.release() }
                 // For local Node inspectMp4 validation after an instrumented run.
                 motion.file.copyTo(File(context.cacheDir, "instrumentation-normalized-with-audio.mp4"), overwrite = true)
             } finally { motion.file.delete() }
@@ -100,6 +118,21 @@ class RigMediaInstrumentationTest {
                 assertEquals(360, photo.height)
                 assertTrue(photo.sizeBytes < 1024 * 1024)
             } finally { photo.file.delete() }
+        } finally { original.delete() }
+    }
+
+    @Test fun exactAspectLimitSurvivesDecodeRounding(): Unit = runBlocking {
+        val original = File(context.cacheDir, "boundary-aspect-photo.jpg")
+        val input = Bitmap.createBitmap(2500, 1000, Bitmap.Config.ARGB_8888)
+        try {
+            original.outputStream().use { input.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        } finally { input.recycle() }
+        try {
+            val asset = preparer.prepareImage(preparer.inspect(Uri.fromFile(original)))
+            try {
+                assertEquals(2048, asset.width)
+                assertEquals(820, asset.height)
+            } finally { asset.file.delete() }
         } finally { original.delete() }
     }
 

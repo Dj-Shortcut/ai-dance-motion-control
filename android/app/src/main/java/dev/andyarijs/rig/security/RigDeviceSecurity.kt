@@ -7,6 +7,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.PublicKeyCredential
+import dev.andyarijs.rig.data.NativeAuthSession
 import dev.andyarijs.rig.data.RigQuote
 import dev.andyarijs.rig.data.RigRepository
 import org.json.JSONObject
@@ -16,7 +17,8 @@ import org.json.JSONObject
  * signing-certificate origin must be approved on the server and in the Site's
  * Digital Asset Links; the server fails closed until both are configured. */
 class RigDeviceSecurity(private val repository: RigRepository) {
-    suspend fun status(owner: Boolean = false): JSONObject = repository.api.get(if (owner) "/owner/security" else "/security")
+    suspend fun status(owner: Boolean = false, session: NativeAuthSession = repository.requireSession()): JSONObject =
+        repository.api.get(if (owner) "/owner/security" else "/security", session)
 
     suspend fun register(activity: Activity): JSONObject {
         val user = repository.requireSession().userId

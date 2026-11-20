@@ -17,6 +17,9 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.andyarijs.rig.MainActivity
@@ -32,6 +35,40 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class RigNativeUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @Test fun pausedPreviewSeeksPreciselyAndReleasesWhenStopped() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val video = File(instrumentation.targetContext.cacheDir, "preview-lifecycle.mp4")
+        instrumentation.context.assets.open("native-media-fixture.mp4").use { input -> video.outputStream().use { input.copyTo(it) } }
+        lateinit var model: RigViewModel
+        try {
+            compose.runOnUiThread { model = ViewModelProvider(compose.activity)[RigViewModel::class.java] }
+            compose.waitUntil { !model.state.value.busy }
+            compose.runOnUiThread { model.step(1); model.select(Uri.fromFile(video), "motion") }
+            compose.waitUntil(30_000) { model.state.value.motion != null && !model.state.value.busy }
+            fun readyAt(position: Long): Player {
+                var found: Player? = null
+                compose.waitUntil(30_000) {
+                    compose.runOnUiThread {
+                        found = playerViews().singleOrNull()?.player?.takeIf {
+                            it.playbackState == Player.STATE_READY && it.currentPosition == position
+                        }
+                    }
+                    found != null
+                }
+                return requireNotNull(found)
+            }
+            readyAt(0)
+            compose.runOnUiThread { model.timing(500, 5) }
+            val first = readyAt(500)
+            compose.runOnUiThread { model.timing(1500, 5) }
+            readyAt(1500)
+            compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+            instrumentation.runOnMainSync { assertEquals(Player.STATE_IDLE, first.playbackState) }
+            compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+            assertNotSame(first, readyAt(1500))
+        } finally { video.delete() }
+    }
 
     @Test fun nativePhoneFlowRetainsFullSelectionAndPromptWithDraggableCrop() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -98,15 +135,20 @@ class RigNativeUiTest {
         compose.waitUntil(30_000) {
             var ready = false
             compose.runOnUiThread {
-                val players = mutableListOf<androidx.media3.ui.PlayerView>()
-                fun visit(view: android.view.View) {
-                    if (view is androidx.media3.ui.PlayerView) players += view
-                    if (view is android.view.ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
-                }
-                visit(compose.activity.window.decorView)
-                ready = players.size >= 2 && players.all { it.player?.playbackState == androidx.media3.common.Player.STATE_READY }
+                val players = playerViews()
+                ready = players.size >= 2 && players.all { it.player?.playbackState == Player.STATE_READY }
             }
             ready
         }
+    }
+
+    private fun playerViews(): List<PlayerView> {
+        val players = mutableListOf<PlayerView>()
+        fun visit(view: android.view.View) {
+            if (view is PlayerView) players += view
+            if (view is android.view.ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
+        }
+        visit(compose.activity.window.decorView)
+        return players
     }
 }

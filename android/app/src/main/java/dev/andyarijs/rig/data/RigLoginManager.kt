@@ -65,7 +65,7 @@ class RigLoginManager(private val store: RigStore, private val api: RigApi) {
                 store.write("login-completed", JSONObject().put("state", state).put("codeHash", codeHash)
                     .put("sessionHash", hash(session.accessToken)).put("userId", session.userId).put("completedAt", System.currentTimeMillis()))
                 store.saveSession(session)
-                store.write("login", null)
+                clearCompletedLogin()
             }
             session
         } catch (error: Exception) {
@@ -92,8 +92,14 @@ class RigLoginManager(private val store: RigStore, private val api: RigApi) {
         if (pending != null && pending.optString("state") != state) return null
         val session = store.session() ?: return null
         if (completed.optString("userId") != session.userId || !same(completed.optString("sessionHash"), hash(session.accessToken))) return null
-        if (pending?.optString("state") == state) store.write("login", null)
+        if (pending?.optString("state") == state) clearCompletedLogin()
         return session
+    }
+
+    // These callers hold the transaction lock and have verified the completion
+    // binding. A matching callback can retry cleanup after a storage failure.
+    private fun clearCompletedLogin() {
+        try { store.write("login", null) } catch (_: Exception) { }
     }
 
     companion object {

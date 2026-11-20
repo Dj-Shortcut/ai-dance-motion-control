@@ -13,6 +13,8 @@ import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import dev.andyarijs.rig.data.RigApiException
 import dev.andyarijs.rig.data.RigRepository
+import dev.andyarijs.rig.data.RigStorageUnavailable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +32,14 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 data class RigCreditPackage(val productId: String, val creditsCents: Long, val priceCents: Long, val formattedPrice: String)
+
+internal fun playPurchaseRequestId(previous: JSONObject?, intent: JSONObject?, productId: String, accountId: String): String {
+    val finished = intent != null && !intent.optBoolean("recoveryPending") &&
+        intent.optString("state") in setOf("expired", "refunded", "cancelled", "canceled")
+    return if (!finished && previous != null && previous.optString("productId") == productId && previous.optString("accountId") == accountId) {
+        previous.getString("intentId")
+    } else UUID.randomUUID().toString()
+}
 data class RigBillingState(
     val loading: Boolean = false,
     val available: Boolean = false,
@@ -87,7 +97,12 @@ class RigPlayBilling(context: Context, private val repository: RigRepository, pr
 
     suspend fun refresh() = mutex.withLock {
         if (closed) return@withLock
-        val user = repository.store.session()?.userId ?: run { mutableState.value = RigBillingState(message = "Meld je aan om je tegoed te bekijken."); return@withLock }
+        val user = try {
+            repository.store.session()?.userId ?: run { mutableState.value = RigBillingState(message = "Meld je aan om je tegoed te bekijken."); return@withLock }
+        } catch (error: RigStorageUnavailable) {
+            mutableState.value = RigBillingState(pending = true, message = error.message.orEmpty())
+            return@withLock
+        }
         mutableState.value = mutableState.value.copy(loading = true)
         try {
             val config = configuration(user)
@@ -125,9 +140,9 @@ class RigPlayBilling(context: Context, private val repository: RigRepository, pr
                     display.isEmpty() -> "Deze tegoedpakketten zijn nog niet beschikbaar in Google Play."
                     else -> "Je betaalt veilig via Google Play. RIG schrijft je tegoed na de betaalbevestiging bij."
                 }, resumeProductId = if (resumable) intent?.optString("productId") else null)
-        } catch (error: Exception) {
-            mutableState.value = RigBillingState(pending = repository.store.read("play-$user") != null,
-                message = if (error is RigApiException && error.status == 401) error.message ?: "Meld je opnieuw aan." else "Je aankoopstatus kon niet worden gecontroleerd. Koop niet opnieuw als je al hebt betaald.")
+        } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            mutableState.value = RigBillingState(pending = pendingAfterFailure(user),
+                message = if (error is RigStorageUnavailable || error is RigApiException && error.status == 401) error.message.orEmpty() else "Je aankoopstatus kon niet worden gecontroleerd. Koop niet opnieuw als je al hebt betaald.")
         }
     }
 
@@ -142,10 +157,6 @@ class RigPlayBilling(context: Context, private val repository: RigRepository, pr
             val receipts = purchases()
             check(receipts.isEmpty()) { "Er is nog een Google-aankoop om te controleren. Koop niet opnieuw." }
             var intent = status(user)
-            if (intent != null && intent.optString("state") in setOf("expired", "refunded", "canceled") && !intent.optBoolean("recoveryPending")) {
-                repository.store.write("play-$user", null)
-                intent = null
-            }
             if (intent?.optBoolean("newPurchasesBlocked") == true) {
                 // A dismissed, not-yet-paid sheet may be explicitly reopened;
                 // pending/credited/refund purchases may never be charged again.
@@ -160,7 +171,7 @@ class RigPlayBilling(context: Context, private val repository: RigRepository, pr
             repository.checkUser(user)
             if (intent == null || intent.optString("state") != "prepared" || intent.optLong("expiresAt") <= System.currentTimeMillis()) {
                 val old = repository.store.read("play-$user")
-                val requestId = if (old != null && old.optString("productId") == productId && old.optString("accountId") == config.accountId) old.getString("intentId") else UUID.randomUUID().toString()
+                val requestId = playPurchaseRequestId(old, intent, productId, requireNotNull(config.accountId))
                 repository.store.write("play-$user", JSONObject().put("intentId", requestId).put("productId", productId).put("accountId", config.accountId))
                 intent = repository.api.post("/payments/google-play/intents", JSONObject().put("productId", productId).put("requestId", requestId))
             }
@@ -177,11 +188,15 @@ class RigPlayBilling(context: Context, private val repository: RigRepository, pr
                     .setObfuscatedAccountId(config.accountId!!).build())
             }
             check(result.responseCode == BillingClient.BillingResponseCode.OK) { "Google Play kon het betaalscherm niet openen. Controleer je aankoopstatus voordat je opnieuw probeert." }
-        } catch (error: Exception) {
-            mutableState.value = RigBillingState(pending = repository.store.read("play-$user") != null,
+        } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            mutableState.value = RigBillingState(pending = pendingAfterFailure(user),
                 message = error.message?.takeIf { it.length < 250 && !it.contains("http") } ?: "De aankoop kon niet worden gestart. Controleer eerst je aankoopstatus.")
         }
     }
+
+    private fun pendingAfterFailure(user: String) = try {
+        repository.store.read("play-$user") != null
+    } catch (_: RigStorageUnavailable) { true }
 
     private suspend fun configuration(user: String): PlayConfiguration = PlayConfiguration.parse(repository.api.get("/payments/google-play/config")).also { repository.checkUser(user) }
 

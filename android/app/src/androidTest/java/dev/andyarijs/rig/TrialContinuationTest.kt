@@ -12,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
@@ -31,6 +32,7 @@ class TrialContinuationTest {
         bitmap.recycle()
         val downloads = CopyOnWriteArrayList<String>()
         val requests = CopyOnWriteArrayList<JSONObject>()
+        val draftReads = AtomicInteger()
         val fixture = NativeViewModelFixture(download = { request ->
             val path = request.url.encodedPath.removePrefix("/api/native")
             when (path) {
@@ -40,7 +42,8 @@ class TrialContinuationTest {
             }?.also { downloads.add(path) }
         }) { request ->
             when (request.url.encodedPath.substringAfter("/api/native")) {
-                "/generations/${job.id}/draft" -> 200 to JSONObject().put("available", true)
+                "/generations/${job.id}/draft" -> if (draftReads.incrementAndGet() == 1) 503 to JSONObject()
+                    else 200 to JSONObject().put("available", true)
                     .put("selectedSeconds", 9).put("request", selection.toJson())
                     .put("assets", JSONObject().put("video", JSONObject().put("path", "/api" + assetPath + selection.videoId)))
                 "/generation-quotes" -> {
@@ -57,7 +60,15 @@ class TrialContinuationTest {
         }
         try {
             fixture.onMain { fixture.model.open(job) }
-            fixture.awaitState { it.fullAvailable }
+            val failedLookup = fixture.awaitState { it.draftLookupFailed }
+            val playable = requireNotNull(failedLookup.result)
+            assertTrue(playable.isFile)
+            fixture.onMain { fixture.model.retryDraftLookup() }
+            val recovered = fixture.awaitState { it.fullAvailable && !it.busy }
+            assertFalse(recovered.draftLookupFailed)
+            assertEquals(playable, recovered.result)
+            assertEquals(listOf("/generations/${job.id}/video"), downloads)
+            assertTrue(requests.isEmpty())
             fixture.onMain { fixture.model.continueFull() }
             val opened = fixture.awaitState { it.step == 3 && !it.busy }
             assertEquals(9, opened.duration)
