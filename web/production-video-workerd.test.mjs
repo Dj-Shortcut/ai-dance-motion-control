@@ -12,6 +12,8 @@ import {createChatgptApprovals} from './rig-chatgpt-approvals.mjs';
 import {installTestOwnerCredential,verificationFor} from './owner-security-test-helper.mjs';
 import {verificationForCustomer} from './customer-security-test-helper.mjs';
 import {RECAST_BILLING} from './price-preflight.mjs';
+import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
+import {issueNativeAuthorization,exchangeNativeAuthorization,nativePkceChallenge} from './native-auth.mjs';
 
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 const BRIDGE='https://rig-api.shortcut-computerguy.workers.dev';
@@ -71,7 +73,7 @@ async function fixture({owner=false,editVideo=false,recastVideoDuration=null}={}
   const payments=createProductionPayment({...testCheckoutFunding,transport});const result=await payments.user(new Request(SITE+'/api/payments/create',{method:'POST',headers:{origin:SITE,'content-type':'application/json'},body:JSON.stringify({packageId:'five',requestId:crypto.randomUUID()})}),env,user);assert.equal(result.status,200,await result.clone().text());payment.status='paid';
   for(let i=0;i<2;i++)assert.equal((await payments.webhook(new Request(env.RIG_PRODUCTION_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'id='+payment.id}),env)).status,200);
  }
- return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,queueInputs,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
+ return {mf,db,legacy,env,imageId,videoId,image,source,service,call,balance,fund,queueInputs,provider,priceFetch,setOutcome:value=>{providerOutcome=value},setPrice:value=>{priceRate=value},setPriceDuringUpload:value=>{uploadPrice=value},setRecastPricing:value=>{recastPricing=value},priceReads:()=>[...priceReads],stats:()=>({mediaCalls,dispatches}),providerUploads:()=>cdn.size};
 }
 
 async function beginCustomer(db,stores,args){
@@ -521,4 +523,26 @@ test('the permanent 20-attempt allowance bounds exports even when provider rates
   assert.equal(f.stats().dispatches,20);assert.equal(f.providerUploads(),40);assert.equal(await f.balance(),500);
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_costs').first()).n,20);
  }finally{await f.mf.dispose()}
+});
+
+test('native owner retains already configured direct 1080P Recast, while unconfigured customers and local-cleanup workflows stay blocked',async()=>{
+ const f=await fixture({owner:true,recastVideoDuration:6});try{
+  await migrate(f.db,'./production-migrations/0019_native_auth.sql');
+  const site=f.env.RIG_PRODUCTION_SITE_ID,verifier='v'.repeat(43),tokens=new Map();
+  for(const [user,hash]of [[ALICE,'a'],[BOB,'b']]){
+   await f.db.prepare('INSERT OR IGNORE INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES(?,?,?,?)').bind(site,hash.repeat(64),user,Date.now()).run();
+   const issued=await issueNativeAuthorization(f.db,{siteId:site,subjectHash:hash.repeat(64),userId:user,challenge:await nativePkceChallenge(verifier)});assert.ok(issued);
+   const session=await exchangeNativeAuthorization(f.db,{code:issued.code,codeVerifier:verifier});assert.equal(session.userId,user);tokens.set(user,session.accessToken);
+  }
+  const flags={RIG_EDIT_ENABLED:'no',RIG_OWNER_EDIT_VALIDATION_ENABLED:'no',RIG_OWNER_RECAST_VALIDATION_ENABLED:'yes',RIG_PRICE_RECAST:'30',RIG_NATIVE_ANDROID_SIGNING_SHA256:Array(32).fill('BA').join(':'),RIG_PRODUCTION_SITES_BRIDGE_KEY:'ab'.repeat(32)};
+  const worker=createProductionCommerceWorker({...testCheckoutFunding,network:f.provider,videoFactory:(env,options)=>createProductionVideoService(env,{...options,priceFetch:f.priceFetch})});
+  const call=(path,data,user=ALICE,extra={})=>worker.fetch(new Request(BRIDGE+path,{method:data===undefined?'GET':'POST',headers:{authorization:'Bearer '+tokens.get(user),...(data===undefined?{}:{'content-type':'application/json'})},...(data===undefined?{}:{body:JSON.stringify(data)})}),{...f.env,...flags,...extra});
+  let response=await call('/api/native/video-config');assert.equal(response.status,200,await response.clone().text());const config=await response.json();assert.equal(config.funding,'owner-provider');assert.deepEqual(config.qualities,['standard','pro','human-recast']);assert.equal(Object.hasOwn(config,'cleanup'),false);
+  for(const [user,extra]of [[BOB,{}],[ALICE,{RIG_OWNER_RECAST_VALIDATION_ENABLED:'no'}]]){response=await call('/api/native/video-config',undefined,user,extra);assert.equal(response.status,200);assert.deepEqual((await response.json()).qualities,['standard','pro']);}
+  const selection={...recastSelection,imageId:f.imageId,videoId:f.videoId};response=await call('/api/native/generation-quotes',selection);assert.equal(response.status,201,await response.clone().text());const quote=await response.json();assert.equal(quote.outputResolution,'1080P');assert.equal(quote.providerEstimateUsdMicros,2700000);assert.match(quote.approvalToken,/^[A-Za-z0-9_-]{43}$/);
+  const saved=await f.db.prepare('SELECT * FROM rig_generation_quotes WHERE id=?').bind(quote.id).first();assert.equal(saved.model,'minimax/h3-max/recast');assert.equal(Object.hasOwn(JSON.parse(saved.input_json),'workflow'),false);assert.equal(f.stats().dispatches,0);
+  for(const marker of [{cleanupMaskId:crypto.randomUUID()},{workflowVersion:'rig-workflow-v2'}])assert.equal((await call('/api/native/generation-quotes',{...selection,...marker})).status,409);
+  const blockedId=crypto.randomUUID();await f.db.prepare("INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at,funding_kind) SELECT ?,user_id,model,json_set(input_json,'$.workflow',json('{}')),price_cents,pricing_version,duration_seconds,expires_at,created_at,funding_kind FROM rig_generation_quotes WHERE id=?").bind(blockedId,quote.id).run();
+  response=await call('/api/native/generations',{quoteId:blockedId,idempotencyKey:'blocked-native-workflow',approvalToken:quote.approvalToken,transferConsent:'fal-temporary-links-v1'});assert.equal(response.status,409);assert.equal((await response.json()).code,'native_workflow_not_supported');assert.equal(f.stats().dispatches,0);assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);assert.equal(await f.balance(),0);
+ }finally{await f.mf.dispose();}
 });

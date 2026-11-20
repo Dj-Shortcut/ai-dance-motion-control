@@ -25,7 +25,7 @@ function search(f,value){const input=f.d.getElementById('ownerUsersSearch');inpu
 
 test('users remain in a closed finance disclosure and load one owner-only page on opening',async()=>{
  const f=fixture();try{
-  assert.equal(f.d.getElementById('ownerUsers').open,false);await pause();assert.equal(f.calls.length,0);assert.equal(f.root.querySelectorAll(':scope > details').length,3);
+  assert.equal(f.d.getElementById('ownerUsers').open,false);await pause();assert.equal(f.calls.length,0);assert.equal(f.root.querySelectorAll(':scope > details').length,4);
   open(f);await loaded(f);assert.deepEqual(f.calls.map(([path])=>path),['/api/owner/users?limit=25']);assert.equal(f.calls[0][1].cache,'no-store');assert.equal(f.calls[0][1].method,undefined);assert.match(f.root.textContent,/Testgebruiker/);assert.match(f.root.textContent,/test@example.invalid/);assert.match(f.root.textContent,/1 gebruiker · pagina 1/);assert.equal(previous(f).disabled,true);assert.equal(next(f).disabled,true);
  }finally{f.close();}
  for(const options of [{native:false},{active:false}]){const f=fixture(options);try{assert.equal(f.root.children.length,0);assert.equal(f.calls.length,0);}finally{f.close();}}

@@ -2,6 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import {Dat
 import {authenticateProductionSites} from './production-bridge-auth.mjs';import {sitesCanonical,sitesHmac,sitesDigest,sitesFinancePath,sitesPath} from './sites-bridge-protocol.mjs';
 import {productionEnvironment} from './production-tenant.mjs';
 import {createProductionGenerationContext} from './production-generation-context.mjs';
+import {nativeTransportEnvironment} from './native-passkey.mjs';
 const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='https://rig-api.shortcut-computerguy.workers.dev',PROJECT='appgprj_6aeec13b50448191b88da670dac8aa98',KEY='ab'.repeat(32),OWNER='subject example';
 function db(){const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('./production-schema.sql',import.meta.url),'utf8'));return{prepare(s){let a=[];return{bind(...v){a=v;return this},async first(){return sql.prepare(s).get(...a)||null},async run(){return{meta:{changes:Number(sql.prepare(s).run(...a).changes)}}}}},async batch(st){for(const item of st)await item.run()}}}
 async function environment(){const p=db(),testdb=db();await p.prepare("INSERT INTO rig_payment_environment VALUES (1,'live')").run();await p.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('prod-fixture','live',PROJECT,SITE,BRIDGE,'pfl_TESTPROFILE','https://rig-api.shortcut-computerguy.workers.dev/api/payments/webhook').run();return {DB:testdb,PRODUCTION_DB:p,RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',MOLLIE_LIVE_API_KEY:'live_fixture',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_TESTPROFILE',RIG_PRODUCTION_ENVIRONMENT_ID:'prod-fixture',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:'https://rig-api.shortcut-computerguy.workers.dev/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY}}
@@ -107,4 +108,46 @@ test('busy media preparation preserves identity and never buffers or releases an
  assert.equal(result?.deniedResponse?.status,409);assert.equal((await result.deniedResponse.json()).code,'media_preparation_busy');
  assert.equal(reads,0);assert.equal(releases,0);
  const session=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),'',{path:'/api/session',method:'GET'}),env);assert.equal(session.userId,who.userId);
+});
+
+test('native authorization issuance is server-only and needs its own explicit signature capability',async()=>{
+ const env=await environment(),path='/api/internal/native-auth/authorize',body=JSON.stringify({challenge:'c'.repeat(43)});
+ for(const opts of [{},{allowGeneration:true},{allowFinance:true},{allowSecurity:true},{allowCustomerSecurity:true},{allowAccountActivity:true}])assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path}),env,opts),null);
+ const auth=await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path}),env,{allowNativeAuthorization:true});assert.match(auth.userId,/^u-/);assert.equal(auth.request.url,SITE+path);
+ assert.equal(await authenticateProductionSites(await sign(env,crypto.randomUUID().replaceAll('-',''),body,{path:path+'?userId=victim'}),env,{allowNativeAuthorization:true}),null);
+});
+
+test('admitted native uploads can take longer than ten seconds and a read timeout releases the lease',async t=>{
+ const env=nativeTransportEnvironment(await environment());
+ env.RIG_PRODUCTION_VIDEO_ENABLED='yes';
+ const session=await authenticateProductionSites(await sign(env,'45'.repeat(16),'',{path:'/api/session',method:'GET'}),env);
+ env.RIG_PRODUCTION_OWNER_USER_ID=session.userId;
+ const productionContext=await createProductionGenerationContext(env);
+ let acquired=0,released=0;
+ const leaseFactory=()=>({
+  async acquire(){acquired++;return {state:'acquired',token:'fixture-lease'};},
+  async complete(token,outcome){assert.equal(token,'fixture-lease');assert.equal(outcome,'settled');released++;}
+ });
+ t.mock.timers.enable({apis:['setTimeout']});
+ for(const finishUpload of [true,false]){
+  const signed=await sign(env,crypto.randomUUID().replaceAll('-',''),'abc',{path:'/api/assets'});
+  const reading=Promise.withResolvers();
+  const stream=new ReadableStream({pull(controller){reading.resolve(controller);}},{highWaterMark:0});
+  const pending=authenticateProductionSites(new Request(signed,{body:stream,duplex:'half'}),env,{allowGeneration:true,productionContext,leaseFactory});
+  const controller=await reading.promise;
+  assert.equal(acquired,released+1);
+  if(finishUpload){
+   t.mock.timers.tick(32_000);
+   controller.enqueue(new TextEncoder().encode('abc'));
+   controller.close();
+   const result=await pending;
+   assert.equal(await result.request.text(),'abc');
+   await result.releaseUnused();
+  }else{
+   t.mock.timers.tick(180_001);
+   const result=await pending;
+   assert.equal(result.deniedResponse.status,408);
+  }
+  assert.equal(released,acquired);
+ }
 });

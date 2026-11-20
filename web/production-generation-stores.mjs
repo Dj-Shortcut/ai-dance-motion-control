@@ -129,7 +129,7 @@ export function createProductionD1GenerationStores(db,{productionContext,funding
    const policy=await loadProfitPolicy(db);
    if(!validProfitSnapshot(quote.input?.profitSnapshot,{policy,fundingKind:quote.fundingKind,retailPriceCents:quote.priceCents,providerEstimateUsdMicros:quote.input?.providerEstimateUsdMicros})||!profitable(quote.input.profitSnapshot))return {kind:'pricing'};
    const id=crypto.randomUUID(),now=Date.now();
-   const security=quote.fundingKind==='owner-provider'?await prepareOwnerMutation(db,{ownerId:userId,operation:'owner-generation',payload:verificationPayload??{quoteId,idempotencyKey},verification,now}):await prepareCustomerGeneration(db,{userId,payload:verificationPayload??{quoteId,idempotencyKey},verification,now});
+   const security=quote.fundingKind==='owner-provider'?await prepareOwnerMutation(db,{ownerId:userId,operation:'owner-generation',payload:verificationPayload??{quoteId,idempotencyKey},verification,securityEnv:productionContext.env,now}):await prepareCustomerGeneration(db,{userId,payload:verificationPayload??{quoteId,idempotencyKey},verification,securityEnv:productionContext.env,now});
    if(!security.ok)return {kind:'verification',response:security.response};
    const ownerFunding=quote.fundingKind==='owner-provider'?await prepareOwnerFundingAdmission(productionContext.env,{userId,jobId:id,quoteId,providerEstimateUsdMicros:quote.providerEstimateUsdMicros,network:fundingNetwork,now}):{before:[],gate:{sql:'1',params:[]}};
    const eligible=`q.id=? AND q.user_id=? AND q.expires_at>? AND q.price_cents=? AND q.model=? AND q.pricing_version=? AND q.duration_seconds=? AND q.funding_kind=? AND q.input_json=?

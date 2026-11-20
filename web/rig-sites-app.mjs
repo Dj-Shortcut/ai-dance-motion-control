@@ -3,7 +3,8 @@ import {createRigMcp} from './rig-mcp.mjs';
 import {createChatgptFilePreparer} from './rig-chatgpt-files.mjs';
 import {commerceDocument} from './commerce-documents.mjs';
 import {CLEANUP_STATIC_ASSETS,OCR_WORKER_POLICY} from './cleanup-static-assets.mjs';
-import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesRequestBodyLimit,sitesPreparationWrite,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
+import {handleNativeSiteLogin} from './native-sites-login.mjs';
+import {signSitesBridgeRequest,sitesPath,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesAccountServicePath,sitesRequestBodyLimit,sitesPreparationWrite,sitesProtocolConfig} from './sites-bridge-protocol.mjs';
 
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
@@ -31,11 +32,14 @@ const PUBLIC_BRAND_ASSETS=Object.freeze({
 function androidPublicDocument(path,env){
  if(path==='/android/manifest.webmanifest')return {type:'application/manifest+json',body:{id:'/android/',name:'RIG',short_name:'RIG',lang:'nl',start_url:'/android/',scope:'/android/',display:'standalone',background_color:'#111416',theme_color:'#111416',icons:[{src:'/favicon.svg',sizes:'any',type:'image/svg+xml',purpose:'any'}]}};
  if(path==='/.well-known/assetlinks.json'){
-  // Public app-signing certificate only. No debug association or arbitrary
-  // package/origin can be installed through this fixed document.
-  const fingerprint=env.RIG_ANDROID_APP_SIGNING_SHA256;
-  const configured=typeof fingerprint==='string'&&fingerprint.length===95&&/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(fingerprint);
-  return {type:'application/json',body:configured?[{relation:['delegate_permission/common.handle_all_urls'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[fingerprint.toUpperCase()]}}]:[]};
+  // Only operator-pinned public signing certificates can associate this exact
+  // package. Native passkeys need their own relation; browser links stay intact.
+  const valid=value=>typeof value==='string'&&value.length===95&&/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(value);
+  const entries=[];
+  const add=(fingerprint,relation)=>{if(!valid(fingerprint))return;const cert=fingerprint.toUpperCase();let entry=entries.find(e=>e.target.sha256_cert_fingerprints[0]===cert);if(!entry){entry={relation:[],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[cert]}};entries.push(entry);}entry.relation.push(relation);};
+  add(env.RIG_ANDROID_APP_SIGNING_SHA256,'delegate_permission/common.handle_all_urls');
+  add(env.RIG_NATIVE_ANDROID_SIGNING_SHA256,'delegate_permission/common.get_login_creds');
+  return {type:'application/json',body:entries};
  }
  return null;
 }
@@ -102,6 +106,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
  return {async fetch(req,env,execution){
   let url;try{url=new URL(req.url)}catch{return reject()}
   if(url.origin!==env.RIG_SITES_PRODUCER_ORIGIN)return reject();
+  if(url.pathname.startsWith('/native/'))return await handleNativeSiteLogin(req,env,{context,readBytes})??reject(404);
   const androidDocument=androidPublicDocument(url.pathname,env);
   if(androidDocument){
    if(!['GET','HEAD'].includes(req.method)||url.search)return reject(404);
@@ -146,6 +151,7 @@ export function createRigSitesApp({fetchImpl=fetch,uiFiles=ui,prepareFiles=creat
    const googleConfirm=req.method==='POST'&&url.pathname==='/api/payments/google-play/confirm'&&!url.search;
    const production=env.RIG_PRODUCTION_PAYMENTS_ENABLED==='yes';
    if(!production&&(sitesFinancePath(url.pathname+url.search,req.method)||sitesAdministrationPath(url.pathname+url.search,req.method)||sitesOwnerSecurityPath(url.pathname+url.search,req.method)||sitesCustomerSecurityPath(url.pathname+url.search,req.method)))return reject(404);
+   if(!production&&sitesAccountServicePath(url.pathname+url.search,req.method))return reject(404);
    if(!production&&sitesPaymentPath(url.pathname+url.search,req.method)&&!paymentRead&&!googleConfig&&!googleConfirm)return reject(404);
    if(!paymentRead&&!googleConfig&&!googleConfirm&&!sitesPath(url.pathname+url.search,req.method))return reject(404);
    let ctx;try{ctx=await context(req,env)}catch{return json({error:'RIG is tijdelijk niet beschikbaar.'},503)}

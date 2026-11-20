@@ -1,3 +1,4 @@
+import {passkeyOrigin} from './native-passkey.mjs';
 // Private owner verification. A logged-in session cannot activate its own key.
 import {generateRegistrationOptions,verifyRegistrationResponse,generateAuthenticationOptions,verifyAuthenticationResponse} from '@simplewebauthn/server';
 import {validateProductionTenant} from './production-tenant.mjs';
@@ -43,10 +44,10 @@ function canonical(operation,payload){
  return JSON.stringify(out);
 }
 export async function ownerMutationDigest(operation,payload){return ownerSecurityHash(operation+'\0'+canonical(operation,payload));}
-function validClientData(credential,type){
+function validClientData(credential,type,expectedOrigin=OWNER_ORIGIN){
  if(!credential||typeof credential!=='object'||Array.isArray(credential)||credential.type!=='public-key'||!B64.test(credential.id||'')||credential.rawId!==credential.id)return false;
  const encoded=credential.response?.clientDataJSON;if(!B64.test(encoded||''))return false;
- try{const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(unbase64(encoded)));return data.type===type&&data.origin===OWNER_ORIGIN&&data.crossOrigin===false&&!Object.hasOwn(data,'topOrigin');}catch{return false;}
+ try{const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(unbase64(encoded)));return data.type===type&&data.origin===expectedOrigin&&(data.crossOrigin===false||expectedOrigin?.startsWith('android:apk-key-hash:')&&data.crossOrigin===undefined)&&!Object.hasOwn(data,'topOrigin');}catch{return false;}
 }
 async function readJSON(req){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')||''))return null;
@@ -85,7 +86,9 @@ async function operationSummary(db,ownerId,operation,payload,now){
 
 // Caller must authorize the pinned owner before using this helper. Every SQL
 // mutation must be gated with gate.sql/params in the same batch as before.
-export async function prepareOwnerMutation(db,{ownerId,operation,payload,verification,now=Date.now()}={}){
+export async function prepareOwnerMutation(db,{ownerId,operation,payload,verification,securityEnv,now=Date.now()}={}){
+ const expectedOrigin=passkeyOrigin(securityEnv,OWNER_ORIGIN);
+ if(!expectedOrigin)return fail('native_security_not_configured','Apparaatbevestiging is nog niet ingesteld voor deze app.',503);
  if(!USER.test(ownerId||'')||!Number.isSafeInteger(now))return fail('verification_invalid','Bevestiging is niet beschikbaar.');
  let digest;try{digest=await ownerMutationDigest(operation,payload);}catch{return fail('verification_invalid','Controleer de beheerwijziging.',400);}
  const keys=await active(db,ownerId);if(!keys.length)return fail('security_setup_required','Stel eerst je beheerderspasskey in.');
@@ -94,11 +97,11 @@ export async function prepareOwnerMutation(db,{ownerId,operation,payload,verific
  if(!challenge||challenge.operation!==operation||challenge.payload_hash!==digest||challenge.used_at!==null||challenge.attempted_at!==null)return fail('verification_invalid','Deze bevestiging is niet geldig. Vraag een nieuwe bevestiging.');
  if(challenge.expires_at<=now)return fail('verification_expired','De bevestiging is verlopen. Probeer opnieuw.');
  const key=keys.find(row=>row.credential_id===verification.credential?.id);
- if(!key||!validClientData(verification.credential,'webauthn.get'))return rejectAssertion(db,challenge,now);
+ if(!key||!validClientData(verification.credential,'webauthn.get',expectedOrigin))return rejectAssertion(db,challenge,now);
  let proof;
  try{
   const handle=verification.credential.response?.userHandle;if(handle!==null&&handle!==undefined&&handle!==key.user_handle)throw Error('Wrong user handle');
-  proof=await verifyAuthenticationResponse({response:verification.credential,expectedChallenge:challenge.challenge,expectedOrigin:OWNER_ORIGIN,expectedRPID:OWNER_RP_ID,requireUserVerification:true,credential:{id:key.credential_id,publicKey:unbase64(key.public_key),counter:key.counter,transports:JSON.parse(key.transports_json)}});
+  proof=await verifyAuthenticationResponse({response:verification.credential,expectedChallenge:challenge.challenge,expectedOrigin,expectedRPID:OWNER_RP_ID,requireUserVerification:true,credential:{id:key.credential_id,publicKey:unbase64(key.public_key),counter:key.counter,transports:JSON.parse(key.transports_json)}});
   if(!proof.verified||proof.authenticationInfo.userVerified!==true)throw Error('Not verified');
  }catch{return rejectAssertion(db,challenge,now);}
  const counter=proof.authenticationInfo.newCounter;if(!Number.isSafeInteger(counter)||counter<0)return fail('verification_invalid','De passkey kon niet worden gecontroleerd.');
@@ -120,7 +123,8 @@ export function isPreparedOwnerMutation(value,{operation,payloadHash}={}){return
 export async function handleOwnerSecurity(req,env,{userId,now=Date.now()}={}){
  if(!USER.test(env?.RIG_PRODUCTION_OWNER_USER_ID||'')||userId!==env.RIG_PRODUCTION_OWNER_USER_ID)return json({error:'Geen toegang.'},403);
  const mapped=await validateProductionTenant(env);if(!mapped)return json({error:'Beveiligingsinstellingen zijn tijdelijk niet beschikbaar.'},503);
- const url=new URL(req.url),db=mapped.DB;
+ const url=new URL(req.url),db=mapped.DB,expectedOrigin=passkeyOrigin(env,OWNER_ORIGIN);
+ if(!expectedOrigin)return json({error:'Apparaatbevestiging is nog niet ingesteld voor deze app.',code:'native_security_not_configured'},503);
  if(url.origin!==OWNER_ORIGIN||url.search||!['GET','POST'].includes(req.method)||req.method==='POST'&&req.headers.get('origin')!==OWNER_ORIGIN)return json({error:'Aanvraag geweigerd.'},403);
  try{
   if(await d1Limit({env:mapped,category:'owner-security',userId,method:req.method})!==true)return json({error:'Te veel aanvragen. Probeer later opnieuw.'},429);
@@ -142,10 +146,10 @@ export async function handleOwnerSecurity(req,env,{userId,now=Date.now()}={}){
    return json({challengeId:id,publicKey,expiresAt},201);
   }
   if(url.pathname==='/api/owner/security/registration/verify'){
-   if(!exact(data,['challengeId','credential'])||!UUID.test(data.challengeId||'')||!validClientData(data.credential,'webauthn.create'))return json({error:'De passkey kon niet worden gecontroleerd.',code:'verification_invalid'},428);
+   if(!exact(data,['challengeId','credential'])||!UUID.test(data.challengeId||'')||!validClientData(data.credential,'webauthn.create',expectedOrigin))return json({error:'De passkey kon niet worden gecontroleerd.',code:'verification_invalid'},428);
    const c=await db.prepare("SELECT * FROM rig_owner_security_challenges_v2 WHERE id=? AND owner_id=? AND operation='registration'").bind(data.challengeId,userId).first();if(!c||c.used_at!==null||c.attempted_at!==null||c.expires_at<=now)return json({error:'Deze registratie is verlopen. Begin opnieuw.',code:'verification_expired'},428);
    const claimed=await db.prepare('UPDATE rig_owner_security_challenges_v2 SET attempted_at=? WHERE id=? AND owner_id=? AND attempted_at IS NULL AND used_at IS NULL AND expires_at>?').bind(now,c.id,userId,now).run();if(claimed.meta?.changes!==1)return json({error:'Deze registratie is al gebruikt.',code:'verification_invalid'},428);
-   let verified;try{verified=await verifyRegistrationResponse({response:data.credential,expectedChallenge:c.challenge,expectedOrigin:OWNER_ORIGIN,expectedRPID:OWNER_RP_ID,requireUserPresence:true,requireUserVerification:true,supportedAlgorithmIDs:[-7]});if(!verified.verified||verified.registrationInfo.userVerified!==true)throw Error('Not verified');}catch{return json({error:'De passkey kon niet worden gecontroleerd.',code:'verification_invalid'},428);}
+   let verified;try{verified=await verifyRegistrationResponse({response:data.credential,expectedChallenge:c.challenge,expectedOrigin,expectedRPID:OWNER_RP_ID,requireUserPresence:true,requireUserVerification:true,supportedAlgorithmIDs:[-7]});if(!verified.verified||verified.registrationInfo.userVerified!==true)throw Error('Not verified');}catch{return json({error:'De passkey kon niet worden gecontroleerd.',code:'verification_invalid'},428);}
    const info=verified.registrationInfo,key=info.credential,candidateId=crypto.randomUUID(),publicKey=base64(key.publicKey),fingerprint=await ownerSecurityHash(key.id+'\0'+publicKey),expiresAt=now+900000;
    if(!B64.test(key.id)||key.id!==data.credential.id||!Number.isSafeInteger(key.counter))return json({error:'De passkey kon niet worden gecontroleerd.'},428);
    try{

@@ -21,6 +21,10 @@ import {handlePurchaseBilling} from './purchase-billing.mjs';
 import {handleOwnerUsers,handleAccountActivity} from './owner-users.mjs';
 import {createGooglePlayCommerce,GOOGLE_PLAY_RTND_PATH} from './google-play-commerce.mjs';
 import {handleGooglePlayAccounting} from './google-play-accounting.mjs';
+import {handleNativeApi} from './native-api.mjs';
+import {handleAccountServiceRequest,handleOwnerAccountServiceRequests} from './account-service-requests.mjs';
+import {sitesAccountServicePath,ACCOUNT_SERVICE_OWNER_PATH} from './account-service-path.mjs';
+import {issueNativeAuthorization} from './native-auth.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -31,11 +35,25 @@ async function readJSON(req){
 }
 export function createProductionCommerceWorker({network=fetch,videoFactory=createProductionVideoService,orderAdmission,coverageReader,googlePlay=createGooglePlayCommerce({network})}={}){
  const payments=createProductionPayment({transport:network,orderAdmission,coverageReader});
- return {async fetch(req,env){
+ async function dispatch(req,env){
   let authenticated;
   try{
    if(req.url===env.RIG_PRODUCTION_WEBHOOK_URL)return payments.webhook(req,env);
    const u=new URL(req.url);
+   if(u.pathname==='/api/native'||u.pathname.startsWith('/api/native/')){
+    const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
+    return await handleNativeApi(req,env,{db:mapped.DB,dispatch,network});
+   }
+   if(u.pathname==='/api/internal/native-auth/authorize'){
+    const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowNativeAuthorization:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    if(await d1Limit({env:mapped,category:'customer-security',userId:authenticated.userId,method:'POST'})!==true)return json({error:'Te veel aanvragen.'},429);
+    const data=await readJSON(authenticated.request);
+    if(!data||Object.keys(data).length!==1||typeof data.challenge!=='string')return json({error:'Controleer je aanvraag.'},400);
+    const result=await issueNativeAuthorization(mapped.DB,{siteId:authenticated.siteId,subjectHash:authenticated.subjectHash,userId:authenticated.userId,challenge:data.challenge});
+    return result?json(result,201):json({error:'Deze aanmelding kon niet worden klaargezet.'},409);
+   }
    if(u.pathname===GOOGLE_PLAY_RTND_PATH){
     if(!await validateProductionTenant(env))return unavailable();
     return await googlePlay.handleNotification(req,env);
@@ -57,6 +75,18 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
     authenticated=await authenticateProductionSites(req,env,{allowCustomerSecurity:true});
     if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
     return handleCustomerSecurity(authenticated.request,env,{userId:authenticated.userId});
+   }
+   if(u.pathname===ACCOUNT_SERVICE_OWNER_PATH){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowFinance:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleOwnerAccountServiceRequests(authenticated.request,env,{userId:authenticated.userId});
+   }
+   if(sitesAccountServicePath(u.pathname+u.search,req.method)){
+    if(!await validateProductionTenant(env))return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowAccountService:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return handleAccountServiceRequest(authenticated.request,env,{userId:authenticated.userId});
    }
    if(u.pathname.startsWith('/api/owner/accounting')||u.pathname.startsWith('/api/owner/recovery')||u.pathname==='/api/owner/support'||u.pathname.startsWith('/api/owner/invoices')){
     if(!await validateProductionTenant(env))return unavailable();
@@ -132,5 +162,6 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    return await handler(authenticated.request);
   }catch{return unavailable()}
   finally{try{await authenticated?.releaseUnused?.()}catch{}}
- }};
+ }
+ return {fetch:dispatch};
 }

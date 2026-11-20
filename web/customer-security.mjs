@@ -4,6 +4,7 @@ import {generateRegistrationOptions,verifyRegistrationResponse,generateAuthentic
 import {validateProductionTenant} from './production-tenant.mjs';
 import {d1Limit} from './router.mjs';
 import {RECAST_MODEL} from './recast-contract.mjs';
+import {passkeyOrigin} from './native-passkey.mjs';
 
 export const CUSTOMER_RP_ID='rig-motion-studio.shortcutcomputerguy.chatgpt.site';
 export const CUSTOMER_ORIGIN='https://'+CUSTOMER_RP_ID;
@@ -42,9 +43,9 @@ async function generationOperation(db,userId,payload,now){
 }
 // Exported for verification fixtures and diagnostics. No mutation or spending.
 export async function customerGenerationDigest(db,{userId,payload,now=Date.now()}={}){return (await generationOperation(db,userId,payload,now)).digest;}
-function validClientData(credential,type){
+function validClientData(credential,type,expectedOrigin=CUSTOMER_ORIGIN){
  if(!credential||typeof credential!=='object'||Array.isArray(credential)||credential.type!=='public-key'||!B64.test(credential.id||'')||credential.rawId!==credential.id||!B64.test(credential.response?.clientDataJSON||''))return false;
- try{const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(unbase64(credential.response.clientDataJSON)));return data.type===type&&data.origin===CUSTOMER_ORIGIN&&data.crossOrigin===false&&!Object.hasOwn(data,'topOrigin');}catch{return false;}
+ try{const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(unbase64(credential.response.clientDataJSON)));return data.type===type&&data.origin===expectedOrigin&&(data.crossOrigin===false||expectedOrigin?.startsWith('android:apk-key-hash:')&&data.crossOrigin===undefined)&&!Object.hasOwn(data,'topOrigin');}catch{return false;}
 }
 async function readJSON(req){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')||''))return null;
@@ -60,7 +61,9 @@ async function rejectAssertion(db,c,now){
 // Caller supplies the authenticated production Sites UUID. Every debit and job
 // insert MUST include gate.sql/params in the SAME D1 batch as before. This
 // helper verifies the assertion only; it never reserves money or starts work.
-export async function prepareCustomerGeneration(db,{userId,payload,verification,now=Date.now()}={}){
+export async function prepareCustomerGeneration(db,{userId,payload,verification,securityEnv,now=Date.now()}={}){
+ const expectedOrigin=passkeyOrigin(securityEnv,CUSTOMER_ORIGIN);
+ if(!expectedOrigin)return fail('native_security_not_configured','Apparaatbevestiging is nog niet ingesteld voor deze app.',503);
  if(!USER.test(userId||'')||!Number.isSafeInteger(now)||now<0)return fail('verification_invalid','Bevestiging is niet beschikbaar.');
  let operation;try{operation=await generationOperation(db,userId,payload,now);}catch{return fail('operation_changed','Deze prijsopgave is gewijzigd of verlopen. Vraag opnieuw de prijs op.',409);}
  const key=await active(db,userId);if(!key)return fail('security_setup_required','Stel eerst je passkey in om een video te maken.');
@@ -68,11 +71,11 @@ export async function prepareCustomerGeneration(db,{userId,payload,verification,
  const c=await db.prepare("SELECT * FROM rig_customer_security_challenges WHERE id=? AND user_id=? AND operation='customer-generation'").bind(verification.challengeId,userId).first();
  if(!c||c.payload_hash!==operation.digest||c.payload_json!==operation.payloadJson||c.used_at!==null||c.attempted_at!==null)return fail('verification_invalid','Deze bevestiging is niet geldig. Vraag een nieuwe bevestiging.');
  if(c.expires_at<=now)return fail('verification_expired','De bevestiging is verlopen. Probeer opnieuw.');
- if(key.credential_id!==verification.credential?.id||!validClientData(verification.credential,'webauthn.get'))return rejectAssertion(db,c,now);
+ if(key.credential_id!==verification.credential?.id||!validClientData(verification.credential,'webauthn.get',expectedOrigin))return rejectAssertion(db,c,now);
  let proof;
  try{
   const handle=verification.credential.response?.userHandle;if(handle!==null&&handle!==undefined&&handle!==key.user_handle)throw Error('Wrong user handle');
-  proof=await verifyAuthenticationResponse({response:verification.credential,expectedChallenge:c.challenge,expectedOrigin:CUSTOMER_ORIGIN,expectedRPID:CUSTOMER_RP_ID,requireUserVerification:true,credential:{id:key.credential_id,publicKey:unbase64(key.public_key),counter:key.counter,transports:JSON.parse(key.transports_json)}});
+  proof=await verifyAuthenticationResponse({response:verification.credential,expectedChallenge:c.challenge,expectedOrigin,expectedRPID:CUSTOMER_RP_ID,requireUserVerification:true,credential:{id:key.credential_id,publicKey:unbase64(key.public_key),counter:key.counter,transports:JSON.parse(key.transports_json)}});
   if(!proof.verified||proof.authenticationInfo.userVerified!==true)throw Error('User verification required');
  }catch{return rejectAssertion(db,c,now);}
  const counter=proof.authenticationInfo.newCounter;if(!Number.isSafeInteger(counter)||counter<0)return fail('verification_invalid','De passkey kon niet worden gecontroleerd.');
@@ -96,7 +99,8 @@ export async function prepareCustomerGeneration(db,{userId,payload,verification,
 export async function handleCustomerSecurity(req,env,{userId,now=Date.now()}={}){
  if(!USER.test(userId||'')||userId===env?.RIG_PRODUCTION_OWNER_USER_ID)return json({error:'Geen toegang.'},403);
  const mapped=await validateProductionTenant(env);if(!mapped)return json({error:'Beveiligingsinstellingen zijn tijdelijk niet beschikbaar.'},503);
- const url=new URL(req.url),db=mapped.DB;
+ const url=new URL(req.url),db=mapped.DB,expectedOrigin=passkeyOrigin(env,CUSTOMER_ORIGIN);
+ if(!expectedOrigin)return json({error:'Apparaatbevestiging is nog niet ingesteld voor deze app.',code:'native_security_not_configured'},503);
  if(url.origin!==CUSTOMER_ORIGIN||url.search||!['GET','POST'].includes(req.method)||req.method==='POST'&&req.headers.get('origin')!==CUSTOMER_ORIGIN||!Number.isSafeInteger(now)||now<0)return json({error:'Aanvraag geweigerd.'},403);
  try{
   if(!(await db.prepare(`SELECT 1 AS found WHERE ${identitySQL('?')}`).bind(userId).first())?.found)return json({error:'Aanmelden vereist.'},403);
@@ -128,7 +132,7 @@ export async function handleCustomerSecurity(req,env,{userId,now=Date.now()}={})
    const claimed=await db.prepare('UPDATE rig_customer_security_challenges SET attempted_at=? WHERE id=? AND user_id=? AND attempted_at IS NULL AND used_at IS NULL AND expires_at>?').bind(now,c.id,userId,now).run();
    if(claimed.meta?.changes!==1)return fail('verification_invalid','Deze registratie is al gebruikt.').response;
    let verified;
-   try{if(!validClientData(data.credential,'webauthn.create'))throw Error('Wrong client data');verified=await verifyRegistrationResponse({response:data.credential,expectedChallenge:c.challenge,expectedOrigin:CUSTOMER_ORIGIN,expectedRPID:CUSTOMER_RP_ID,requireUserPresence:true,requireUserVerification:true,supportedAlgorithmIDs:[-7,-257]});if(!verified.verified||verified.registrationInfo.userVerified!==true)throw Error('User verification required');}catch{return fail('verification_invalid','De passkey kon niet worden gecontroleerd.').response;}
+   try{if(!validClientData(data.credential,'webauthn.create',expectedOrigin))throw Error('Wrong client data');verified=await verifyRegistrationResponse({response:data.credential,expectedChallenge:c.challenge,expectedOrigin,expectedRPID:CUSTOMER_RP_ID,requireUserPresence:true,requireUserVerification:true,supportedAlgorithmIDs:[-7,-257]});if(!verified.verified||verified.registrationInfo.userVerified!==true)throw Error('User verification required');}catch{return fail('verification_invalid','De passkey kon niet worden gecontroleerd.').response;}
    const info=verified.registrationInfo,key=info.credential,publicKey=base64(key.publicKey),fingerprint=await customerSecurityHash(key.id+'\0'+publicKey),token=crypto.randomUUID();
    if(!B64.test(key.id)||key.id!==data.credential.id||!Number.isSafeInteger(key.counter)||key.counter<0)return fail('verification_invalid','De passkey kon niet worden gecontroleerd.').response;
    const consume=db.prepare(`UPDATE rig_customer_security_challenges SET used_at=?,use_token=?,credential_id=?,verified_counter=? WHERE id=? AND user_id=? AND operation='registration' AND attempted_at=? AND used_at IS NULL AND expires_at>?

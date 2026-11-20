@@ -69,3 +69,38 @@ test('owner finance transport preserves the signed month but cannot forward call
  assert.equal(response.headers.get('cache-control'),'private, no-store');
  for(const deniedPath of ['/api/owner/finance?month=2026-11&role=owner','/api/owner/finance?month=2026-99','/api/owner/finance/expenses']){const denied=fixture();assert.equal((await denied.fetch(deniedPath)).status,404);assert.equal(denied.calls.length,0);}
 });
+
+test('native relay carries only opaque app authorization and signed upload metadata, never web identities',async()=>{
+ const token='rig_native_'+'n'.repeat(43),digest='d'.repeat(64),f=fixture();
+ const result=await f.fetch('/api/native/assets',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'video/mp4','content-length':'2','x-rig-asset-kind':'video','x-rig-duration-seconds':'5','x-rig-keep-sound':'yes','x-rig-start-seconds':'0','x-rig-native-body-sha256':digest,cookie:'private=session','oai-authenticated-user-id':'victim','x-rig-expected-user':'victim',[SITE_HEADER_NAMES.signature]:'a'.repeat(64)},body:'ab'});
+ assert.equal(result.status,200);assert.equal(f.calls.length,1);const h=f.calls[0].headers;assert.equal(h.get('authorization'),'Bearer '+token);assert.equal(h.get('x-rig-native-body-sha256'),digest);assert.equal(h.get('content-length'),'2');assert.equal(await f.calls[0].text(),'ab');
+ for(const name of [...Object.values(SITE_HEADER_NAMES),'oai-authenticated-user-id','x-rig-expected-user','cookie','origin','cf-connecting-ip'])assert.equal(h.get(name),null,name);
+ assert.equal(result.headers.get('authorization'),null);assert.equal(result.headers.get('access-control-allow-origin'),null);
+ const exchange=fixture();assert.equal((await exchange.fetch('/api/native/auth/exchange',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status,200);assert.equal(exchange.calls[0].headers.get('authorization'),null);
+});
+
+test('native relay rejects browser origins, missing credentials, unknown routes and uploads without digest',async()=>{
+ const token='Bearer rig_native_'+'n'.repeat(43);
+ for(const [path,init,status]of [
+  ['/api/native/session',{},401],
+  ['/api/native/session',{headers:{authorization:token,origin:site}},403],
+  ['/api/native/session',{headers:{authorization:'Bearer forged'}},401],
+  ['/api/native/auth/exchange',{method:'POST',headers:{authorization:token,'content-type':'application/json'},body:'{}'},401],
+  ['/api/native/assets',{method:'POST',headers:{authorization:token,'content-type':'video/mp4'},body:'ab'},400],
+  ['/api/native/owner/finance',{headers:{authorization:token}},404],
+  ['/api/native/payments/create',{method:'POST',headers:{authorization:token},body:'{}'},404],
+  ['/api/native/session?role=owner',{headers:{authorization:token}},404],
+  ['/api/native/auth/exchange?redirect=bad',{method:'POST',body:'{}'},404],
+  ['/api/native/assets',{method:'POST',headers:{authorization:token,'content-length':String(SITES_BODY_MAX+1),'x-rig-native-body-sha256':'d'.repeat(64)},body:'ab'},413]
+ ]){const f=fixture();assert.equal((await f.fetch(path,init)).status,status,path);assert.equal(f.calls.length,0,path);}
+ const limited=fixture({limit:false});assert.equal((await limited.fetch('/api/native/session',{headers:{authorization:token}})).status,429);assert.equal(limited.calls.length,0);
+});
+
+test('native wallet display is an exact authenticated GET, without widening owner finance routes',async()=>{
+ const token='Bearer rig_native_'+'n'.repeat(43),f=fixture();
+ assert.equal((await f.fetch('/api/native/provider-balance',{headers:{authorization:token,'x-rig-owner':'yes',cookie:'forged=true'}})).status,200);
+ assert.equal(f.calls[0].url,origin+'/api/native/provider-balance');assert.equal(f.calls[0].headers.get('authorization'),token);assert.equal(f.calls[0].headers.get('cookie'),null);assert.equal(f.calls[0].headers.get('x-rig-owner'),null);
+ for(const [path,method]of [['/api/native/provider-balance?owner=yes','GET'],['/api/native/provider-balance','POST'],['/api/native/owner/finance/funding','GET']]){
+  const denied=fixture();assert.equal((await denied.fetch(path,{method,headers:{authorization:token},...(method==='POST'?{body:'{}'}:{})})).status,404);assert.equal(denied.calls.length,0);
+ }
+});

@@ -8,3 +8,4 @@
 *.keystore
 *.p12
 /key.properties
+/.kotlin/

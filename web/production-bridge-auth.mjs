@@ -1,25 +1,28 @@
 // Production Sites identity: private payment Worker only, validated BEFORE
 // trusting a subject or request. Uses the same nonce and identity tables as
 // production video; never share these tables with the test database.
-import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesInternalAccountActivityPath,sitesPath,sitesRequestBodyLimit,sitesPreparationWrite} from './sites-bridge-protocol.mjs';
+import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesDigest,sitesHmac,sitesPaymentPath,sitesFinancePath,sitesAdministrationPath,sitesOwnerSecurityPath,sitesCustomerSecurityPath,sitesAccountServicePath,sitesInternalAccountActivityPath,sitesInternalNativeAuthorizationPath,sitesPath,sitesRequestBodyLimit,sitesPreparationWrite} from './sites-bridge-protocol.mjs';
 import {validateProductionTenant} from './production-tenant.mjs';
+import {isNativeTransport} from './native-passkey.mjs';
 import {createPreparationBudget,preparationRequestBytes,preparationDeniedResponse} from './preparation-budget.mjs';
 const HASH=/^[a-f0-9]{64}$/,NONCE=/^[a-f0-9]{32}$/,USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const equals=(a,b)=>{if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0};
-function allowed(path,method,allowGeneration,allowFinance,allowSecurity,allowCustomerSecurity,allowAccountActivity){
+function allowed(path,method,allowGeneration,allowFinance,allowSecurity,allowCustomerSecurity,allowAccountActivity,allowNativeAuthorization,allowAccountService){
  if(sitesInternalAccountActivityPath(path,method))return allowAccountActivity;
+ if(sitesInternalNativeAuthorizationPath(path,method))return allowNativeAuthorization;
  if(sitesOwnerSecurityPath(path,method))return allowSecurity;
  if(sitesCustomerSecurityPath(path,method))return allowCustomerSecurity;
+ if(sitesAccountServicePath(path,method))return allowAccountService;
  if(sitesAdministrationPath(path,method))return allowFinance;
  if(sitesFinancePath(path,method))return allowFinance;
  return path==='/api/session'&&method==='GET'||sitesPaymentPath(path,method)||allowFinance&&sitesFinancePath(path,method)||allowGeneration&&sitesPath(path,method);
 }
-async function bytes(req,max){
+async function bytes(req,max,timeoutMs){
  const len=req.headers.get('content-length');
  if(len!==null&&(!/^\d+$/.test(len)||Number(len)>max))throw Error('size');
  if(!req.body){if(len!==null&&Number(len)!==0)throw Error('size');return new Uint8Array()}
  const reader=req.body.getReader();let size=0,parts=[],timer;
- const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout')),10000)});
+ const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new DOMException('Body read timed out','TimeoutError')),timeoutMs)});
  try{
   for(;;){const {done,value}=await Promise.race([reader.read(),deadline]);if(done)break;if(!(value instanceof Uint8Array))throw Error('bytes');size+=value.byteLength;if(size>max||len!==null&&size>Number(len))throw Error('size');parts.push(value)}
   if(len!==null&&Number(len)!==size)throw Error('size');
@@ -34,7 +37,7 @@ export async function authenticateProductionSites(req,env,options={}){
  try{
   const mapped=await validateProductionTenant(env);if(!mapped||!HASH.test(env.RIG_PRODUCTION_SITES_BRIDGE_KEY||'')||!Number.isSafeInteger(now))return null;
   const u=new URL(req.url),path=u.pathname+u.search;
-  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration,allowFinance,options?.allowSecurity===true,options?.allowCustomerSecurity===true,options?.allowAccountActivity===true)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
+  if(u.origin!==env.RIG_PRODUCTION_BRIDGE_ORIGIN||u.username||u.password||u.hash||!allowed(path,req.method,allowGeneration,allowFinance,options?.allowSecurity===true,options?.allowCustomerSecurity===true,options?.allowAccountActivity===true,options?.allowNativeAuthorization===true,options?.allowAccountService===true)||req.method==='POST'&&req.headers.get('origin')!==mapped.RIG_PUBLIC_ORIGIN)return null;
   const v=Object.fromEntries(Object.entries(SITE_HEADER_NAMES).map(([k,n])=>[k,req.headers.get(n)]));
   if(v.site!==env.RIG_PRODUCTION_SITE_ID||!HASH.test(v.subject||'')||!HASH.test(v.digest||'')||!HASH.test(v.signature||'')||!NONCE.test(v.nonce||'')||!/^\d{13}$/.test(v.time||'')||Math.abs(now-Number(v.time))>60000)return null;
   const headers=new Headers();for(const name of SIGNED_CONTENT_HEADERS){const value=req.headers.get(name);if(value!==null){if(value.length>256)return null;headers.set(name,value)}}
@@ -58,7 +61,17 @@ export async function authenticateProductionSites(req,env,options={}){
    if(claim?.state==='busy')return {deniedResponse:Response.json({code:'media_preparation_busy',error:'Bestandsvoorbereiding is nog bezig of moet worden nagekeken. Je bent nog aangemeld. Probeer later opnieuw of neem contact op via Hulp.'},{status:409,headers:{'cache-control':'no-store'}})};
    if(claim?.state!=='acquired'||typeof claim.token!=='string')throw Error('Invalid media lease');
   }
-  const body=await bytes(req,sitesRequestBodyLimit(path,req.method));
+  // Native assets arrive as a phone upload. The client bounds the entire call at 180 s.
+  const nativeUpload=claim?.state==='acquired'&&path==='/api/assets'&&isNativeTransport(env);
+  let body;
+  try{
+   body=await bytes(req,sitesRequestBodyLimit(path,req.method),nativeUpload?180_000:10_000);
+  }catch(error){
+   if(!nativeUpload)throw error;
+   const timedOut=error?.name==='TimeoutError';
+   return {deniedResponse:Response.json({error:timedOut?'De upload duurde te lang. Probeer het bestand opnieuw te uploaden.':'Het bestand is niet volledig ontvangen. Upload het opnieuw.'},
+    {status:timedOut?408:400,headers:{'cache-control':'no-store'}})};
+  }
   if(await sitesDigest(body)!==v.digest)return null;
   if(req.method==='POST')headers.set('origin',mapped.RIG_PUBLIC_ORIGIN);
   let taken=false;
