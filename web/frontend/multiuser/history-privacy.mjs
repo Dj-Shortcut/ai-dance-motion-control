@@ -2,12 +2,12 @@
 export function protectPrivateHistory(browser, disposeBinding) {
  const root=browser.document.documentElement;
  const conceal=()=>root.style.setProperty('display','none','important');
- browser.addEventListener('pagehide',event=>{
+ browser.addEventListener?.('pagehide',event=>{
   if(event.persisted!==true)return;
   conceal();
   disposeBinding();
  },true);
- browser.addEventListener('pageshow',event=>{
+ browser.addEventListener?.('pageshow',event=>{
   if(event.persisted!==true)return;
   conceal();
   browser.location.reload();
