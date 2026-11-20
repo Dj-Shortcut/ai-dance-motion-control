@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -103,6 +104,8 @@ class RigNativeUiTest {
             compose.onNodeWithText("Verder").performClick()
             compose.onNodeWithText("Waar gebeurt het?").assertIsDisplayed()
             compose.waitUntil(15_000) { compose.onAllNodesWithText("Beeld laden…").fetchSemanticsNodes().isEmpty() }
+            compose.onNodeWithText("In de video").performClick()
+            compose.onNodeWithText("In de video").assertIsSelected()
             screenshot("native-04-placement")
             compose.onNodeWithText("Verder").performClick()
             compose.onNodeWithText("Maak het van jou.").assertIsDisplayed()
