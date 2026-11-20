@@ -54,7 +54,9 @@ internal fun euro(cents: Long) = NumberFormat.getCurrencyInstance(Locale.forLang
 
 @Composable
 fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRegister: () -> Unit, onPurchase: (String) -> Unit) {
-    val s by model.state.collectAsStateWithLifecycle()
+    // Drawing callbacks can outlive this composition. Keep its state snapshot
+    // instead of rereading the delegate after progress has been cleared.
+    val s = model.state.collectAsStateWithLifecycle().value
     val billing by model.billing.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var options by remember { mutableStateOf(false) }
