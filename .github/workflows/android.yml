@@ -41,7 +41,13 @@ jobs:
           test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
       - name: Check public certificate document generation
         run: node --test scripts/assetlinks.test.mjs
+      - name: Prepare synthetic instrumentation media tooling
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 update
+            sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends ffmpeg
+          fi
       - name: Build test APK and unsigned release bundle; run release lint
-        run: ./gradlew --no-daemon :app:assembleDebug :app:bundleRelease :app:lintRelease testDebugUnitTest
+        run: ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:bundleRelease :app:lintRelease testDebugUnitTest
 
 # No deployment, signing secret, billing credential or purchase occurs in CI.

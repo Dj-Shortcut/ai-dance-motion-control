@@ -54,3 +54,15 @@ dependencies {
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }
+
+// Test-only, generated color blocks/tone. Customer or binary media is never tracked.
+def fixtureOutput = layout.buildDirectory.file('generated/rigTestAssets/native-media-fixture.mp4')
+def generateRigMediaFixture = tasks.register('generateRigMediaFixture', Exec) {
+    inputs.file(rootProject.file('scripts/create-media-test-fixture.sh'))
+    outputs.file(fixtureOutput)
+    commandLine 'sh', rootProject.file('scripts/create-media-test-fixture.sh').absolutePath, fixtureOutput.get().asFile.absolutePath
+}
+android.sourceSets.androidTest.assets.srcDir(layout.buildDirectory.dir('generated/rigTestAssets'))
+tasks.configureEach {
+    if (name.startsWith('merge') && name.endsWith('AndroidTestAssets')) dependsOn(generateRigMediaFixture)
+}

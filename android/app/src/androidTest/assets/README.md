@@ -1,6 +1,7 @@
-`native-media-fixture.mp4` is a source-controlled, entirely synthetic 93 KiB
-fixture: nine seconds of color blocks, 720×1280 H264 at 30 fps, with a 440 Hz AAC
-tone. It contains no customer media. Regenerate with an installed `ffmpeg`:
+`native-media-fixture.mp4` is generated locally by Gradle from an entirely
+synthetic fixture: nine seconds of color blocks, 720×1280 H264 at 30 fps, with a 440 Hz AAC
+tone. It contains no customer media. Install `ffmpeg` before building the instrumentation APK. Gradle generates it
+under `app/build/generated/rigTestAssets/`; no binary media is tracked. To generate it manually:
 
     sh android/scripts/create-media-test-fixture.sh
 

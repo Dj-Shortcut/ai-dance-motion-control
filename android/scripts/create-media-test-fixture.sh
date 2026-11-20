@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 android_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-fixture="$android_root/app/src/androidTest/assets/native-media-fixture.mp4"
+fixture="${1:-$android_root/app/build/generated/rigTestAssets/native-media-fixture.mp4}"
 mkdir -p "$(dirname -- "$fixture")"
 ffmpeg -hide_banner -loglevel error \
   -f lavfi -i 'color=c=0x264337:s=720x1280:r=30:d=9,drawbox=x=0:y=0:w=360:h=640:color=red:t=fill,drawbox=x=360:y=640:w=360:h=640:color=blue:t=fill' \
