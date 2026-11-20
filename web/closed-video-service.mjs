@@ -168,17 +168,20 @@ export async function createClosedVideoService(env,{trustedUserId,lease,verifyTe
   let claim;try{claim=await lease.acquire(trustedUserId)}catch{return unavailable()}
   if(claim?.state!=='acquired'||typeof claim.token!=='string')return unavailable();
   // Drafts only read prepared bytes or store bounded metadata. A failed draft
-  // cannot leave a remote transform running; successful streams still retain
-  // shared admission until their body finishes or is cancelled below.
+  // cannot leave a remote transform running. Release shared admission before
+  // returning the already-materialized bytes to a potentially slow client.
   let response,outcome=draft?'settled':'uncertain';
   try{
    response=await router(req,env);if(!(response instanceof Response))throw Error('No result');
    const uncertain=response.headers.get('x-rig-media-uncertain')==='1';
    const settled=response.status<500||response.headers.get('x-rig-media-settled')==='1';
    if(!uncertain&&settled)outcome='settled';
-   if(draft&&response.ok&&['image/jpeg','video/mp4'].includes(response.headers.get('content-type'))&&response.body)return workflowLeaseResponse(response,()=>lease.complete(claim.token,'settled'));
   }catch{response=unavailable()}
-  try{await lease.complete(claim.token,outcome)}catch{return unavailable()}
+  try{await lease.complete(claim.token,outcome)}catch{
+   await response.body?.cancel().catch(()=>{});
+   return unavailable();
+  }
+  if(draft&&response.ok&&['image/jpeg','video/mp4'].includes(response.headers.get('content-type'))&&response.body)return workflowLeaseResponse(response,()=>{});
   const headers=new Headers(response.headers);headers.delete('x-rig-media-settled');headers.delete('x-rig-media-uncertain');
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
  };

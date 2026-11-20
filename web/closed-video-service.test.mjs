@@ -158,8 +158,8 @@ for(const failure of ['storage-error','media-error','asset-quota'])test(`a ${fai
   const next=await f.lease.acquire('bob');assert.equal(next.state,'acquired','another account can continue after the failed read');await f.lease.complete(next.token,'settled');assert.equal(f.counts().providerCalls,0);if(failure==='asset-quota')assert.equal(f.counts().mediaReads,0,'quota refusal happens before the private media read');
  }finally{await f.mf.dispose();}
 });
-test('a successful saved draft byte read keeps shared admission until its bounded response is consumed or cancelled',async()=>{
+test('an unread saved draft download leaves shared admission available to another account',async()=>{
  const f=await draftReadLeaseFixture();try{
-  const response=await f.read();assert.equal(response.status,200);assert.deepEqual(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),{state:'active'});assert.equal((await f.lease.acquire('bob')).state,'busy');await response.body.cancel();assert.equal(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),null);const next=await f.lease.acquire('bob');assert.equal(next.state,'acquired');await f.lease.complete(next.token,'settled');assert.equal(f.counts().providerCalls,0);
+  const response=await f.read();assert.equal(response.status,200);assert.equal(await f.db.prepare('SELECT state FROM rig_media_work_lock WHERE id=1').first(),null);const next=await f.lease.acquire('bob');assert.equal(next.state,'acquired');assert.equal((await response.arrayBuffer()).byteLength,64);await f.lease.complete(next.token,'settled');assert.equal(f.counts().providerCalls,0);
  }finally{await f.mf.dispose();}
 });

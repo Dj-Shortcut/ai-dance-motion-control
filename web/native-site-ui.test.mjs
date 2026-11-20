@@ -265,3 +265,27 @@ test('paid quote confirms the exact RIG euro price without a provider-cost requi
   assert.match(d.getElementById('quoteMessage').textContent,/betaal je.*1,00.*RIG-tegoed.*5,00/);assert.doesNotMatch(d.getElementById('quoteMessage').textContent,/fictie|fal|USD|testtegoed/i);assert.equal(calls.some(([path])=>path==='/api/generations'),false);
  }finally{dom.window.close();}
 });
+
+test('back-forward cache hides the private document before suspension and reloads it on restore',async()=>{
+ const {dom,w,d}=page();
+ const auth={
+  currentSession:async()=>true,
+  sessionSubject:async()=>alice,
+  watchSession:()=>()=>{},
+  dispose(){},
+  api:async path=>path==='/api/session'?Response.json({userId:alice}):Response.json({enabled:false})
+ };
+ const app=await startNativeSiteApp({window:w,auth,loadScript:async()=>{}});
+ try{
+  const root=d.documentElement;
+  w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:false}));
+  assert.equal(root.style.display,'');
+  assert.equal(app.binding.isActive(),true);
+  w.dispatchEvent(new w.PageTransitionEvent('pagehide',{persisted:true}));
+  assert.equal(root.style.display,'none');
+  assert.equal(root.style.getPropertyPriority('display'),'important');
+  assert.equal(app.binding.isActive(),false);
+  w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:true}));
+  assert.equal(root.style.display,'none','cached private content must stay hidden even when reload cannot complete');
+ }finally{app.dispose();dom.window.close();}
+});

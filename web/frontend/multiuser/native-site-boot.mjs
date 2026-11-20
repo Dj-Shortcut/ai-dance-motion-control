@@ -1,3 +1,4 @@
+import {protectPrivateHistory} from './history-privacy.mjs';
 import {createNativeSiteAuth} from './native-site-auth.mjs';
 import {prepareGuardedBinding} from './guarded-binding.mjs';
 import {enableVideoIfAvailable} from './video-capability.mjs';
@@ -19,6 +20,7 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
  auth??=createNativeSiteAuth({browser,fetchImpl:browser.fetch.bind(browser)});
  loadScript??=(name=>new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=`/multiuser/${name}`;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);}));
  let binding=null,unsubscribe=()=>{},invitationUi=null,ended=false;
+ protectPrivateHistory(browser,()=>binding?.dispose());
  browser.rigNativeSite=true;browser.rigVideoEnabled=false;browser.rigPaymentChannel=googlePlay?'google-play':'mollie';
  function endSession(){if(ended)return;ended=true;browser.rigGenerationDispose?.();browser.rigFlowDispose?.();browser.rigOwnerVerification?.dispose();browser.rigCustomerVerification?.dispose();browser.rigFinanceDispose?.();browser.rigOwnerAdministration?.dispose();browser.rigPaymentsDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
  logout.addEventListener('click',()=>{binding?.dispose({logout:true});endSession();});
