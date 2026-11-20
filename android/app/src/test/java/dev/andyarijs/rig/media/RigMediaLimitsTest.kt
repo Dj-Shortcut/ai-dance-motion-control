@@ -32,6 +32,22 @@ class RigMediaLimitsTest {
         invalid { RigMediaLimits.videoPlan(1920, 1080, 3000, 0, 3) }
     }
 
+    @Test fun motionSelectionHonorsTheMinimumForTheChosenModel() {
+        for (quality in listOf("standard", "pro", "edit-standard")) {
+            invalid { RigMediaLimits.requireMotionLength(3100, quality) }
+            invalid { RigMediaLimits.requireMotionLength(3119, quality) }
+            RigMediaLimits.requireMotionLength(3120, quality)
+        }
+        invalid { RigMediaLimits.requireMotionLength(5999, "human-recast") }
+        RigMediaLimits.requireMotionLength(6000, "human-recast")
+    }
+
+    @Test fun roundedPhotoDimensionsRemainWithinTheUploadAspectLimits() {
+        assertEquals(2048 to 820, RigMediaLimits.imageDimensions(2500, 1000, NormalizedCrop.FULL))
+        assertEquals(820 to 2048, RigMediaLimits.imageDimensions(1000, 2500, NormalizedCrop.FULL))
+        invalid { RigMediaLimits.imageDimensions(2501, 1000, NormalizedCrop.FULL) }
+    }
+
     @Test fun refusesImpossibleSelectionRatherThanSilentlyChangingDuration() {
         invalid { RigMediaLimits.videoPlan(1920, 1080, 10_000, 6_000, 5) }
         invalid { RigMediaLimits.videoPlan(1920, 1080, 100_000, 0, 16, maxDurationSeconds = 15) }

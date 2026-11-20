@@ -28,6 +28,7 @@ internal class NativeViewModelFixture(
     funding: String = "credits",
     qualities: List<String> = listOf("pro", "standard"),
     setupStore: (RigStore) -> Unit = {},
+    beforeRead: (String) -> Unit = {},
     download: (Request) -> ByteArray? = { null },
     respond: (Request) -> Pair<Int, JSONObject>,
 ) : Closeable {
@@ -37,7 +38,10 @@ internal class NativeViewModelFixture(
     private val directory = Files.createTempDirectory(app.cacheDir.toPath(), "native-view-model").toFile()
     val store = object : RigStore {
         private val records = ConcurrentHashMap<String, String>()
-        override fun read(name: String) = records[name]?.let(::JSONObject)
+        override fun read(name: String): JSONObject? {
+            beforeRead(name)
+            return records[name]?.let(::JSONObject)
+        }
         override fun write(name: String, value: JSONObject?) {
             if (value == null) records.remove(name) else records[name] = value.toString()
         }
@@ -49,7 +53,7 @@ internal class NativeViewModelFixture(
             return@addInterceptor response.code(200).body(bytes.toResponseBody("video/mp4".toMediaType())).build()
         }
         val (status, body) = when (request.url.encodedPath) {
-            "/api/native/session" -> 200 to JSONObject().put("userId", user).put("balanceCents", 500)
+            "/api/native/session" -> 200 to JSONObject().put("userId", store.session()?.userId).put("balanceCents", 500)
                 .put("currency", "EUR").put("mode", "live").put("funding", funding)
             "/api/native/video-config" -> 200 to JSONObject().put("enabled", true).put("funding", funding)
                 .put("qualities", JSONArray(qualities))

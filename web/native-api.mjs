@@ -88,9 +88,16 @@ export async function handleNativeApi(req,env,{db,dispatch,network=fetch}={}){
  if(target==='/api/generation-quotes'&&req.method==='POST'&&result.ok){
   const quote=await result.json(),approvalReq=new Request(url.origin+'/api/native/generation-quotes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({quoteId:quote.id})});
   const approval=await dispatch(await signedRequest(approvalReq,env,session,'/api/chatgpt/quote-approvals'),nativeEnv);
-  if(approval.status===409){if(approval.body)void approval.body.cancel();return json(quote,201);}
-  if(!approval.ok)return json({error:'De prijsbevestiging is tijdelijk niet beschikbaar.'},503);
-  const value=await approval.json();return json({...quote,approvalToken:value.approvalToken,idempotencyKey:value.idempotencyKey},201);
+  if(!approval.ok){
+   if(approval.body)void approval.body.cancel().catch(()=>{});
+   if(approval.status===409)return json({code:'quote_unavailable',error:'Deze prijs kan niet meer worden bevestigd. Controleer je tegoed en vraag de prijs opnieuw op.'},409);
+  }
+  const value=approval.ok?await approval.json().catch(()=>null):null;
+  if(typeof value?.approvalToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.approvalToken)||
+     typeof value.idempotencyKey!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(value.idempotencyKey)){
+   return json({error:'De prijsbevestiging is tijdelijk niet beschikbaar. Vraag de prijs opnieuw op.'},503);
+  }
+  return json({...quote,approvalToken:value.approvalToken,idempotencyKey:value.idempotencyKey},201);
  }
  if(['/api/session','/api/video-config'].includes(target)&&result.ok){
   const value=await result.json(),ready=Boolean(configuredAndroidOrigin(env));

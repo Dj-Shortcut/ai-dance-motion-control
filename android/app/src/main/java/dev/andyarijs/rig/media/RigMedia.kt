@@ -98,7 +98,20 @@ object RigMediaLimits {
         val aspect = rect[2].toDouble() / rect[3]
         require(aspect in 0.4..2.5) { "Maak de uitsnede iets breder of hoger." }
         val scale = min(1.0, MAX_IMAGE_SIDE.toDouble() / max(rect[2], rect[3]))
-        return max(MIN_SIDE, floor(rect[2] * scale).toInt()) to max(MIN_SIDE, floor(rect[3] * scale).toInt())
+        val width = max(MIN_SIDE, floor(rect[2] * scale).toInt())
+        val height = max(MIN_SIDE, floor(rect[3] * scale).toInt())
+        // At the aspect limit, rounding the short edge down would make the JPEG invalid for upload.
+        return max(width, ceil(height / 2.5).toInt()) to max(height, ceil(width / 2.5).toInt())
+    }
+
+    fun exportLengthMs(durationSeconds: Int): Long = if (durationSeconds == 3) 3_120L else durationSeconds * 1_000L
+
+    fun requireMotionLength(durationMs: Long, quality: String) {
+        val recast = quality == "human-recast"
+        require(durationMs >= exportLengthMs(if (recast) 6 else 3)) {
+            if (recast) "Kies voor deze bewerking een bewegingsvideo van minstens 6 seconden."
+            else "Kies een bewegingsvideo van minstens 3,12 seconden."
+        }
     }
 
     fun videoPlan(sourceWidth: Int, sourceHeight: Int, sourceDurationMs: Long, startMs: Long, durationSeconds: Int, crop: NormalizedCrop = NormalizedCrop.FULL, minSide: Int = 0, maxDurationSeconds: Int = 30): NativeVideoPlan {
@@ -107,7 +120,7 @@ object RigMediaLimits {
         require(minSide == 0 || minSide == 720)
         // The server's minimum three-second transform needs 3.08 s of source.
         // Other clips keep the chosen duration. Never silently shorten a user's selection.
-        val length = if (durationSeconds == 3) 3_120L else durationSeconds * 1_000L
+        val length = exportLengthMs(durationSeconds)
         require(startMs <= sourceDurationMs && length <= sourceDurationMs - startMs) { "Dit fragment valt buiten de video. Kies een eerder beginpunt of een kortere duur." }
         val rect = pixelCrop(sourceWidth, sourceHeight, crop)
         require(min(rect[2], rect[3]) >= max(MIN_SIDE, minSide)) { "Kies een video of uitsnede van minstens ${max(MIN_SIDE, minSide)} × ${max(MIN_SIDE, minSide)} pixels." }

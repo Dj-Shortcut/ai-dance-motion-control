@@ -78,6 +78,16 @@ test('native transport exposes only owned video, security and Play operations an
   assert.equal(nativeApiPath('/api/native/../owner/finance','GET'),null);assert.equal(nativeApiPath('/api/native//evil','GET'),null);assert.equal(nativeApiPath('/api/native/payments/google-play/config','GET'),'/api/payments/google-play/config');
   assert.equal((await f.call('/api/native/owner/security/verification/options',{operation:'finance-policy',payload:{}},{token:a.accessToken})).status,403);
   const q=await f.call('/api/native/generation-quotes',{},{token:a.accessToken});assert.equal(q.status,201,await q.clone().text());const quote=await q.json();assert.match(quote.approvalToken,/^[A-Za-z0-9_-]{43}$/);assert.equal(quote.idempotencyKey,'rigchatgpt_'+quote.id);
+  const unfunded=await f.login('unfunded');
+  const blocked=await f.call('/api/native/generation-quotes',{},{token:unfunded.accessToken});
+  assert.equal(blocked.status,409);
+  assert.equal((await blocked.json()).code,'quote_unavailable');
+  for(const approval of [{approvalToken:'a'.repeat(43)},{idempotencyKey:'key'}]){
+   const req=new Request(BRIDGE+'/api/native/generation-quotes',{method:'POST',headers:{authorization:'Bearer '+a.accessToken,'content-type':'application/json'},body:'{}'});
+   const response=await handleNativeApi(req,f.env,{db:f.db,dispatch:async signed=>Response.json(
+    new URL(signed.url).pathname==='/api/chatgpt/quote-approvals'?approval:{id:quote.id},{status:201})});
+   assert.equal(response.status,503);
+  }
   assert.equal((await f.call('/api/native/generations',{quoteId:quote.id,idempotencyKey:quote.idempotencyKey},{token:a.accessToken})).status,403);
   assert.equal((await f.call('/api/native/assets',{},{token:a.accessToken})).status,400,'missing exact body digest rejected before buffering');
  }finally{await f.dispose();}

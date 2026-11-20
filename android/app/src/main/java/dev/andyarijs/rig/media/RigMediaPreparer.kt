@@ -103,22 +103,22 @@ class RigMediaPreparer(context: Context) {
 
     suspend fun prepareImage(source: NativeMediaSource, crop: NormalizedCrop = NormalizedCrop.FULL): PreparedAsset = withContext(Dispatchers.IO) {
         require(!source.isVideo) { "Kies eerst een moment uit je video." }
-        RigMediaLimits.imageDimensions(source.width, source.height, crop)
+        val size = RigMediaLimits.imageDimensions(source.width, source.height, crop)
         coroutineContext.ensureActive()
         // Crop as part of decoding: downscaling the entire 48 MP source first
         // would throw away detail from a perfectly usable small face selection.
         val croppedDecode = Build.VERSION.SDK_INT >= 28
         val bitmap = decodeImage(source.uri, if (croppedDecode) crop else null)
-        try { writeJpeg(bitmap, if (croppedDecode) NormalizedCrop.FULL else crop) } finally { bitmap.recycle() }
+        try { writeJpeg(bitmap, if (croppedDecode) NormalizedCrop.FULL else crop, size) } finally { bitmap.recycle() }
     }
 
     /** Decode only a selected frame, even when the source is a multi-gigabyte 4K video. */
     suspend fun prepareFrame(source: NativeMediaSource, positionMs: Long, crop: NormalizedCrop = NormalizedCrop.FULL): PreparedAsset = withContext(Dispatchers.IO) {
         require(source.isVideo && positionMs >= 0 && positionMs < source.durationMs) { "Kies een moment binnen de video." }
-        RigMediaLimits.imageDimensions(source.width, source.height, crop)
+        val size = RigMediaLimits.imageDimensions(source.width, source.height, crop)
         coroutineContext.ensureActive()
         val bitmap = readFrameBitmap(source, positionMs, crop)
-        try { coroutineContext.ensureActive(); writeJpeg(bitmap, crop) } finally { bitmap.recycle() }
+        try { coroutineContext.ensureActive(); writeJpeg(bitmap, crop, size) } finally { bitmap.recycle() }
     }
 
     /** Bounded upright preview for the native crop UI; caller owns/recycles it. */
@@ -328,9 +328,8 @@ class RigMediaPreparer(context: Context) {
         resolver.openInputStream(uri)?.use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } ?: ExifInterface.ORIENTATION_NORMAL
     }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
-    private fun writeJpeg(source: Bitmap, crop: NormalizedCrop): PreparedAsset {
+    private fun writeJpeg(source: Bitmap, crop: NormalizedCrop, size: Pair<Int, Int>): PreparedAsset {
         val rect = RigMediaLimits.pixelCrop(source.width, source.height, crop)
-        val size = RigMediaLimits.imageDimensions(source.width, source.height, crop)
         val bitmap = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
         val output = File(directory, "${UUID.randomUUID()}.jpg")
         try {

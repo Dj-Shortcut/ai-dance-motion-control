@@ -2,6 +2,10 @@ package dev.andyarijs.rig.data
 
 import org.json.JSONObject
 
+class RigStorageUnavailable(cause: Exception) : Exception(
+    "RIG kan je beveiligde gegevens niet openen. Probeer het opnieuw voordat je een nieuwe opdracht start.", cause,
+)
+
 /** Persistence boundary. Android uses RigSecureStore; tests can model a
  * process restart against the exact same durable records without a real key. */
 interface RigStore {
@@ -31,7 +35,12 @@ interface RigStore {
         write("session", null)
         true
     }
-    fun pending(userId: String): PendingGeneration? = read("generation-$userId")?.let { runCatching { PendingGeneration.fromJson(it) }.getOrNull() }?.takeIf { it.userId == userId }
+    fun pending(userId: String): PendingGeneration? {
+        val value = read("generation-$userId") ?: return null
+        return try {
+            PendingGeneration.fromJson(value).also { check(it.userId == userId) }
+        } catch (error: Exception) { throw RigStorageUnavailable(error) }
+    }
     fun savePending(value: PendingGeneration) = write("generation-${value.userId}", value.toJson())
     fun clearPending(userId: String) = write("generation-$userId", null)
 }

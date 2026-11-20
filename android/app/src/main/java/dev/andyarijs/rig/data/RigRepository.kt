@@ -23,7 +23,7 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
         return value
     }
 
-    suspend fun videoConfig(): RigVideoConfig = RigVideoConfig.fromJson(api.get("/video-config"))
+    suspend fun videoConfig(session: NativeAuthSession = requireSession()): RigVideoConfig = RigVideoConfig.fromJson(api.get("/video-config", session))
 
     suspend fun providerBalance(): RigProviderBalance {
         val user = requireSession().userId
@@ -34,31 +34,29 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
         return RigProviderBalance.fromJson(value)
     }
 
-    suspend fun upload(kind: String, file: File, durationSeconds: Int? = null, keepSound: Boolean = true): String {
-        val user = requireSession().userId
-        val result = api.upload(kind, file, durationSeconds, keepSound)
+    suspend fun upload(kind: String, file: File, durationSeconds: Int? = null, keepSound: Boolean = true, session: NativeAuthSession = requireSession()): String {
+        val result = api.upload(kind, file, durationSeconds, keepSound, session)
         val id = result.getString("id")
         require(RIG_ID.matches(id))
         // The current media service normalizes synchronously and exposes no
         // owned asset polling route. Unexpected processing is not a success.
-        checkUser(user)
+        api.checkSession(session)
         check(result.optString("status") == "ready" && (!result.has("kind") || result.getString("kind") == kind)) { "Het bestand is nog niet klaar. Er is geen video gestart." }
         return id
     }
 
-    suspend fun quote(request: RigQuoteRequest): RigQuote {
-        val user = requireSession().userId
-        check(store.pending(user) == null) { "Controleer eerst je bestaande video. Zo betaal je niet per ongeluk twee keer." }
-        val config = videoConfig()
-        checkUser(user)
+    suspend fun quote(request: RigQuoteRequest, session: NativeAuthSession = requireSession()): RigQuote {
+        check(store.pending(session.userId) == null) { "Controleer eerst je bestaande video. Zo betaal je niet per ongeluk twee keer." }
+        val config = videoConfig(session)
         check(config.enabled && request.quality in config.qualities) { "Dit videotype is momenteel niet beschikbaar." }
-        val result = RigQuote.fromJson(api.post("/generation-quotes", request.toJson()), request, config.funding)
-        checkUser(user)
+        val result = RigQuote.fromJson(api.post("/generation-quotes", request.toJson(), session), request, config.funding)
+        api.checkSession(session)
         return result
     }
 
-    suspend fun saveDraft(request: JSONObject): JSONObject {
-        val result = api.post("/video-drafts", request)
+    suspend fun saveDraft(request: JSONObject, session: NativeAuthSession = requireSession()): JSONObject {
+        val result = api.post("/video-drafts", request, session)
+        api.checkSession(session)
         check(result.optBoolean("saved") && result.optLong("expiresAt") > System.currentTimeMillis()) { "Je volledige fragment kon niet worden bewaard. Start je proefje nog niet." }
         return result
     }
@@ -119,23 +117,25 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
         else (raw.optJSONObject("job") ?: raw.optJSONObject("generation"))?.let { listOf(RigJob.fromJson(it)) } ?: emptyList()
     }
 
-    suspend fun draft(jobId: String): JSONObject { require(RIG_ID.matches(jobId)); return api.get("/generations/$jobId/draft") }
+    suspend fun draft(jobId: String, session: NativeAuthSession = requireSession()): JSONObject {
+        require(RIG_ID.matches(jobId))
+        return api.get("/generations/$jobId/draft", session).also { api.checkSession(session) }
+    }
 
     suspend fun download(job: RigJob): File {
         check(job.completed && job.videoPath != null) { "Je video is nog niet klaar." }
-        val user = requireSession().userId
-        val directory = File(filesDirectory, "videos/$user").apply { mkdirs() }
-        val file = api.download("/generations/${job.id}/video", File(directory, "RIG-${job.id}.mp4"))
-        checkUser(user)
+        val session = requireSession()
+        val directory = File(filesDirectory, "videos/${session.userId}").apply { mkdirs() }
+        val file = api.download("/generations/${job.id}/video", File(directory, "RIG-${job.id}.mp4"), session = session)
+        api.checkSession(session)
         return file
     }
 
-    suspend fun downloadDraftAsset(draftId: String, assetId: String, kind: String): File {
+    suspend fun downloadDraftAsset(draftId: String, assetId: String, kind: String, session: NativeAuthSession = requireSession()): File {
         require(RIG_ID.matches(draftId) && RIG_ID.matches(assetId) && kind in setOf("image", "face", "angle", "video"))
-        val user = requireSession().userId
-        val directory = File(cacheDirectory, "drafts/$user").apply { mkdirs() }
-        val file = api.download("/video-drafts/$draftId/assets/$assetId", File(directory, "$assetId.${if (kind == "video") "mp4" else "jpg"}"), 16L * 1024 * 1024)
-        checkUser(user)
+        val directory = File(cacheDirectory, "drafts/${session.userId}").apply { mkdirs() }
+        val file = api.download("/video-drafts/$draftId/assets/$assetId", File(directory, "$assetId.${if (kind == "video") "mp4" else "jpg"}"), 16L * 1024 * 1024, session)
+        api.checkSession(session)
         return file
     }
 
@@ -150,10 +150,9 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
     }
 
     private fun recordJob(user: String, quote: String, intent: String, job: RigJob) {
-        val finalized = job.completed || job.state == "canceled" || (job.state == "failed" && (job.raw.optBoolean("refundConfirmed") || job.raw.optBoolean("finalizationConfirmed")))
-        if (finalized) store.clearPending(user) else store.savePending(PendingGeneration(user, quote, intent, job.id))
+        if (job.terminal) store.clearPending(user) else store.savePending(PendingGeneration(user, quote, intent, job.id))
     }
 
-    fun requireSession(): NativeAuthSession = store.session() ?: throw RigApiException(401, "login_required", "Meld je aan om verder te gaan.")
+    fun requireSession(): NativeAuthSession = api.requireSession()
     fun checkUser(userId: String) { check(requireSession().userId == userId) { "Je account is gewijzigd. Open je opdracht opnieuw." } }
 }
