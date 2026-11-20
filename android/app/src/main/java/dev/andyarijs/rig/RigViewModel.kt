@@ -28,13 +28,14 @@ data class RigScreenState(
     val quality: String = "pro", val prompt: String = "", val keepSound: Boolean = true,
     val trial: Boolean = false, val busy: Boolean = false, val stage: String = "", val progress: Int? = null,
     val error: String? = null, val quote: RigQuote? = null, val job: RigJob? = null,
+    val pendingSubmission: Boolean = false,
     val result: File? = null, val fullAvailable: Boolean = false,
     val history: List<RigJob> = emptyList(), val showHistory: Boolean = false,
     val showCredits: Boolean = false, val needsRegistration: Boolean = false,
 )
 
-class RigViewModel(app: Application) : AndroidViewModel(app) {
-    val repository = RigRepository(app)
+class RigViewModel internal constructor(app: Application, val repository: RigRepository) : AndroidViewModel(app) {
+    constructor(app: Application) : this(app, RigRepository(app))
     val billing = RigPlayBilling(app, repository, viewModelScope)
     private val media = RigMediaPreparer(app)
     private val security = RigDeviceSecurity(repository)
@@ -53,7 +54,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         running = viewModelScope.launch {
             mutable.update { it.copy(busy = true, stage = "Je selectie terughalen") }
             try {
-                if(repository.signedIn()) { refreshAccount(); repository.recoverPending()?.let { accept(it) } }
+                if(repository.signedIn()) { refreshAccount(); recoverSubmission() }
                 else restoreDraft("draft-anonymous")
             } catch(e: CancellationException) { throw e } catch(e: Exception) { showError(e) }
             finally { mutable.update { it.copy(busy = false) } }
@@ -68,7 +69,21 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-    fun showError(error: Throwable) { mutable.update { it.copy(session = if(error is RigApiException && error.status == 401) null else it.session, error = error.message?.take(350) ?: "Dit lukte niet. Er is geen nieuwe video gestart.", busy = false, progress = null) } }
+    fun showError(error: Throwable) {
+        val signedOut = error is RigApiException && error.status == 401
+        val pending = repository.store.session()?.let { repository.store.pending(it.userId) }
+        val uncertain = pending != null && pending.jobId == null
+        mutable.update {
+            it.copy(
+                session = if (signedOut) null else it.session,
+                quote = if (uncertain || signedOut) null else it.quote,
+                pendingSubmission = uncertain,
+                error = if (uncertain) "De ontvangst van je videoaanvraag is nog niet bevestigd. Controleer de status."
+                        else error.message?.take(350) ?: "Dit lukte niet. Probeer het opnieuw.",
+                busy = false, progress = null,
+            )
+        }
+    }
     fun closeQuote() { if (!mutable.value.busy) mutable.update { it.copy(quote = null) } }
     fun saveResult(uri: Uri) = work("Video bewaren") {
         val file = mutable.value.result ?: error("Je video is nog niet klaar.")
@@ -77,14 +92,20 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun clearError() { mutable.update { it.copy(error = null) } }
-    private fun change(block: (RigScreenState) -> RigScreenState) {
-        if (mutable.value.busy) return
-        mutable.update { block(it).copy(quote = null, error = null) }
-        fullPrepared = null; restoredFullRequest = null
+    private fun change(mediaChanged: Boolean = true, block: (RigScreenState) -> RigScreenState) {
+        val current = mutable.value
+        if (current.busy) return
+        val edited = block(current)
+        if (current == edited) return
+        mutable.value = edited.copy(quote = null, error = null)
+        if (mediaChanged) {
+            fullPrepared = null
+            restoredFullRequest = null
+        }
         persistDraft()
     }
     fun step(step: Int) { if (!mutable.value.busy) mutable.update { it.copy(step = step, error = null) } }
-    fun prompt(value: String) = change { it.copy(prompt = value.take(1900)) }
+    fun prompt(value: String) = change(mediaChanged = false) { it.copy(prompt = value.take(1900)) }
     fun quality(value: String) = change { it.copy(quality = value, duration = min(it.duration, if (value == "pro") 30 else 15), trial = false) }
     fun keepSound(value: Boolean) = change { it.copy(keepSound = value) }
     fun trial(value: Boolean) = change { it.copy(trial = value) }
@@ -113,6 +134,8 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         val asset = media.prepareFrame(source, s.frameMs, s.subjectCrop)
         val ref = media.inspect(Uri.fromFile(asset.file))
         mutable.update { if (face) it.copy(face = ref, quote = null) else { check(it.face != null && it.angles.size < 3) { "Voeg eerst een close-up toe. Maximaal drie hoeken." }; it.copy(angles = it.angles + ref, quote = null) } }
+        fullPrepared = null
+        restoredFullRequest = null
         persistDraft()
     }
     fun beginLogin(): Uri {
@@ -137,6 +160,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
             repository.store.write("draft-login", null)
             repository.store.write("draft-anonymous", null)
             refreshAccount()
+            recoverSubmission()
         } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) }
         finally { mutable.update { it.copy(busy = false) } }
     }
@@ -145,7 +169,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         resuming = viewModelScope.launch {
             try {
                 refreshAccount()
-                repository.recoverPending()?.let { accept(it) }
+                recoverSubmission()
                 if (mutable.value.showCredits) billing.refresh()
             } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) }
         }
@@ -153,6 +177,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun refreshAccount() {
         val session = repository.session()
         val config = repository.videoConfig()
+        if (repository.store.session()?.userId != session.userId) return
         if (activeUser != null && activeUser != session.userId) {
             fullPrepared = null; restoredFullRequest = null; draftRestored = false
             mutable.value = RigScreenState()
@@ -168,7 +193,8 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         check(s.quality in s.config.qualities) { "Deze verwerking is nog niet beschikbaar voor je account." }
         check(s.prompt.isNotBlank()) { "Beschrijf eerst wat je wilt zien." }
         restoredFullRequest?.let { request ->
-            mutable.update { it.copy(stage = "Je volledige video berekenen") }; readyQuote(repository.quote(request), false)
+            mutable.update { it.copy(stage = "Je volledige video berekenen") }
+            readyQuote(repository.quote(request.copy(prompt = s.prompt)), false)
             return@work
         }
         val subject = s.subject ?: error("Kies je foto of een beeld uit je eigen video.")
@@ -194,12 +220,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         if (trial) {
             mutable.update { it.copy(stage = "Je volledige fragment bewaren") }
             val fullId = repository.upload("video", full.file, full.durationSeconds, s.keepSound)
-            val draft = JSONObject().put("quoteId", quote.id).put("fullVideoId", fullId).put("imageId", imageId)
-                .put("faceId", faceId ?: JSONObject.NULL).put("angleIds", JSONArray(angleIds)).put("selectedSeconds", s.duration)
-                .put("quality", s.quality).put("keepSound", s.keepSound).put("prompt", s.prompt).put("cleanup", false)
-                .put("originalStartSeconds", s.startMs / 1000.0)
-            if (s.quality == "pro") draft.put("steadyCamera", false) else draft.put("transferPolicy", "fal-temporary-links-v1")
-            repository.saveDraft(draft)
+            repository.saveDraft(request.fullDraft(quote.id, fullId, s.duration, s.startMs))
         }
         readyQuote(quote, trial)
     }
@@ -235,6 +256,7 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
                 if (current.completed) {
                     val result = repository.download(current)
                     val draft = runCatching { repository.draft(current.id) }.getOrNull()
+                    currentCoroutineContext().ensureActive()
                     mutable.update { it.copy(result = result, fullAvailable = draft?.optBoolean("available") == true) }
                 }
                 val freshSession = repository.session(); mutable.update { it.copy(session = freshSession.copy(funding = it.config?.funding ?: freshSession.funding)) }
@@ -242,13 +264,25 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun open(job: RigJob) = accept(job)
+    fun checkSubmission() = work("Je videoaanvraag controleren") { recoverSubmission() }
+    private suspend fun recoverSubmission() {
+        val job = repository.recoverPending()
+        mutable.update {
+            it.copy(pendingSubmission = false, error = when {
+                !it.pendingSubmission -> it.error
+                job == null -> "Je vorige videoaanvraag is geannuleerd. Je kunt de prijs opnieuw bekijken."
+                else -> null
+            })
+        }
+        if (job != null) accept(job)
+    }
     fun checkStatus() { val job = mutable.value.job; if (job != null) work("Status controleren") { accept(repository.job(job.id)) } else resume() }
     fun continueFull() = work("Je volledige fragment terughalen") {
+        val user = repository.requireSession().userId
         val job = mutable.value.job ?: error("Open eerst je proefje.")
         val draft = repository.draft(job.id)
         check(draft.optBoolean("available")) { "De privébewaring van dit fragment is verlopen. Je proefvideo blijft beschikbaar." }
-        val raw = draft.getJSONObject("request")
-        val request = RigQuoteRequest(raw.getString("imageId"), raw.getString("videoId"), raw.getString("quality"), raw.getString("prompt"), raw.getBoolean("keepSound"), raw.optBoolean("steadyCamera"), raw.optString("faceId").takeIf { it != "null" && it.isNotBlank() }, raw.optJSONArray("angleIds")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList())
+        val request = RigQuoteRequest.fromJson(draft.getJSONObject("request"))
         check(!draft.optBoolean("cleanup")) { "Dit fragment gebruikt een verwerking die nog niet in Android beschikbaar is. Open het op de website." }
         val assets = draft.getJSONObject("assets")
         val videoPath = assets.getJSONObject("video").getString("path")
@@ -260,12 +294,30 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
         val subject = media.inspect(Uri.fromFile(imageFile)); val motion = media.inspect(Uri.fromFile(videoFile))
         val face = request.faceId?.let { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "face"))) }
         val angles = request.angleIds.map { media.inspect(Uri.fromFile(repository.downloadDraftAsset(draftId, it, "angle"))) }
+        currentCoroutineContext().ensureActive()
+        repository.checkUser(user)
         restoredFullRequest = request
         mutable.update { it.copy(subject = subject, motion = motion, face = face, angles = angles, duration = draft.getInt("selectedSeconds"), startMs = 0, frameMs = 0, subjectCrop = NormalizedCrop.FULL, motionCrop = NormalizedCrop.FULL, prompt = request.prompt, quality = request.quality, keepSound = request.keepSound, trial = false, quote = null, step = 3, result = null, job = null, fullAvailable = false) }
         persistDraft()
     }
     suspend fun purchase(activity: Activity, id: String) { try { billing.purchase(activity, id); refreshAccount() } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) } }
-    fun logout() = work("Afmelden") { activeUser?.let { repository.store.write("draft-$it", null) }; repository.store.write("draft-anonymous", null); repository.store.write("draft-login", null); repository.logout(); activeUser = null; draftRestored = false; fullPrepared = null; restoredFullRequest = null; poll?.cancel(); mutable.value = RigScreenState() }
+    fun logout() = work("Afmelden") {
+        val user = activeUser ?: mutable.value.session?.userId
+        poll?.cancel()
+        resuming?.cancel()
+        try {
+            repository.logout()
+        } finally {
+            activeUser = null
+            draftRestored = false
+            fullPrepared = null
+            restoredFullRequest = null
+            mutable.value = RigScreenState()
+            user?.let { repository.store.write("draft-$it", null) }
+            repository.store.write("draft-anonymous", null)
+            repository.store.write("draft-login", null)
+        }
+    }
     fun newVideo() { if (mutable.value.busy) return; mutable.update { it.copy(step = 1, result = null, job = null, quote = null, fullAvailable = false, trial = false) } }
     private fun work(stage: String, block: suspend () -> Unit) {
         if (running?.isActive == true || mutable.value.busy) return
@@ -284,16 +336,22 @@ class RigViewModel(app: Application) : AndroidViewModel(app) {
             .put("frameMs", s.frameMs).put("startMs", s.startMs).put("duration", s.duration).put("step", s.step.coerceIn(0,3))
             .put("subjectCrop", cropJson(s.subjectCrop)).put("motionCrop", cropJson(s.motionCrop))
             .put("prompt", s.prompt).put("quality", s.quality).put("keepSound", s.keepSound).put("trial", s.trial)
+            .apply { if (user != null && user == activeUser) put("fullRequest", restoredFullRequest?.toJson()) }
             .put("face", s.face?.uri?.toString()).put("angles", JSONArray(s.angles.map { it.uri.toString() })))
     }
     private suspend fun restoreDraft(anonymousKey: String? = null) {
-        val key = if(anonymousKey == "draft-anonymous" && mutable.value.session == null) anonymousKey else mutable.value.session?.userId?.let { "draft-$it" } ?: return
+        val user = mutable.value.session?.userId
+        val key = if(anonymousKey == "draft-anonymous" && user == null) anonymousKey else user?.let { "draft-$it" } ?: return
         val d = repository.store.read(key) ?: return
         if (d.optLong("expiresAt") <= System.currentTimeMillis()) { repository.store.write(key, null); return }
         suspend fun source(key: String): NativeMediaSource? = d.optString(key).takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { media.inspect(Uri.parse(it)) }.getOrNull() }
         val subject = source("subject"); val motion = source("motion"); val face = source("face")
         val angles = d.optJSONArray("angles")?.let { a -> (0 until min(3, a.length())).mapNotNull { n -> runCatching { media.inspect(Uri.parse(a.getString(n))) }.getOrNull() } } ?: emptyList()
-        mutable.update { it.copy(step = if (subject != null && motion != null) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = d.optLong("frameMs"), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = d.optString("quality","pro"), keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
+        currentCoroutineContext().ensureActive()
+        if (mutable.value.session?.userId != user || repository.store.session()?.userId != user) return
+        restoredFullRequest = if (user == null) null else d.optJSONObject("fullRequest")?.let(RigQuoteRequest::fromJson)
+        val hasSelection = restoredFullRequest != null || (subject != null && motion != null)
+        mutable.update { it.copy(step = if (hasSelection) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = d.optLong("frameMs"), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = d.optString("quality","pro"), keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
     }
     private fun cropJson(c: NormalizedCrop) = JSONArray(listOf(c.left,c.top,c.right,c.bottom))
     private fun cropFrom(a: JSONArray?) = runCatching { if(a==null) NormalizedCrop.FULL else NormalizedCrop(a.getDouble(0).toFloat(),a.getDouble(1).toFloat(),a.getDouble(2).toFloat(),a.getDouble(3).toFloat()) }.getOrDefault(NormalizedCrop.FULL)

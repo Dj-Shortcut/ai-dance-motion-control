@@ -63,6 +63,29 @@ data class RigQuoteRequest(
             .put("quality", quality).put("prompt", prompt.trim()).put("keepSound", keepSound)
             .apply { if (edit) put("transferPolicy", TEMPORARY_TRANSFER) else put("steadyCamera", steadyCamera) }
     }
+
+    fun fullDraft(quoteId: String, fullVideoId: String, selectedSeconds: Int, startMs: Long): JSONObject =
+        toJson().apply {
+            remove("videoId")
+            put("quoteId", quoteId)
+            put("fullVideoId", fullVideoId)
+            put("selectedSeconds", selectedSeconds)
+            put("originalStartSeconds", startMs / 1000.0)
+            put("cleanup", false)
+        }
+
+    companion object {
+        fun fromJson(value: JSONObject) = RigQuoteRequest(
+            imageId = value.getString("imageId"),
+            videoId = value.getString("videoId"),
+            quality = value.getString("quality"),
+            prompt = value.getString("prompt"),
+            keepSound = value.getBoolean("keepSound"),
+            steadyCamera = value.optBoolean("steadyCamera"),
+            faceId = if (value.isNull("faceId")) null else value.getString("faceId"),
+            angleIds = value.optJSONArray("angleIds").strings(),
+        )
+    }
 }
 
 data class RigQuote(

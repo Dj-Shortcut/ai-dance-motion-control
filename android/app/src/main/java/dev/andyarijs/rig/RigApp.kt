@@ -83,10 +83,24 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         if (s.progress == null) LinearProgressIndicator(Modifier.fillMaxWidth().padding(bottom = 12.dp))
                         else LinearProgressIndicator(progress = { s.progress!! / 100f }, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
                     }
-                    val label = when (s.step) { 0 -> "Maak een video"; 1 -> "Verder"; 2 -> "Verder"; 3 -> if (s.session == null) "Aanmelden en prijs bekijken" else "Bekijk de prijs"; else -> if (s.fullAvailable) "Volledige versie maken" else if (s.job?.terminal == false) "Controleer status" else "Nog eentje" }
-                    val enabled = !s.busy && when(s.step) { 1 -> s.subject != null && s.motion != null; 2 -> s.config == null || s.quality in s.config!!.qualities; 3 -> s.prompt.isNotBlank(); else -> true }
+                    val label = if (s.pendingSubmission) "Controleer status" else when (s.step) {
+                        0 -> "Maak een video"
+                        1, 2 -> "Verder"
+                        3 -> if (s.session == null) "Aanmelden en prijs bekijken" else "Bekijk de prijs"
+                        else -> if (s.fullAvailable) "Volledige versie maken" else if (s.job?.terminal == false) "Controleer status" else "Nog eentje"
+                    }
+                    val enabled = !s.busy && (s.pendingSubmission || when (s.step) {
+                        1 -> s.subject != null && s.motion != null
+                        2 -> s.config == null || s.quality in s.config!!.qualities
+                        3 -> s.prompt.isNotBlank()
+                        else -> true
+                    })
                     Button(enabled = enabled, onClick = {
-                        when(s.step) { 0 -> model.step(1); 1 -> model.step(2); 2 -> model.step(3); 3 -> if (s.session == null) onLogin() else model.prepareQuote(); else -> if (s.fullAvailable) model.continueFull() else if (s.job?.terminal == false) model.checkStatus() else model.newVideo() }
+                        if (s.pendingSubmission) model.checkSubmission() else when (s.step) {
+                            0, 1, 2 -> model.step(s.step + 1)
+                            3 -> if (s.session == null) onLogin() else model.prepareQuote()
+                            else -> if (s.fullAvailable) model.continueFull() else if (s.job?.terminal == false) model.checkStatus() else model.newVideo()
+                        }
                     }, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)) { Text(label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
                 }
             }

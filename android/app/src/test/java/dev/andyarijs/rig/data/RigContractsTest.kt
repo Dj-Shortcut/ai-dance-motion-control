@@ -46,6 +46,24 @@ class RigContractsTest {
         assertThrows(Exception::class.java) { edit.copy(steadyCamera = true).toJson() }
     }
 
+    @Test fun trialAndFullDraftSendIdenticalNormalizedSettings() {
+        for (quality in listOf("pro", "standard", "edit-standard", "human-recast")) {
+            val trial = request.copy(quality = quality, prompt = " \n  Behoud het licht.  \t")
+            val quotePayload = trial.toJson()
+            val draft = trial.fullDraft("trial-quote", "full-video", 15, 1250)
+            assertEquals("Behoud het licht.", draft.getString("prompt"))
+            assertEquals("full-video", draft.getString("fullVideoId"))
+            assertEquals(15, draft.getInt("selectedSeconds"))
+            assertEquals(1.25, draft.getDouble("originalStartSeconds"), 0.0)
+            assertFalse(draft.has("videoId"))
+            for (key in quotePayload.keys().asSequence().filter { it != "videoId" }) {
+                assertEquals(key, quotePayload.get(key).toString(), draft.get(key).toString())
+            }
+            assertEquals(quotePayload.has("transferPolicy"), draft.has("transferPolicy"))
+            assertEquals(quotePayload.has("steadyCamera"), draft.has("steadyCamera"))
+        }
+    }
+
     @Test fun humanRecastRequires1080pOnePortraitAndOriginalSound() {
         val recast = request.copy(quality = "human-recast")
         val json = quote().put("quality", "human-recast").put("durationSeconds", 6).put("billedSeconds", 6)
