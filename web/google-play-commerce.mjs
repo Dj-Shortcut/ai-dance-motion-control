@@ -18,7 +18,7 @@ export const GOOGLE_PLAY_RTND_PATH=BASE+'/rtdn';
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'private, no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}});
 const unavailable=()=>json({code:'google_play_not_configured',error:'Aankopen via Google Play zijn nog niet beschikbaar.'},503);
 const sha=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),v=>v.toString(16).padStart(2,'0')).join('');
-const invalidCodes=new Set(['play_input','play_account','play_environment','play_product','play_state']);
+const invalidCodes=new Set(['play_input','play_account','play_environment','play_product','play_state','play_rejected']);
 async function readJSON(req,max=8192){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')||''))throw Error('body');
  const length=req.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>max))throw Error('body');

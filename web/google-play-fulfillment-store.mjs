@@ -14,6 +14,8 @@ const error=code=>Object.assign(Error('Je Google Play-aankoop wordt gecontroleer
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const activeStates=['prepared','verifying','pending','credited'];
 const unfinishedStates=['pending','verified','refund_required','review'];
+const MAX_VERIFICATION_FAILURES=5;
+const VERIFICATION_RETRY_DELAYS=[60000,300000,900000,3600000];
 function financeJSON(value){if(value===null||value===undefined)return null;if(!object(value)||value.version!==1||value.source!=='google_order_v1')throw error('play_financial_record');const json=JSON.stringify(value);if(json.length>32768)throw error('play_financial_record');return json;}
 function fundingProof(value){if(!object(value)||!UUID.test(value.snapshotId||'')||!Array.isArray(value.before)||value.before.length!==1||typeof value.before[0]?.bind!=='function')throw error('play_funding_snapshot');return value;}
 
@@ -67,8 +69,9 @@ export function createGooglePlayFulfillmentStore(db,{mode='live',clock=Date.now}
  }
  async function verificationFailed({intentId,tokenHash,definitive=false,code='provider_unavailable',now=clock()}={}){
   if(!UUID.test(intentId||'')||!HASH.test(tokenHash||'')||!timestamp(now)||!['provider_unavailable','invalid_token','account_mismatch','product_mismatch','environment_mismatch','purchase_invalid'].includes(code))throw error('play_verification');await assertEnvironment();
+  const retryAt=VERIFICATION_RETRY_DELAYS.map(delay=>now+delay);
   await db.batch([
-   statement("UPDATE rig_google_play_attempts SET state=?,attempts=attempts+1,next_check_at=?,last_error=?,updated_at=? WHERE intent_id=? AND token_hash=? AND state='queued'",definitive?'invalid':'queued',now+60000,code,now,intentId,tokenHash),
+   statement("UPDATE rig_google_play_attempts SET state=CASE WHEN ?=1 OR attempts+1>=? THEN 'invalid' ELSE 'queued' END,attempts=attempts+1,next_check_at=CASE attempts WHEN 0 THEN ? WHEN 1 THEN ? WHEN 2 THEN ? ELSE ? END,last_error=?,updated_at=? WHERE intent_id=? AND token_hash=? AND state='queued'",definitive?1:0,MAX_VERIFICATION_FAILURES,...retryAt,code,now,intentId,tokenHash),
    statement("UPDATE rig_google_play_intents SET state=CASE WHEN expires_at>? THEN 'prepared' ELSE 'expired' END,updated_at=? WHERE id=? AND state='verifying' AND NOT EXISTS(SELECT 1 FROM rig_google_play_attempts WHERE intent_id=? AND state='queued')",now,now,intentId,intentId),
    guard('1')
   ]);

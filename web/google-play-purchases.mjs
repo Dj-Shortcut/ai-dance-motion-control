@@ -9,6 +9,7 @@ const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 const hex=bytes=>Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
 const encode=value=>new TextEncoder().encode(value);
 const failure=code=>Object.assign(Error('Google Play-aankoop is nog niet beschikbaar.'),{code});
+const rejectedPurchaseStatus=status=>[400,404,410,422].includes(status);
 const tokenOk=value=>typeof value==='string'&&value.length>=8&&value.length<=4096&&!/[^\x21-\x7e]/.test(value);
 const validTime=value=>typeof value==='string'&&value.length<=40&&/^\d{4}-\d{2}-\d{2}T/.test(value)&&Number.isFinite(Date.parse(value));
 const validOrder=value=>value===undefined||typeof value==='string'&&value.length>=1&&value.length<=512&&!/[\u0000-\u001f\u007f]/.test(value);
@@ -29,7 +30,8 @@ export async function googlePlayAccountId({key,userId,siteId,mode}){
 }
 
 async function boundedJson(response){
- if(!response?.ok||response.status!==200||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw failure('play_provider');
+ if(!response?.ok||response.status!==200)throw failure(rejectedPurchaseStatus(response?.status)?'play_rejected':'play_provider');
+ if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw failure('play_response');
  const length=response.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>32768))throw failure('play_response');
  const reader=response.body?.getReader();if(!reader)throw failure('play_response');
  const chunks=[];let size=0,timer;
