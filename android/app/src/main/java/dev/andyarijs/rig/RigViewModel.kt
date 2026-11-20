@@ -224,13 +224,19 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         if (repository.store.session()?.userId != session.userId) return
         if (activeUser != null && activeUser != session.userId) {
             fullPrepared = null; restoredFullRequest = null; draftRestored = false
-            mutable.value = RigScreenState()
+            mutable.update { RigScreenState(busy = it.busy, stage = it.stage, progress = it.progress) }
         }
         activeUser = session.userId
         mutable.update { it.copy(session = session.copy(funding = config.funding), config = config,
             providerBalance = it.providerBalance?.takeIf { config.funding == "owner-provider" && it.isFresh() }) }
         restartBalancePolling()
-        if (!draftRestored) { draftRestored = true; restoreDraft() }
+        if (!draftRestored) {
+            draftRestored = true
+            try { restoreDraft() } catch (error: Exception) {
+                if (activeUser == session.userId) draftRestored = false
+                throw error
+            }
+        }
     }
     fun pause() {
         foreground = false

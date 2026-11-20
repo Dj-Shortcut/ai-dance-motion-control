@@ -85,4 +85,20 @@ class NativeAccountStateTest {
             f.awaitState { it.job?.id == "job-1" && !it.pendingSubmission }
         }
     }
+
+    @Test fun accountDraftCanBeRestoredAfterAReadFailure() {
+        val unavailable = AtomicBoolean(true)
+        NativeViewModelFixture(setupStore = { store ->
+            val user = requireNotNull(store.session()).userId
+            store.write("draft-$user", JSONObject().put("prompt", "Mijn bewaarde selectie")
+                .put("expiresAt", System.currentTimeMillis() + 60_000))
+        }, beforeRead = { name ->
+            if (name.startsWith("draft-u-") && unavailable.get()) throw RigStorageUnavailable(IOException("Fixture"))
+        }) { request -> error("Onverwacht pad: ${request.url.encodedPath}") }.use { f ->
+            assertTrue(f.model.state.value.error?.contains("beveiligde gegevens") == true)
+            unavailable.set(false)
+            f.onMain { f.model.resume() }
+            f.awaitState { it.prompt == "Mijn bewaarde selectie" }
+        }
+    }
 }

@@ -33,17 +33,17 @@ class RigSecureStore internal constructor(context: Context, storageName: String,
 
     override fun write(name: String, value: JSONObject?) = synchronized(transactionLock) {
         require(Regex("^[a-zA-Z0-9_-]{1,150}$").matches(name))
-        val editor = preferences.edit()
-        if (value == null) editor.remove(name) else {
-            try {
+        try {
+            val editor = preferences.edit()
+            if (value == null) editor.remove(name) else {
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key(create = true)); updateAAD(name.toByteArray()) }
                 val encrypted = cipher.doFinal(value.toString().toByteArray(Charsets.UTF_8))
                 val packed = JSONObject().put("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
                     .put("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
                 editor.putString(name, packed.toString())
-            } catch (error: Exception) { throw RigStorageUnavailable(error) }
-        }
-        check(editor.commit()) { "Je beveiligde opdracht kon niet worden bewaard. Er is niets gestart." }
+            }
+            check(editor.commit()) { "Opslagwijziging niet bevestigd." }
+        } catch (error: Exception) { throw RigStorageUnavailable(error) }
     }
 
     override fun read(name: String): JSONObject? = synchronized(transactionLock) {
