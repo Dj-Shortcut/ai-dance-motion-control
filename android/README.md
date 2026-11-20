@@ -1,7 +1,7 @@
 # RIG voor Android
 
 Zelfstandige Android-app in Kotlin/Jetpack Compose, pakket `dev.andyarijs.rig`,
-versie `0.2.0` (code `2`), Android 9 of nieuwer. De schermen, bestandskeuze,
+versie `0.2.1` (code `3`), Android 9 of nieuwer. De schermen, bestandskeuze,
 fragmentkeuze, videoweergave, uitsnijden en prijsbevestiging zijn native.
 Er is geen WebView of Trusted Web Activity in de actieve app.
 iOS is een latere client van dezelfde servercontracten.
