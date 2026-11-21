@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {build} from 'esbuild';
-import {Miniflare} from 'miniflare';
+import {Miniflare,Response as OutboundResponse} from 'miniflare';
 import {signSitesBridgeRequest,sitesDigest} from './sites-bridge-protocol.mjs';
 import {nativePkceChallenge,NATIVE_SESSION_TTL,exchangeNativeAuthorization,authenticateNativeSession} from './native-auth.mjs';
 import {nativeApiPath,handleNativeApi} from './native-api.mjs';
@@ -16,24 +16,37 @@ const SITE='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site',BRIDGE='
 const base={RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRODUCTION_VIDEO_ENABLED:'yes',MOLLIE_LIVE_API_KEY:'live_FIXTURE',RIG_PRODUCTION_MOLLIE_PROFILE:'pfl_NATIVE',RIG_PRODUCTION_ENVIRONMENT_ID:'native-fixture',RIG_PRODUCTION_SITE_ID:PROJECT,RIG_PRODUCTION_SITE_ORIGIN:SITE,RIG_PRODUCTION_BRIDGE_ORIGIN:BRIDGE,RIG_PRODUCTION_WEBHOOK_URL:BRIDGE+'/api/payments/webhook',RIG_PRODUCTION_PACKAGES:'[]',RIG_PRODUCTION_SITES_BRIDGE_KEY:KEY,RIG_PRODUCTION_OWNER_USER_ID:OWNER,RIG_NATIVE_ANDROID_SIGNING_SHA256:CERT};
 const producer={RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_SITES_BRIDGE_ORIGIN:BRIDGE,RIG_SITES_BRIDGE_KEY:KEY};
 const bundled=await build({stdin:{contents:`import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
-const worker=createProductionCommerceWorker({network:async(url)=>{
- if(url==='https://api.openai.com/v1/images/generations')return Response.json({data:[{b64_json:btoa(String.fromCharCode(255,216,255,24,255,217))}]});
- throw Error('Real network prohibited in fixture');
-},videoFactory:async(env,{trustedUserId})=>async req=>{
+const worker=createProductionCommerceWorker({videoFactory:async(env,{trustedUserId})=>async req=>{
  const url=new URL(req.url);if(url.pathname==='/api/video-config')return Response.json({enabled:true,funding:'credits'});
  if(url.pathname==='/api/generation-quotes'){
   const id=crypto.randomUUID(),now=Date.now();await env.PRODUCTION_DB.prepare("INSERT INTO rig_generation_quotes(id,user_id,model,input_json,price_cents,pricing_version,duration_seconds,expires_at,created_at) VALUES(?,?,?,'{}',100,'native-fixture',5,?,?)").bind(id,trustedUserId,'fal-ai/kling-video/v3/pro/motion-control',now+60000,now).run();return Response.json({id,priceCents:100,currency:'EUR'},{status:201});
  }
  return Response.json({userId:trustedUserId,authorization:req.headers.get('authorization'),platformSubject:req.headers.get('oai-authenticated-user-id')});
 }});export default worker;`,resolveDir:new URL('.',import.meta.url).pathname},bundle:true,platform:'browser',format:'esm',write:false,logLevel:'silent'});
-async function fixture(bindings={}){
- const mf=new Miniflare({cf:false,modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-01-01',d1Databases:{DB:'old',PRODUCTION_DB:'prod'},bindings:{...base,...bindings}});
+async function fixture(bindings={},providerResponse){
+ const outgoing=[];
+ const mf=new Miniflare({cf:false,modules:true,script:bundled.outputFiles[0].text,
+  compatibilityDate:'2026-01-01',d1Databases:{DB:'old',PRODUCTION_DB:'prod'},bindings:{...base,...bindings},
+  outboundService:async request=>{
+   outgoing.push({url:request.url,authorization:request.headers.get('authorization')});
+   if(request.url!=='https://api.openai.com/v1/images/edits') throw Error('Unexpected outbound URL');
+   if(providerResponse) return providerResponse(request);
+   return OutboundResponse.json({usage:{input_tokens:110,input_tokens_details:{text_tokens:100,image_tokens:10},output_tokens:300,total_tokens:410},
+    data:[{b64_json:btoa(String.fromCharCode(255,216,255,24,255,217))}]});
+  }});
  const db=await mf.getD1Database('PRODUCTION_DB');
  for(const file of ['production-schema.sql','production-migrations/0019_native_auth.sql','production-migrations/0021_start_photos.sql']){const sql=(await readFile(new URL(file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');for(const statement of sql.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(statement).run();}
- const budgetSql=(await readFile(new URL('production-migrations/0022_start_photo_budget.sql',import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');
- const [tables,trigger]=budgetSql.split('CREATE TRIGGER');
- for(const statement of tables.split(';').map(sql=>sql.trim()).filter(Boolean))await db.prepare(statement).run();
- await db.prepare('CREATE TRIGGER'+trigger).run();
+ for (const file of ['0022_start_photo_budget.sql','0023_serialized_photo_edits.sql']) {
+  const sql=(await readFile(new URL('production-migrations/'+file,import.meta.url),'utf8')).replace(/^\s*--.*$/gm,'');
+  // Keep the semicolon inside each SQLite trigger's BEGIN/END body.
+  for (const statement of sql.trim().match(/\s*CREATE TRIGGER[\s\S]*?END;|[^;]+;/gi)??[]) {
+   const value=statement.trim();
+   if (value) await db.prepare(value).run();
+  }
+  if(file.startsWith('0022') && bindings.RIG_START_PHOTO_SPEND_POLICY) {
+   await db.prepare("INSERT INTO rig_start_photo_attempts VALUES('prior-charge','legacy',1,14998)").run();
+  }
+ }
  await db.prepare("INSERT INTO rig_payment_environment VALUES(1,'live')").run();await db.prepare('INSERT INTO rig_production_tenant VALUES(1,?,?,?,?,?,?,?)').bind('native-fixture','live',PROJECT,SITE,BRIDGE,'pfl_NATIVE',BRIDGE+'/api/payments/webhook').run();
  const call=(path,body,{token,headers={}}={})=>mf.dispatchFetch(BRIDGE+path,{method:body===undefined?'GET':'POST',headers:{...(token?{authorization:'Bearer '+token}:{}),...(body===undefined?{}:{'content-type':'application/json'}),...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});
  async function signed(path,body,subject='alice'){const r=await signSitesBridgeRequest({env:producer,subject,path,method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'content-type':'application/json'},body:body===undefined?new Uint8Array():new TextEncoder().encode(JSON.stringify(body))});return mf.dispatchFetch(r.url,{method:r.method,headers:r.headers,...(body===undefined?{}:{body:await r.arrayBuffer()})});}
@@ -43,44 +56,65 @@ async function fixture(bindings={}){
  async function login(subject='alice'){
   const code=await authorization(subject),r=await call('/api/native/auth/exchange',{code:code.code,codeVerifier:code.verifier});assert.equal(r.status,200,await r.clone().text());return {...await r.json(),code};
  }
- return {mf,db,call,signed,authorization,login,env:{...base,PRODUCTION_DB:db},dispose:()=>mf.dispose()};
+  async function sendPhoto(channel,requestId=crypto.randomUUID(),subject='alice',mode='edit',sessionToken){
+   const form=new FormData();
+   form.set('mode',mode);form.set('prompt','Een dj');form.set('requestId',requestId);
+   if(mode==='edit')form.set('image',new Blob([Uint8Array.of(255,216,255,192,0,11,8,0,16,0,16,1,1,17,0,255,218,0,8,1,1,0,0,63,0,1,255,217)],{type:'image/jpeg'}),'startfoto.jpg');
+   const upload=new Request(SITE+'/api/start-photo',{method:'POST',body:form}),body=await upload.arrayBuffer();
+   if(channel==='site'){
+    const signed=await signSitesBridgeRequest({env:producer,subject,path:'/api/start-photo',method:'POST',headers:upload.headers,body:new Uint8Array(body)});
+    return mf.dispatchFetch(signed.url,{method:'POST',headers:signed.headers,body});
+   }
+   return mf.dispatchFetch(BRIDGE+'/api/native/start-photo',{method:'POST',headers:{'content-type':upload.headers.get('content-type'),authorization:'Bearer '+sessionToken},body});
+  }
+ return {mf,db,call,signed,sendPhoto,outgoing,authorization,login,env:{...base,PRODUCTION_DB:db},dispose:()=>mf.dispose()};
 }
 
 test('Sites and Android share photo eligibility, deduplication and the same atomic spend ceiling',async()=>{
- const f=await fixture({RIG_OPENAI_IMAGES_KEY:['sk','fixture'].join('-'),RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z',RIG_START_PHOTO_TESTERS:OWNER,RIG_START_PHOTO_MAX_COST_EUR_CENTS:'8350'});
+ const f=await fixture({RIG_OPENAI_IMAGES_KEY:['sk','fixture'].join('-'),RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z',RIG_START_PHOTO_SPEND_POLICY:'serialized-150-v1'});
  try{
   const hash=await sitesDigest(new TextEncoder().encode(PROJECT+'\0alice'));
   await f.db.prepare('INSERT INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES(?,?,?,?)').bind(PROJECT,hash,OWNER,Date.now()).run();
   const session=await f.login();
   assert.equal(session.userId,OWNER);
   assert.equal((await f.call('/api/start-photo',undefined,{token:session.accessToken})).status,401);
-  assert.equal((await (await f.signed('/api/start-photo',undefined,'bob')).json()).available,false);
+  const customerStatus=await (await f.signed('/api/start-photo',undefined,'bob')).json();
+  assert.equal(customerStatus.canEdit,true);
+  assert.equal(customerStatus.canCreate,false);
   assert.equal((await (await f.signed('/api/start-photo')).json()).available,true);
   assert.equal((await (await f.call('/api/native/start-photo',undefined,{token:session.accessToken})).json()).available,true);
-  async function sendPhoto(channel,requestId=crypto.randomUUID()){
-   const form=new FormData();
-   form.set('mode','create');form.set('prompt','Een dj');form.set('requestId',requestId);
-   const upload=new Request(SITE+'/api/start-photo',{method:'POST',body:form}),body=await upload.arrayBuffer();
-   if(channel==='site'){
-    const signed=await signSitesBridgeRequest({env:producer,subject:'alice',path:'/api/start-photo',method:'POST',headers:upload.headers,body:new Uint8Array(body)});
-    return f.mf.dispatchFetch(signed.url,{method:'POST',headers:signed.headers,body});
-   }
-   return f.mf.dispatchFetch(BRIDGE+'/api/native/start-photo',{method:'POST',headers:{'content-type':upload.headers.get('content-type'),authorization:'Bearer '+session.accessToken},body});
-  }
+  const sendPhoto=(channel,id,subject,mode)=>f.sendPhoto(channel,id,subject,mode,session.accessToken);
   const requestId=crypto.randomUUID(),response=await sendPhoto('site',requestId);
   assert.equal(response.status,200,await response.clone().text());
   assert.equal(response.headers.get('content-type'),'image/jpeg');
   assert.equal(response.headers.get('cache-control'),'private, no-store');
   const duplicate=await sendPhoto('native',requestId);
   assert.equal(duplicate.status,409,await duplicate.text());
-  const simultaneous=await Promise.all([sendPhoto('native'),sendPhoto('site')]);
+  const simultaneous=await Promise.all([sendPhoto('native'),sendPhoto('site',crypto.randomUUID(),'bob','edit')]);
   assert.deepEqual(simultaneous.map(r=>r.status).sort(),[200,429]);
   assert.equal((await (await f.signed('/api/start-photo')).json()).available,false);
   assert.equal((await (await f.call('/api/native/start-photo',undefined,{token:session.accessToken})).json()).available,false);
-  assert.deepEqual(await f.db.prepare('SELECT COUNT(*) n,SUM(reserved_eur_cents) cents FROM rig_start_photo_attempts').first(),{n:2,cents:16700});
+  assert.deepEqual(await f.db.prepare('SELECT COUNT(*) n,SUM(cost_eur_cents) cents FROM rig_start_photo_edits').first(),{n:2,cents:2});
+  assert.equal((await f.db.prepare('SELECT accounted_eur_cents FROM rig_start_photo_budget').first()).accounted_eur_cents,15000);
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_generation_jobs').first()).n,0);
   assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM rig_ledger').first()).n,0);
  }finally{await f.dispose();}
+});
+
+test('native fetch sends one authenticated edit and never follows an upstream redirect',async()=>{
+ const secret=['sk','fixture'].join('-');
+ const f=await fixture({RIG_OPENAI_IMAGES_KEY:secret,RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z',
+  RIG_START_PHOTO_SPEND_POLICY:'serialized-150-v1'},()=>new OutboundResponse(null,{status:307,headers:{location:'https://redirect.invalid/retry'}}));
+ try {
+  const requestId=crypto.randomUUID();
+  const res=await f.sendPhoto('site',requestId);
+  assert.equal(res.status,502);
+  assert.deepEqual(f.outgoing,[{url:'https://api.openai.com/v1/images/edits',authorization:'Bearer '+secret}]);
+  assert.equal((await f.sendPhoto('site',requestId)).status,409);
+  assert.equal((await f.sendPhoto('site')).status,429);
+  assert.equal(f.outgoing.length,1);
+  assert.equal((await f.db.prepare('SELECT unpriced_count FROM rig_start_photo_budget').first()).unpriced_count,1);
+ } finally {await f.dispose();}
 });
 
 test('native authorization is signed-only, PKCE-bound, single-use and stores no raw credentials',async()=>{

@@ -9,10 +9,16 @@ export function mountStartPhoto({browser,document,binding,selection}){
  const image=el('startPhotoPreview'),save=el('startPhotoSave'),use=el('startPhotoUse'),close=el('startPhotoClose');
  const controller=new AbortController();
  let mode='create',pending=false,preview=null,url=null;
+ let canCreate=false,canEdit=false;
  const active=()=>!controller.signal.aborted&&binding.isActive();
+ const offered=operation=>operation==='create'?canCreate:canEdit&&selection.canEdit();
 
  function message(text){status.textContent=text;status.hidden=!text;}
- function refreshEdit(){edit.hidden=!selection.canEdit();}
+ function refreshActions(){
+  create.hidden=!canCreate;
+  edit.hidden=!offered('edit');
+  actions.hidden=create.hidden&&edit.hidden;
+ }
  function reset(){
   if(url)browser.URL.revokeObjectURL(url);
   url=null;preview=null;image.removeAttribute('src');save.removeAttribute('href');
@@ -20,7 +26,7 @@ export function mountStartPhoto({browser,document,binding,selection}){
   form.hidden=false;description.value='';message('');
  }
  function open(next){
-  if(!active()||dialog.open)return;
+  if(!active()||dialog.open||!offered(next))return;
   reset();mode=next;
   title.textContent=mode==='create'?'Maak een typetje':'Bewerk mijn foto';
   hint.textContent=mode==='create'
@@ -41,7 +47,7 @@ export function mountStartPhoto({browser,document,binding,selection}){
  async function generate(event){
   event.preventDefault();
   const prompt=description.value.trim();
-  if(pending||!active()||!prompt||prompt.length>400)return;
+  if(pending||!active()||!dialog.open||!offered(mode)||!prompt||prompt.length>400)return;
   if(/^(?:(?:mijn |de )?foto\s+)?(?:bijsnijden|uitsnijden|crop)[.!]?$/i.test(prompt)){
    const crop=el('personCropButton');
    if(crop.hidden){message('Kies eerst een foto op scherm 1 om die bij te snijden.');return;}
@@ -83,11 +89,17 @@ export function mountStartPhoto({browser,document,binding,selection}){
  }
  function cancel(event){event.preventDefault();closeDialog();}
  const listeners=[[create,'click',()=>open('create')],[edit,'click',()=>open('edit')],[close,'click',closeDialog],
-  [use,'click',selectPhoto],[form,'submit',generate],[dialog,'cancel',cancel],[document,'rig-photo-selection',refreshEdit]];
+  [use,'click',selectPhoto],[form,'submit',generate],[dialog,'cancel',cancel],[document,'rig-photo-selection',refreshActions]];
  for(const [target,type,listen] of listeners)target.addEventListener(type,listen);
  void binding.request(PATH,{signal:controller.signal}).then(async response=>{
   const value=response.ok?await response.json():null;
-  if(value?.available===true&&active()){actions.hidden=false;refreshEdit();}
+  if(value?.available===true&&active()){
+   // Servers before per-operation offers supported both buttons.
+   const legacy=!Object.hasOwn(value,'canCreate')&&!Object.hasOwn(value,'canEdit');
+   canCreate=legacy||value.canCreate===true;
+   canEdit=legacy||value.canEdit===true;
+   refreshActions();
+  }
  }).catch(()=>{});
  return ()=>{
   controller.abort();

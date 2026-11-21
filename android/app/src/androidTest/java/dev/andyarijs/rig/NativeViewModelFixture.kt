@@ -33,6 +33,7 @@ internal class NativeViewModelFixture(
     download: (Request) -> ByteArray? = { null },
     private val assessPhoto: AssessDancePhoto? = null,
     startPhoto: ByteArray? = null,
+    startPhotoOffer: JSONObject? = null,
     respond: (Request) -> Pair<Int, JSONObject>,
 ) : Closeable {
     val user = "u-12345678-1234-4123-8123-123456789abc"
@@ -64,7 +65,7 @@ internal class NativeViewModelFixture(
             "/api/native/video-config" -> 200 to JSONObject().put("enabled", true).put("funding", funding)
                 .put("qualities", JSONArray(qualities))
             "/api/native/start-photo" -> if (request.method == "GET" && store.session() != null) {
-                200 to JSONObject().put("enabled", startPhoto != null).put("available", startPhoto != null)
+                200 to (startPhotoOffer ?: JSONObject().put("enabled", startPhoto != null).put("available", startPhoto != null))
             } else respond(request)
             else -> respond(request)
         }

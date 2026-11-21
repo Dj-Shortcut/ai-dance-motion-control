@@ -26,10 +26,15 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
 
     suspend fun videoConfig(session: NativeAuthSession = requireSession()): RigVideoConfig = RigVideoConfig.fromJson(api.get("/video-config", session))
 
-    suspend fun isStartPhotoAvailable(session: NativeAuthSession): Boolean {
+    suspend fun startPhotoOffer(session: NativeAuthSession): RigStartPhotoOffer {
         val value = api.get("/start-photo", session)
         api.checkSession(session)
-        return value.optBoolean("enabled") && value.optBoolean("available", value.optInt("remaining") > 0)
+        val available = value.optBoolean("enabled") && value.optBoolean("available", value.optInt("remaining") > 0)
+        val legacy = !value.has("canCreate") && !value.has("canEdit")
+        return RigStartPhotoOffer(
+            canCreate = available && (legacy || value.opt("canCreate") == true),
+            canEdit = available && (legacy || value.opt("canEdit") == true),
+        )
     }
 
     suspend fun startPhoto(prompt: String, source: File?, session: NativeAuthSession): File {
