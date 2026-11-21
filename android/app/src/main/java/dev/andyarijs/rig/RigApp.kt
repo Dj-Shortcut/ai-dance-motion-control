@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,8 +135,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                     }
                     val enabled = !s.busy && (s.pendingSubmission || when (s.step) {
                         1 -> s.subject != null && s.motion != null
-                        2 -> s.config == null || s.quality in s.config!!.qualities
-                        3 -> s.prompt.isNotBlank()
+                        2 -> s.placementAvailable && s.fragmentIssue == null
+                        3 -> s.prompt.isNotBlank() && s.placementAvailable
                         else -> true
                     })
                     if (s.step == 4 && s.fullAvailable && !s.pendingSubmission) {
@@ -158,7 +160,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 if (s.showHistory) {
                     PageTitle("Mijn video’s", "Je laatste opdracht bij RIG.", onBack = { model.history(false) })
                     if (s.history.isEmpty() && !s.busy) Text("Je hebt nog geen video om te bekijken.", color = Muted)
-                    s.history.forEach { job -> ChoiceCard("Video · ${jobLabel(job)}", job.raw.optString("createdAt").takeIf { it.isNotBlank() } ?: "Open je opdracht", false, { model.open(job) }) }
+                    s.history.forEach { job -> ChoiceCard("Video · ${jobLabel(job)}", job.raw.optString("createdAt").takeIf { it.isNotBlank() } ?: "Open je opdracht", null, { model.open(job) }) }
                 } else if (s.showCredits) {
                     PageTitle("RIG-tegoed", if (s.session?.funding == "owner-provider") "Je video’s gebruiken je eigen Fal-account. Je hoeft geen RIG-tegoed te kopen." else "Je ziet de prijs vóór je een video bevestigt.", { model.credits(false) })
                     if (s.session?.funding != "owner-provider") {
@@ -200,7 +202,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         Spacer(Modifier.height(20.dp))
                         MediaCard("Bewegingsvideo", s.motion, s.startMs, {}, { motionPicker.launch(arrayOf("video/*")) })
                         s.motion?.let { motion ->
-                            Text("Fragment · ${seconds(s.startMs)} tot ${seconds(s.startMs + s.duration * 1000L)}", color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
+                            Text(s.fragmentIssue ?: "Fragment · ${seconds(s.startMs)} tot ${seconds(s.startMs + s.duration * 1000L)}", color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
                             val maxStart = (motion.durationMs - RigMediaLimits.exportLengthMs(s.duration)).coerceAtLeast(0)
                             Text("Start", color = Muted, fontSize = 12.sp)
                             Slider(s.startMs.toFloat().coerceIn(0f, maxStart.toFloat()), onValueChange = { model.timing(it.toLong().coerceAtMost(maxStart), s.duration) }, enabled = maxStart > 0, valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f))
@@ -214,21 +216,46 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                     2 -> {
                         Progress(2)
                         PageTitle("Waar gebeurt het?", "Kies wat je wilt overnemen.", { model.step(1) })
-                        ChoiceCard("Op je foto", "Je neemt de beweging over. De omgeving van je foto blijft het uitgangspunt.", s.quality == "pro", { model.quality("pro") }, s.subject)
-                        val editing = preferredVideoEditQuality(s.config?.qualities.orEmpty())
-                        if (editing != null) ChoiceCard("In de video",
-                            if(editing == "human-recast") "Vervang de persoon in de scène door jou. 1080p · 6–15 seconden, met geluid van de video."
-                            else "Bewerk de bestaande scène met jouw referentiefoto. Beschrijf precies wie of wat wordt vervangen.",
-                            s.quality in setOf("human-recast", "edit-standard"), { model.quality(editing) }, s.motion)
-                        if (s.config != null && editing == null) Text("Videobewerking is nog niet beschikbaar voor je account.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        val config = s.config
+                        val editing = s.quality?.takeIf { s.inVideo && s.placementAvailable } ?: config?.videoEditQuality
+                        ChoiceCard("Op je foto", "Je neemt de beweging over. De omgeving van je foto blijft het uitgangspunt.",
+                            !s.inVideo, { model.quality("pro") }, s.subject, enabled = config == null || (config.enabled && "pro" in config.qualities))
+                        val description = when {
+                            config == null -> "Gebruik de scène uit je bewegingsvideo. Na het aanmelden zie je welke bewerking beschikbaar is."
+                            !config.enabled -> "Video maken is tijdelijk niet beschikbaar."
+                            editing == null -> "Videobewerking is nog niet beschikbaar voor je account."
+                            editing == "human-recast" -> "Vervang de persoon in de scène door jou. 1080p · 6–15 seconden, met geluid van de video."
+                            else -> "Bewerk de bestaande scène met jouw referentiefoto. Beschrijf precies wie of wat wordt vervangen."
+                        }
+                        ChoiceCard("In de video", description, s.inVideo, { model.quality(editing) }, s.motion,
+                            enabled = config == null || editing != null)
+                        if (s.inVideo && !s.placementAvailable && editing != null) {
+                            Text("De eerdere bewerking is niet meer beschikbaar. Tik op ‘In de video’ om de beschikbare bewerking te kiezen.", color = Muted, fontSize = 14.sp)
+                        }
+                        s.fragmentIssue?.let { issue ->
+                            Text(issue, color = Ink, fontSize = 14.sp)
+                            val length = s.motion?.durationMs ?: 0L
+                            if (length >= 6_000L) {
+                                TextButton(onClick = { model.timing(length - 6_000L, 6) }) { Text("Gebruik de laatste 6 seconden") }
+                            } else {
+                                TextButton(onClick = { motionPicker.launch(arrayOf("video/*")) }) { Text("Andere bewegingsvideo kiezen") }
+                            }
+                        }
                     }
                     3 -> {
                         Progress(3)
                         PageTitle("Maak het van jou.", "Vertel wat je in het resultaat wilt zien.", { model.step(2) })
                         OutlinedTextField(s.prompt, model::prompt, modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp), placeholder = { Text("Wie zie je, wat doet die en wat blijft hetzelfde?") }, shape = RoundedCornerShape(16.dp), enabled = !s.busy)
-                        Text(if(s.quality == "pro") "Beweging · Pro" else if(s.quality == "human-recast") "In de video · 1080p" else "Video bewerken", color = Accent, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
-                        val trialSeconds = if(s.quality == "human-recast") 6 else 5
-                        if (s.duration > trialSeconds) ChoiceCard("Eerst een proefje", "$trialSeconds seconden. Het proefje gaat ook van je tegoed af.", s.trial, { model.trial(true) })
+                        Text(when (s.quality) {
+                            "pro" -> "Beweging · Pro"
+                            "standard" -> "Beweging"
+                            "human-recast" -> "In de video · 1080p"
+                            else -> "In de video"
+                        }, color = Accent, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
+                        val trialSeconds = if(s.quality == null || s.quality == "human-recast") 6 else 5
+                        if (s.duration > trialSeconds) ChoiceCard("Eerst een proefje",
+                            if (s.quality == null) "De proefduur zie je na het aanmelden. Het proefje gaat ook van je tegoed af." else "$trialSeconds seconden. Het proefje gaat ook van je tegoed af.",
+                            s.trial, { model.trial(true) })
                         ChoiceCard("Je volledige fragment", "${s.duration} seconden · de prijs volgt na voorbereiding", !s.trial, { model.trial(false) })
                         TextButton(onClick = { options = true }) { Text("Meer opties  +") }
                     }
@@ -284,7 +311,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 Text("Meer opties", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 s.subject?.let { TextButton(onClick = { crop = "subject"; options = false }) { Text("Jouw beeld uitsnijden") } }
                 s.motion?.let { TextButton(onClick = { crop = "motion"; options = false }) { Text("Bewegingsvideo uitsnijden") } }
-                if(s.quality == "human-recast") Text("Met het geluid van de video", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
+                if(s.quality == null) Text("Na het aanmelden zie je welke geluidsopties beschikbaar zijn.", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
+                else if(s.quality == "human-recast") Text("Met het geluid van de video", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
                 else Row(verticalAlignment = Alignment.CenterVertically) { Text("Geluid van de video behouden", modifier = Modifier.weight(1f)); Switch(s.keepSound, model::keepSound) }
                 if (s.quality == "pro") {
                     HorizontalDivider(Modifier.padding(vertical = 16.dp))
@@ -366,12 +394,6 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
         dismissButton = { if (request.receipt == null) TextButton(onClick = close, enabled = !request.busy) { Text("Annuleren") } })
 }
 
-internal fun preferredVideoEditQuality(qualities: List<String>): String? = when {
-    "human-recast" in qualities -> "human-recast"
-    "edit-standard" in qualities -> "edit-standard"
-    else -> null
-}
-
 @Composable internal fun RigOwnerBalance(balance: dev.andyarijs.rig.data.RigProviderBalance?, loading: Boolean = false) {
     var fresh by remember(balance) { mutableStateOf(balance?.isFresh() == true) }
     LaunchedEffect(balance) {
@@ -403,11 +425,11 @@ internal fun preferredVideoEditQuality(qualities: List<String>): String? = when 
     Text(title, color = Ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 34.sp)
     Text(subtitle, color = Muted, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp, bottom = 24.dp))
 }
-@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit, source: NativeMediaSource? = null, enabled: Boolean = true) {
-    Surface(onClick = onClick, enabled = enabled, color = if(selected) Color(0xff1d2c26) else Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, if(selected) Accent else Border), modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean?, onClick: () -> Unit, source: NativeMediaSource? = null, enabled: Boolean = true) {
+    Surface(onClick = onClick, enabled = enabled, color = if(selected == true) Color(0xff1d2c26) else Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, if(selected == true) Accent else Border), modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).semantics { if (selected != null) this.selected = selected }) {
         Column(Modifier.padding(18.dp)) {
             source?.let { MediaThumbnail(it, 0, Modifier.fillMaxWidth().height(125.dp).padding(bottom = 12.dp)) }
-            Row(verticalAlignment = Alignment.CenterVertically) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Ink, modifier = Modifier.weight(1f)); if(selected) Text("✓", color = Accent) }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Ink, modifier = Modifier.weight(1f)); if(selected == true) Text("✓", color = Accent) }
             Text(subtitle, color = Muted, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp))
         }
     }

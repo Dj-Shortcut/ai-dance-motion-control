@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal class NativeViewModelFixture(
     funding: String = "credits",
     qualities: List<String> = listOf("pro", "standard"),
+    signedIn: Boolean = true,
     setupStore: (RigStore) -> Unit = {},
     beforeRead: (String) -> Unit = {},
     download: (Request) -> ByteArray? = { null },
@@ -66,7 +67,7 @@ internal class NativeViewModelFixture(
         private set
 
     init {
-        store.saveSession(NativeAuthSession("rig_native_" + "s".repeat(43), System.currentTimeMillis() + 86_400_000, user))
+        if (signedIn) store.saveSession(NativeAuthSession("rig_native_" + "s".repeat(43), System.currentTimeMillis() + 86_400_000, user))
         setupStore(store)
         recreate()
     }
@@ -82,7 +83,8 @@ internal class NativeViewModelFixture(
             if (::model.isInitialized) disposeModel()
             model = RigViewModel(app, repository)
         }
-        awaitState { it.session != null && !it.busy }
+        val expectedUser = store.session()?.userId
+        awaitState { it.session?.userId == expectedUser && !it.busy }
     }
 
     private fun disposeModel() {

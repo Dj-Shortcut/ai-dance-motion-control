@@ -1,7 +1,7 @@
 # RIG voor Android
 
 Zelfstandige Android-app in Kotlin/Jetpack Compose, pakket `dev.andyarijs.rig`,
-versie `0.2.4` (code `6`), Android 9 of nieuwer. De schermen, bestandskeuze,
+versie `0.2.5` (code `7`), Android 9 of nieuwer. De schermen, bestandskeuze,
 fragmentkeuze, videoweergave, uitsnijden en prijsbevestiging zijn native.
 Er is geen WebView of Trusted Web Activity in de actieve app.
 iOS is een latere client van dezelfde servercontracten.
@@ -20,8 +20,11 @@ externe ondertekening ongetekend en niet geschikt als bewijs van Play-publicatie
 Sleutels en lokale SDK-instellingen horen buiten Git. De oude vendored
 browser-helpermodule is historische bron en wordt niet meer gebouwd of gebruikt.
 
-`0.2.4` is een kandidaat, nog niet op de eigenaarstelefoon geïnstalleerd. De
-voortgangsweergave bewaart nu de toestand van haar eigen renderbeurt: een oude
+In `0.2.5` kun je bij ‘Waar gebeurt het?’ al vóór het aanmelden ‘In de video’
+kiezen. Bij het aanmelden controleert de app welke videobewerking je account
+mag gebruiken. Je keuze blijft bewaard tot je zelf een andere plek kiest.
+
+Sinds `0.2.4` bewaart de voortgangsweergave de toestand van haar eigen renderbeurt: een oude
 tekencallback leest geen inmiddels gewiste voortgang uit de volgende toestand.
 De NullPointerException is vóór de correctie gereproduceerd in de gecompileerde
 `0.2.2`-callback en blijft na de correctie uit bij vier toestandsovergangen.

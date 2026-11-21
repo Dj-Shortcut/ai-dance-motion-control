@@ -39,7 +39,8 @@ data class RigScreenState(
     val frameMs: Long = 0, val startMs: Long = 0, val duration: Int = 5,
     val subjectCrop: NormalizedCrop = NormalizedCrop.FULL, val motionCrop: NormalizedCrop = NormalizedCrop.FULL,
     val face: NativeMediaSource? = null, val angles: List<NativeMediaSource> = emptyList(),
-    val quality: String = "pro", val prompt: String = "", val keepSound: Boolean = true,
+    // A null quality keeps an explicit in-video selection until account capabilities are known.
+    val quality: String? = "pro", val prompt: String = "", val keepSound: Boolean = true,
     val trial: Boolean = false, val busy: Boolean = false, val stage: String = "", val progress: Int? = null,
     val error: String? = null, val quote: RigQuote? = null, val job: RigJob? = null,
     val pendingSubmission: Boolean = false,
@@ -50,7 +51,23 @@ data class RigScreenState(
     val accountRequest: RigAccountRequestDialog? = null,
     val startPhotoRemaining: Int? = null,
     val startPhotoPreview: NativeMediaSource? = null,
-)
+) {
+    val placementAvailable: Boolean get() = config == null || (config.enabled && quality in config.qualities)
+    val inVideo: Boolean get() = quality == null || quality == "human-recast" || quality == "edit-standard"
+
+    val fragmentIssue: String? get() = when {
+        quality != "human-recast" || motion == null || !placementAvailable -> null
+        motion.durationMs < 6_000L -> "Kies een bewegingsvideo van minstens 6 seconden."
+        motion.durationMs - startMs < 6_000L -> "Kies een eerder beginpunt zodat er minstens 6 seconden overblijven."
+        else -> null
+    }
+
+    fun withQuality(value: String?): RigScreenState {
+        val seconds = duration.coerceIn(if (value == "human-recast") 6 else 3, if (value == "pro") 30 else 15)
+        return copy(quality = value, duration = seconds, keepSound = value == "human-recast" || keepSound,
+            trial = trial && seconds > if (value == "human-recast") 6 else 5)
+    }
+}
 
 class RigViewModel internal constructor(app: Application, val repository: RigRepository) : AndroidViewModel(app) {
     constructor(app: Application) : this(app, RigRepository(app))
@@ -241,18 +258,9 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     }
     fun step(step: Int) { if (!mutable.value.busy) mutable.update { it.copy(step = step, error = null) } }
     fun prompt(value: String) = change(mediaChanged = false) { it.copy(prompt = value.take(1900)) }
-    fun quality(value: String) {
-        val current = mutable.value
-        if (current.busy) return
-        if (value == "human-recast" && current.quality != value && current.motion != null &&
-            current.motion.durationMs - current.startMs < RigMediaLimits.exportLengthMs(6)) {
-            mutable.update { it.copy(error = "Kies voor deze bewerking een fragment met minstens 6 seconden vanaf het beginpunt.") }
-            return
-        }
-        change {
-            it.copy(quality = value, duration = it.duration.coerceIn(if(value == "human-recast") 6 else 3, if(value == "pro") 30 else 15),
-                keepSound = if(value == "human-recast") true else it.keepSound, trial = false)
-        }
+    fun quality(value: String?) = change {
+        if (it.quality == value || it.config?.let { config -> !config.enabled || value !in config.qualities } == true) it
+        else it.withQuality(value).copy(trial = false)
     }
     fun keepSound(value: Boolean) = change { it.copy(keepSound = if(it.quality == "human-recast") true else value) }
     fun trial(value: Boolean) = change { it.copy(trial = value) }
@@ -396,6 +404,15 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
                 throw error
             }
         }
+        val state = mutable.value
+        if (state.session?.userId != session.userId || state.config != config) return
+        val resolved = if (state.quality == null && config.videoEditQuality != null) state.withQuality(config.videoEditQuality) else state
+        val needsFragment = restoredFullRequest == null && resolved.fragmentIssue != null
+        val next = if (resolved.step == 3 && (!resolved.placementAvailable || needsFragment)) resolved.copy(step = 2) else resolved
+        if (next != state) {
+            mutable.value = next.copy(quote = null)
+            persistDraft()
+        }
     }
     fun pause() {
         foreground = false
@@ -432,7 +449,8 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         val session = repository.requireSession()
         if (s.session.userId != session.userId) throw RigSessionReplacedException()
         check(s.config?.enabled == true) { "Video maken is tijdelijk niet beschikbaar." }
-        check(s.quality in s.config.qualities) { "Deze verwerking is nog niet beschikbaar voor je account." }
+        val quality = s.quality
+        check(quality != null && quality in s.config.qualities) { "Deze verwerking is nog niet beschikbaar voor je account." }
         check(s.prompt.isNotBlank()) { "Beschrijf eerst wat je wilt zien." }
         restoredFullRequest?.let { request ->
             mutable.update { it.copy(stage = "Je volledige video berekenen") }
@@ -457,7 +475,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         val faceId = face?.let { repository.upload("face", it.file, session = session) }
         val angleIds = angles.map { repository.upload("angle", it.file, session = session) }
         val videoId = repository.upload("video", clip.file, clip.durationSeconds, s.keepSound, session)
-        val request = RigQuoteRequest(imageId, videoId, s.quality, s.prompt, s.keepSound, false, faceId, angleIds)
+        val request = RigQuoteRequest(imageId, videoId, quality, s.prompt, s.keepSound, false, faceId, angleIds)
         mutable.update { it.copy(stage = "Je prijs berekenen") }
         val quote = repository.quote(request, session)
         if (trial) {
@@ -561,7 +579,10 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         currentCoroutineContext().ensureActive()
         repository.api.checkSession(session)
         restoredFullRequest = request
-        mutable.update { it.copy(subject = subject, motion = motion, face = face, angles = angles, duration = draft.getInt("selectedSeconds"), startMs = 0, frameMs = 0, subjectCrop = NormalizedCrop.FULL, motionCrop = NormalizedCrop.FULL, prompt = request.prompt, quality = request.quality, keepSound = request.keepSound, trial = false, quote = null, step = 3, result = null, job = null, fullAvailable = false) }
+        mutable.update {
+            val supported = it.config?.let { config -> config.enabled && request.quality in config.qualities } == true
+            it.copy(subject = subject, motion = motion, face = face, angles = angles, duration = draft.getInt("selectedSeconds"), startMs = 0, frameMs = 0, subjectCrop = NormalizedCrop.FULL, motionCrop = NormalizedCrop.FULL, prompt = request.prompt, quality = request.quality, keepSound = request.keepSound, trial = false, quote = null, step = if (supported) 3 else 2, result = null, job = null, fullAvailable = false)
+        }
         persistDraft()
     }
     suspend fun purchase(activity: Activity, id: String) { try { billing.purchase(activity, id); refreshAccount() } catch (e: CancellationException) { throw e } catch (e: Exception) { showError(e) } }
@@ -600,7 +621,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
             .put("subject", s.subject?.uri?.toString()).put("motion", s.motion?.uri?.toString())
             .put("frameMs", s.frameMs).put("startMs", s.startMs).put("duration", s.duration).put("step", s.step.coerceIn(0,3))
             .put("subjectCrop", cropJson(s.subjectCrop)).put("motionCrop", cropJson(s.motionCrop))
-            .put("prompt", s.prompt).put("quality", s.quality).put("keepSound", s.keepSound).put("trial", s.trial)
+            .put("prompt", s.prompt).put("quality", s.quality ?: JSONObject.NULL).put("keepSound", s.keepSound).put("trial", s.trial)
             .apply { if (user != null && user == activeUser) put("fullRequest", restoredFullRequest?.toJson()) }
             .put("face", s.face?.uri?.toString()).put("angles", JSONArray(s.angles.map { it.uri.toString() })))
     }
@@ -616,7 +637,8 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         if (mutable.value.session?.userId != user || repository.store.session()?.userId != user) return
         restoredFullRequest = if (user == null) null else d.optJSONObject("fullRequest")?.let(RigQuoteRequest::fromJson)
         val hasSelection = restoredFullRequest != null || (subject != null && motion != null)
-        mutable.update { it.copy(step = if (hasSelection) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = d.optLong("frameMs"), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = d.optString("quality","pro"), keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
+        val quality = if (d.has("quality") && d.isNull("quality")) null else d.optString("quality", "pro")
+        mutable.update { it.copy(step = if (hasSelection) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = d.optLong("frameMs"), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = quality, keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
     }
     private fun cropJson(c: NormalizedCrop) = JSONArray(listOf(c.left,c.top,c.right,c.bottom))
     private fun cropFrom(a: JSONArray?) = runCatching { if(a==null) NormalizedCrop.FULL else NormalizedCrop(a.getDouble(0).toFloat(),a.getDouble(1).toFloat(),a.getDouble(2).toFloat(),a.getDouble(3).toFloat()) }.getOrDefault(NormalizedCrop.FULL)

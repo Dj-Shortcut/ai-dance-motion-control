@@ -30,6 +30,13 @@ data class RigSession(
 }
 
 data class RigVideoConfig(val enabled: Boolean, val funding: String, val qualities: List<String>, val raw: JSONObject) {
+    val videoEditQuality: String? get() = when {
+        !enabled -> null
+        "human-recast" in qualities -> "human-recast"
+        "edit-standard" in qualities -> "edit-standard"
+        else -> null
+    }
+
     companion object {
         fun fromJson(value: JSONObject): RigVideoConfig = RigVideoConfig(
             value.optBoolean("enabled"), value.optString("funding", "credits"),
