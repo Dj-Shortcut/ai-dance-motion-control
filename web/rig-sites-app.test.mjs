@@ -52,6 +52,33 @@ const env={RIG_SITES_PRODUCER_ORIGIN:origin,RIG_SITES_BRIDGE_ORIGIN:bridge,RIG_S
 function fixture(){const calls=[];let approvalStatus=201;const app=createRigSitesApp({uiFiles:{'/multiuser/index.html':'<h1>RIG</h1>','/multiuser/app.js':'/* RIG app */','/multiuser/style.css':'body{}'},fetchImpl:async req=>{calls.push(req);assert.equal(new URL(req.url).origin,bridge);assert.equal(req.headers.get('authorization'),null);assert.equal(req.headers.get('cookie'),null);assert.equal(req.headers.get('oai-authenticated-user-id'),null);assert.match(req.headers.get('x-rig-sites-signature'),/^[a-f0-9]{64}$/);const path=new URL(req.url).pathname;if(path==='/api/session')return Response.json({userId:owner,balanceCents:500,frozen:false});if(path==='/api/generation-quotes')return Response.json({id:'abc',priceCents:100,currency:'EUR'},{status:201});if(path==='/api/chatgpt/quote-approvals')return Response.json(approvalStatus===201?{approvalToken:'A'.repeat(43),idempotencyKey:'rigchatgpt_abc'}:{error:'Insufficient'},{status:approvalStatus});return Response.json({enabled:true,funding:'owner'})}});return {app,calls,setApprovalStatus:value=>{approvalStatus=value}};}
 const request=(path,options={})=>new Request(origin+path,options);
 const identity={'oai-authenticated-user-id':'native-subject','x-rig-expected-user':owner};
+test('only the signed production Site can relay a bound start-photo request',async()=>{
+ const live={...env,RIG_PRODUCTION_PAYMENTS_ENABLED:'yes',RIG_PRODUCTION_BRIDGE_ORIGIN:'https://rig-api.shortcut-computerguy.workers.dev',RIG_PRODUCTION_SITES_BRIDGE_KEY:env.RIG_SITES_BRIDGE_KEY};
+ const calls=[];
+ const app=createRigSitesApp({fetchImpl:async req=>{
+  const path=new URL(req.url).pathname;
+  if(path==='/api/session')return Response.json({userId:owner,balanceCents:0,currency:'EUR',mode:'live',purchasesEnabled:false});
+  calls.push(req);
+  return new Response(new Uint8Array([255,216,255,217]),{headers:{'content-type':'image/jpeg'}});
+ }});
+ const path='/api/start-photo',form=new FormData();
+ form.set('mode','edit');form.set('requestId',crypto.randomUUID());form.set('prompt','Een DJ');
+ form.set('image',new Blob([new Uint8Array(32*1024)],{type:'image/jpeg'}),'foto.jpg');
+ const post=headers=>request(path,{method:'POST',headers,body:form});
+ assert.equal((await app.fetch(post({...identity,origin}),env)).status,404);
+ assert.equal((await app.fetch(post(identity),live)).status,403);
+ assert.equal((await app.fetch(post({origin}),live)).status,401);
+ assert.equal((await app.fetch(post({origin,'oai-authenticated-user-id':identity['oai-authenticated-user-id']}),live)).status,403);
+ assert.equal(calls.length,0);
+ const response=await app.fetch(post({...identity,origin,authorization:'Bearer client-value'}),live);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('cache-control'),'private, no-store');
+ assert.equal(response.headers.get('content-type'),'image/jpeg');
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].headers.get('authorization'),null);
+ assert.match(calls[0].headers.get('x-rig-sites-signature'),/^[a-f0-9]{64}$/);
+ assert.equal((await calls[0].formData()).get('image').size,32*1024);
+});
 test('native API refuses anonymous callers and account changes before write dispatch',async()=>{
  const {app,calls}=fixture();assert.equal((await app.fetch(request('/api/video-config'),env)).status,401);assert.equal(calls.length,0);
  const headers={...identity,origin,'content-type':'application/json','x-rig-expected-user':'u-00000000-0000-4000-8000-000000000000'};

@@ -25,6 +25,8 @@ import {handleNativeApi} from './native-api.mjs';
 import {handleAccountServiceRequest,handleOwnerAccountServiceRequests} from './account-service-requests.mjs';
 import {sitesAccountServicePath,ACCOUNT_SERVICE_OWNER_PATH} from './account-service-path.mjs';
 import {issueNativeAuthorization} from './native-auth.mjs';
+import {sitesStartPhotoPath} from './sites-bridge-protocol.mjs';
+import {handleNativeStartPhoto} from './native-start-photo.mjs';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const unavailable=()=>json({error:'RIG-tegoed is tijdelijk niet beschikbaar.'},503);
 async function readJSON(req){
@@ -43,6 +45,12 @@ export function createProductionCommerceWorker({network=fetch,videoFactory=creat
    if(u.pathname==='/api/native'||u.pathname.startsWith('/api/native/')){
     const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
     return await handleNativeApi(req,env,{db:mapped.DB,dispatch,network});
+   }
+   if(sitesStartPhotoPath(u.pathname+u.search,req.method)){
+    const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
+    authenticated=await authenticateProductionSites(req,env,{allowStartPhoto:true});
+    if(!authenticated)return json({error:'Meld je aan bij RIG.'},401);
+    return await handleNativeStartPhoto(authenticated.request,env,{db:mapped.DB,session:authenticated,network});
    }
    if(u.pathname==='/api/internal/native-auth/authorize'){
     const mapped=await validateProductionTenant(env);if(!mapped)return unavailable();
