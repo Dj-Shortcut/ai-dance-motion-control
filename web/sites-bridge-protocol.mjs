@@ -1,5 +1,6 @@
 import {sitesUsersPath} from './owner-users-query.mjs';
 import {sitesAccountServicePath,ownerAccountServicePath} from './account-service-path.mjs';
+import {START_PHOTO_BODY_MAX} from './native-start-photo.mjs';
 export {sitesUsersPath} from './owner-users-query.mjs';
 export {sitesAccountServicePath} from './account-service-path.mjs';
 // Shared server-only protocol. The producer must derive `subject` exclusively
@@ -22,7 +23,8 @@ export function sitesWorkflowPath(path,method){
 // interoperable during rolling deployments. All input IDs are signed in the
 // exact path and the digest covers the complete upload body.
 export function sitesPreparationWrite(path,method){return method==='POST'&&(path==='/api/assets'||path==='/api/workflow-inputs/source'||workflowMask.test(path)||workflowClient.test(path)&&path.endsWith('/output'));}
-export function sitesRequestBodyLimit(path,method){return method==='GET'?0:sitesInternalAccountActivityPath(path,method)?2048:workflowMask.test(path)?2*1024*1024:sitesPreparationWrite(path,method)?SITES_BODY_MAX:8192;}
+export function sitesStartPhotoPath(path,method){return path==='/api/start-photo'&&['GET','POST'].includes(method);}
+export function sitesRequestBodyLimit(path,method){return method==='GET'?0:sitesStartPhotoPath(path,method)?START_PHOTO_BODY_MAX:sitesInternalAccountActivityPath(path,method)?2048:workflowMask.test(path)?2*1024*1024:sitesPreparationWrite(path,method)?SITES_BODY_MAX:8192;}
 // This path is for a server-derived platform profile. Sites' public browser API
 // must explicitly refuse it even though its server producer can sign it.
 export function sitesInternalAccountActivityPath(path,method){return method==='POST'&&path==='/api/internal/account-activity'}
@@ -81,6 +83,7 @@ export function sitesPath(path,method){
  if(sitesOwnerSecurityPath(path,method))return true;
  if(sitesCustomerSecurityPath(path,method))return true;
  if(sitesAccountServicePath(path,method))return true;
+ if(sitesStartPhotoPath(path,method))return true;
  if(sitesWorkflowPath(path,method))return true;
  if(sitesVideoDraftPath(path,method))return true;
  if(sitesInternalAccountActivityPath(path,method))return true;

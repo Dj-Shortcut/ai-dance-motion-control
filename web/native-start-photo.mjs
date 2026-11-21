@@ -1,21 +1,20 @@
 const MAX_INPUT = 3 * 1024 * 1024;
 export const START_PHOTO_BODY_MAX = MAX_INPUT + 8192;
 const MAX_OUTPUT = 4 * 1024 * 1024;
-const PER_USER = 3;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const USER = /^u-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const MODEL = 'gpt-image-2.6-sunburst';
 const API = 'https://api.openai.com/v1/images/';
+class SponsorshipExhausted extends Error {}
 const headers = {'cache-control':'private, no-store','x-content-type-options':'nosniff'};
 const json = (value,status=200) => Response.json(value,{status,headers});
 
 function campaign(env,userId,now) {
  const expires = Date.parse(env.RIG_START_PHOTO_EXPIRES_AT);
- const total = Number(env.RIG_START_PHOTO_MAX_ATTEMPTS);
  if (!/^sk-[A-Za-z0-9_-]+$/.test(env.RIG_OPENAI_IMAGES_KEY ?? '') ||
-     !Number.isFinite(expires) || expires <= now || !Number.isSafeInteger(total) || total < 1 || total > 1000 ||
+     !Number.isFinite(expires) || expires <= now ||
      !(env.RIG_START_PHOTO_TESTERS ?? '').split(',').map(id=>id.trim()).some(id=>USER.test(id) && id===userId)) return null;
- return {expires,total};
+ return expires;
 }
 
 async function bounded(body,limit,signal) {
@@ -74,19 +73,9 @@ async function readPhotoRequest(req) {
  } catch {return null;}
 }
 
-async function remaining(db,userId,total) {
- const counts=await db.prepare(`SELECT
-  (SELECT COUNT(*) FROM rig_start_photo_attempts WHERE user_id=?) AS used,
-  (SELECT COUNT(*) FROM rig_start_photo_attempts) AS total`).bind(userId).first();
- return Math.max(0,Math.min(PER_USER-counts.used,total-counts.total));
-}
-
-async function reserve(db,userId,requestId,total,now) {
- const claim=await db.prepare(`INSERT OR IGNORE INTO rig_start_photo_attempts(request_id,user_id,created_at)
-  SELECT ?,?,? WHERE
-    (SELECT COUNT(*) FROM rig_start_photo_attempts WHERE user_id=?) < ?
-    AND (SELECT COUNT(*) FROM rig_start_photo_attempts) < ?`)
-  .bind(requestId,userId,now,userId,PER_USER,total).run();
+async function reserve(db,userId,requestId,now) {
+ const claim=await db.prepare('INSERT OR IGNORE INTO rig_start_photo_attempts(request_id,user_id,created_at) VALUES (?,?,?)')
+  .bind(requestId,userId,now).run();
  return claim.meta?.changes===1;
 }
 
@@ -106,7 +95,13 @@ async function generate(input,env,session,network) {
   headers:{authorization:`Bearer ${env.RIG_OPENAI_IMAGES_KEY}`,...(typeof body==='string'?{'content-type':'application/json'}:{})}
  });
  if (!response.ok) {
-  void response.body?.cancel().catch(()=>{});
+  if (response.status===429) {
+   const error=await bounded(response.body,8192,signal)
+    .then(bytes=>JSON.parse(new TextDecoder().decode(bytes))).catch(()=>null);
+   if (error?.error?.code==='credit_balance_exhausted') throw new SponsorshipExhausted();
+  } else {
+   void response.body?.cancel().catch(()=>{});
+  }
   throw Error('provider');
  }
  const bytes=await bounded(response.body,Math.ceil(MAX_OUTPUT/3)*4+16384,signal);
@@ -119,24 +114,26 @@ async function generate(input,env,session,network) {
 
 export async function handleNativeStartPhoto(req,env,{db,session,network,now=Date.now()}) {
  const {userId}=session;
- const config=campaign(env,userId,now);
+ const expiresAt=campaign(env,userId,now);
  if (req.method==='GET') {
-  if (!config) return json({enabled:false,remaining:0});
-  return json({enabled:true,remaining:await remaining(db,userId,config.total)});
+  const available=Boolean(expiresAt);
+  // Android 0.2.6 needs a value in [0,3] to show the photo controls.
+  return json({enabled:available,available,remaining:available?3:0});
  }
- if (!config) return json({error:'De gratis fotoproef is niet beschikbaar.'},403);
- if (await remaining(db,userId,config.total)===0) return json({error:'Er zijn geen gratis fotobeurten meer beschikbaar.'},429);
+ if (!expiresAt) return json({error:'De gesponsorde startfoto’s zijn niet beschikbaar.'},403);
  const input=await readPhotoRequest(req);
  if (!input) return json({error:'Controleer je beschrijving en foto. Kies een foto van maximaal 3 MB.'},400);
  const claimTime=Date.now();
- if (claimTime>=config.expires) return json({error:'De gratis fotoproef is afgelopen.'},403);
- if (!await reserve(db,userId,input.requestId,config.total,claimTime))
-  return json({error:'Deze fotobeurt is al ingediend of het gratis tegoed is op.'},409);
+ if (claimTime>=expiresAt) return json({error:'De gesponsorde periode is afgelopen.'},403);
+ if (!await reserve(db,userId,input.requestId,claimTime))
+  return json({error:'Deze aanvraag is al ingediend.'},409);
  try {
   const jpeg=await generate(input,env,session,network);
   return new Response(jpeg,{headers:{...headers,'content-type':'image/jpeg','content-length':String(jpeg.length)}});
- } catch {
+ } catch (error) {
   // A timed-out request may have reached OpenAI. Retain the reservation and never retry automatically.
-  return json({error:'Je foto kon niet worden opgehaald. Deze poging telt mee. Controleer hoeveel bewerkingen je nog hebt.'},502);
+  if (error instanceof SponsorshipExhausted)
+   return json({error:'Het OpenAI-tegoed voor startfoto’s is op.'},429);
+  return json({error:'Je foto kon niet worden opgehaald. Je kunt het opnieuw proberen.'},502);
  }
 }

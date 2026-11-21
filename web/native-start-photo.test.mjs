@@ -11,8 +11,7 @@ const jpeg=Uint8Array.of(255,216,255,24,255,217);
 const environment={
  RIG_OPENAI_IMAGES_KEY:['sk','fixture'].join('-'),
  RIG_START_PHOTO_TESTERS:`${tester},${other}`,
- RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z',
- RIG_START_PHOTO_MAX_ATTEMPTS:'4'
+ RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z'
 };
 
 function fixture(t) {
@@ -57,7 +56,7 @@ test('only allowlisted testers can spend the shared grant before it expires',asy
  for (const options of [{userId:'u-10000000-0000-0000-0000-000000000009'},
   {env:{...environment,RIG_START_PHOTO_EXPIRES_AT:'2000-01-01T00:00:00Z'}},
   {env:{...environment,RIG_OPENAI_IMAGES_KEY:undefined}}]) {
-  assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:false,remaining:0});
+  assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:false,available:false,remaining:0});
   assert.equal((await f.run(f.request(1),options)).status,403);
  }
  assert.equal(f.calls.length,0);
@@ -77,18 +76,27 @@ test('paid provider calls use fixed image endpoints, with an explicit reference 
  assert.match(JSON.parse(f.calls[0].init.body).prompt,/discokoning/);
  assert.equal(f.calls[1].init.body.get('image').size,jpeg.length);
  assert.equal(f.calls[1].init.redirect,'error');
- assert.deepEqual(await (await f.run(f.status())).json(),{enabled:true,remaining:1});
+ assert.deepEqual(await (await f.run(f.status())).json(),{enabled:true,available:true,remaining:3});
 });
 
-test('parallel repeats, tester cap, campaign cap and uncertain failures cannot spend extra provider calls',async t=>{
+test('sponsored requests have no photo quota while duplicate submissions still cannot spend again',async t=>{
  const f=fixture(t);
  const duplicate=await Promise.all([f.run(f.request(1)),f.run(f.request(1))]);
  assert.deepEqual(duplicate.map(response=>response.status).sort(),[200,409]);
  assert.equal((await f.run(f.request(2),{transport:async()=>{throw Error('uncertain');}})).status,502);
  assert.equal((await f.run(f.request(2))).status,409);
- assert.equal((await f.run(f.request(3))).status,200);
- assert.equal((await f.run(f.request(4))).status,429);
- assert.equal((await f.run(f.request(4),{userId:other})).status,200);
- assert.equal((await f.run(f.request(5),{userId:other})).status,429);
- assert.equal(f.calls.length,3);
+ for (let id=3;id<=8;id++) assert.equal((await f.run(f.request(id))).status,200);
+ assert.equal((await f.run(f.request(9),{userId:other})).status,200);
+ assert.deepEqual(await (await f.run(f.status(),{userId:other})).json(),{enabled:true,available:true,remaining:3});
+ assert.equal(f.calls.length,8);
+});
+
+test('exhausted provider sponsorship is reported without another call',async t=>{
+ const f=fixture(t);
+ let calls=0;
+ const transport=async()=>{calls++;return Response.json({error:{code:'credit_balance_exhausted'}},{status:429});};
+ const result=await f.run(f.request(1),{transport});
+ assert.equal(result.status,429);
+ assert.match((await result.json()).error,/OpenAI-tegoed.*op/);
+ assert.equal(calls,1);
 });

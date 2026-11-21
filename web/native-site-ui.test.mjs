@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {createNativeSiteAuth} from './frontend/multiuser/native-site-auth.mjs';
 import {startNativeSiteApp} from './frontend/multiuser/native-site-boot.mjs';
+import {mountStartPhoto} from './frontend/multiuser/start-photo.mjs';
 import {prepareGuardedBinding} from './frontend/multiuser/guarded-binding.mjs';
 import {installCustomerVerificationStub} from './customer-security-ui-test-helper.mjs';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8');
@@ -96,8 +97,25 @@ test('native boot reuses the studio, keeps native sign-in anchors and mounts the
   assert.deepEqual(loaded,['media.js','app.js','flow.js','owner-security.js','customer-security.js','generation-ui.js','payments.js','owner-administration.js','finance.js']);assert.equal(w.rigNativeSite,true);assert.equal(w.rigVideoFunding,'sponsored');assert.equal(d.getElementById('rigStudio').hidden,false);
   assert.equal(w.rigDraftStorage,started.binding.draftStorage);assert.equal(w.rigScopedStorage,started.binding.scopedStorage);assert.notEqual(w.rigDraftStorage,w.rigScopedStorage);
   assert.equal(d.getElementById('authLogin').tagName,'A');assert.match(d.getElementById('authLogin').href,/\/signin-with-chatgpt\?return_to=%2F$/);assert.equal(d.getElementById('authLogin').target,'_top');assert.match(d.getElementById('authLogout').href,/\/signout-with-chatgpt$/);
+  const account=d.getElementById('accountButton'),dialog=d.getElementById('accountDialog');
+  d.getElementById('creditsButton').textContent='RIG-tegoed € 5,00';
+  account.click();
+  assert.equal(dialog.open,true);
+  assert.equal(d.getElementById('accountCredits').textContent,'RIG-tegoed € 5,00');
+  assert.equal(d.getElementById('accountPrivacyPage').hidden,true);
+  assert.equal(d.getElementById('authLogout').parentElement.id,'accountSignout');
+  d.getElementById('accountPrivacy').click();
+  assert.equal(d.getElementById('accountOverview').hidden,true);
+  assert.equal(dialog.getAttribute('aria-labelledby'),'accountPrivacyTitle');
+  assert.ok(d.querySelector('#accountPrivacyPage a[href="/account/verwijderen"]'));
+  d.getElementById('accountBack').click();
+  assert.equal(d.getElementById('accountOverview').hidden,false);
+  d.getElementById('accountClose').click();
+  assert.equal(dialog.open,false);
+  account.click();
   assert.equal(w.location.hash,'');assert.match(d.querySelector('.sponsor-invitation').textContent,/Activeer gratis €5/);assert.equal(calls.some(path=>path.includes('redeem')),false);
   listener(bob);assert.equal(d.getElementById('rigStudio').hidden,true);assert.equal(disposed,true);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(generationDisposed,1);started.dispose();assert.equal(generationDisposed,1);
+  assert.equal(dialog.open,false);assert.equal(account.hidden,true);
  }finally{started.dispose();dom.window.close();}
 });
 for(const remainingAttempts of [2,0])test(`native boot retains the bounded invitation offer at ${remainingAttempts} remaining attempts`,async()=>{
@@ -127,6 +145,46 @@ test('native visitor can sign in without loading the studio or requiring Google'
  const {dom,w,d}=page();let loaded=0;
  const app=await startNativeSiteApp({window:w,auth:{currentSession:async()=>false,dispose(){}},loadScript:async()=>{loaded++;}});
  try{assert.equal(loaded,0);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(d.getElementById('rigStudio').hidden,true);assert.match(d.getElementById('authLogin').textContent,/ChatGPT/);}finally{app.dispose();dom.window.close();}
+});
+test('the Site previews a sponsored edit before replacing the selected photo',async()=>{
+ const {dom,w,d}=page(),calls=[],selected=[],revoked=[];
+ const el=id=>d.getElementById(id);
+ const decode=deferred();
+ el('startPhotoPreview').decode=()=>decode.promise;
+ w.URL.createObjectURL=()=>`blob:fixture-${calls.length}`;
+ w.URL.revokeObjectURL=url=>revoked.push(url);
+ const stop=mountStartPhoto({browser:w,document:d,
+  binding:{isActive:()=>true,async request(path,options){
+   calls.push([path,options]);
+   return options.method==='POST'?new Response(new Blob(['fixture'],{type:'image/jpeg'})):Response.json({available:true});
+  }},
+  selection:{canEdit:()=>true,prepare:async()=>new w.Blob(['original'],{type:'image/jpeg'}),use:file=>selected.push(file)}
+ });
+ function submit(button){
+  el(button).click();
+  el('startPhotoDescription').value='Een discokoning';
+  el('startPhotoForm').dispatchEvent(new w.Event('submit',{cancelable:true}));
+ }
+ try{
+  await waitFor(()=>!el('startPhotoActions').hidden);
+  submit('startPhotoEdit');
+  await waitFor(()=>el('startPhotoPreview').hasAttribute('src'));
+  assert.equal(calls[1][0],'/api/start-photo');
+  assert.equal(calls[1][1].body.get('mode'),'edit');
+  assert.equal(calls[1][1].body.get('image').type,'image/jpeg');
+  assert.equal(el('startPhotoUse').hidden,true);
+  decode.resolve();
+  await waitFor(()=>!el('startPhotoPreview').hidden);
+  el('startPhotoClose').click();
+  assert.deepEqual(selected,[]);
+  assert.deepEqual(revoked,['blob:fixture-2']);
+  submit('startPhotoCreate');
+  await waitFor(()=>!el('startPhotoPreview').hidden);
+  assert.equal(calls[2][1].body.get('image'),null);
+  el('startPhotoUse').click();
+  assert.equal(selected[0].name,'rig-startfoto.jpg');
+  assert.equal(el('startPhotoDialog').open,false);
+ }finally{stop();dom.window.close();}
 });
 async function quoteFixture({native=true,approval=true,price=100,remaining=500}={}){
  const state=page(),{w,d}=state,store=new Map(),calls=[];let uploads=0;

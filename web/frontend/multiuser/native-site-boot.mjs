@@ -4,6 +4,42 @@ import {prepareGuardedBinding} from './guarded-binding.mjs';
 import {enableVideoIfAvailable} from './video-capability.mjs';
 import {captureSponsorInvitation,mountSponsorInvitation} from './invitation.mjs';
 import {isMollieCheckoutURL} from '../../mollie-checkout-url.mjs';
+import {mountStartPhoto} from './start-photo.mjs';
+
+function mountAccountDialog({browser,el,logout}) {
+ const trigger=el('accountButton'),dialog=el('accountDialog');
+ if(!trigger||typeof dialog?.showModal!=='function')return ()=>{};
+ const overview=el('accountOverview'),privacy=el('accountPrivacyPage'),privacyButton=el('accountPrivacy');
+ const close=el('accountClose'),back=el('accountBack'),credits=el('accountCredits'),headerCredits=el('creditsButton');
+ function showPrivacy(open){
+  overview.hidden=open;privacy.hidden=!open;
+  dialog.setAttribute('aria-labelledby',open?'accountPrivacyTitle':'accountTitle');
+  (open?back:privacyButton).focus();
+ }
+ function open(){
+  credits.textContent=browser.rigVideoFunding==='owner-provider'?'Eigen Fal-account':headerCredits.textContent;
+  dialog.showModal();
+  close.focus();
+ }
+ function reset(){showPrivacy(false);trigger.focus();}
+ function closeDialog(){dialog.close();}
+ function viewCredits(){closeDialog();headerCredits.click();}
+ function viewPrivacy(){showPrivacy(true);}
+ function goBack(){showPrivacy(false);}
+ function cancel(event){if(!privacy.hidden){event.preventDefault();goBack();}}
+ const listeners=[[trigger,'click',open],[close,'click',closeDialog],[privacyButton,'click',viewPrivacy],
+  [back,'click',goBack],[credits,'click',viewCredits],[dialog,'cancel',cancel],[dialog,'close',reset]];
+ const logoutLocation=logout.parentNode;
+ el('accountSignout').append(logout);
+ for(const [target,type,listener]of listeners)target.addEventListener(type,listener);
+ trigger.hidden=false;
+ return ()=>{
+  for(const [target,type,listener]of listeners)target.removeEventListener(type,listener);
+  if(dialog.open)closeDialog();
+  trigger.hidden=true;
+  logoutLocation.append(logout);
+ };
+}
 
 // Bundle this export as the Site's browser entry and call it once. It shares
 // the existing studio, media editor and account-scoped recovery state.
@@ -19,10 +55,10 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
  const login=anchor('authLogin',googlePlay?'/signin-with-chatgpt?return_to=%2Fandroid%2F':'/signin-with-chatgpt?return_to=%2F','Inloggen met ChatGPT'),logout=anchor('authLogout',googlePlay?'/signout-with-chatgpt?return_to=%2Fandroid%2F':'/signout-with-chatgpt','Afmelden');
  auth??=createNativeSiteAuth({browser,fetchImpl:browser.fetch.bind(browser)});
  loadScript??=(name=>new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=`/multiuser/${name}`;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);}));
- let binding=null,unsubscribe=()=>{},invitationUi=null,ended=false;
+ let binding=null,unsubscribe=()=>{},disposeAccount=()=>{},disposeStartPhoto=()=>{},invitationUi=null,ended=false;
  protectPrivateHistory(browser,()=>binding?.dispose());
  browser.rigNativeSite=true;browser.rigVideoEnabled=false;browser.rigPaymentChannel=googlePlay?'google-play':'mollie';
- function endSession(){if(ended)return;ended=true;browser.rigGenerationDispose?.();browser.rigFlowDispose?.();browser.rigOwnerVerification?.dispose();browser.rigCustomerVerification?.dispose();browser.rigFinanceDispose?.();browser.rigOwnerAdministration?.dispose();browser.rigPaymentsDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
+ function endSession(){if(ended)return;ended=true;disposeAccount();disposeStartPhoto();browser.rigGenerationDispose?.();browser.rigFlowDispose?.();browser.rigOwnerVerification?.dispose();browser.rigCustomerVerification?.dispose();browser.rigFinanceDispose?.();browser.rigOwnerAdministration?.dispose();browser.rigPaymentsDispose?.();invitationUi?.dispose();binding?.dispose();unsubscribe();auth.dispose?.();studio.hidden=true;gate.hidden=false;login.hidden=false;logout.hidden=true;status.textContent='Je aanmelding is gewijzigd. Meld je opnieuw aan.';}
  logout.addEventListener('click',()=>{binding?.dispose({logout:true});endSession();});
  const enable=async()=>{const ready=await enableVideoIfAvailable({binding,window:browser,document,loadScript});if(binding?.isActive())el('videoAvailabilityNote').textContent=browser.rigVideoAvailabilityMessage??(browser.rigVideoUnavailableReason==='owner_test_limit'?'Je eenmalige eigenaarstest is gebruikt. Je bestaande video-opdracht blijft bereikbaar.':browser.rigVideoFunding==='owner-provider'?'Je gebruikt je eigen fal-account. Je ziet de Fal-raming vóór je bevestigt.':browser.rigVideoFunding==='credits'?'Je ziet de prijs vóór je bevestigt. Je betaalt met je RIG-tegoed.':browser.rigVideoFunding==='sponsored'?'Je video’s worden betaald uit je gratis testtegoed. Je ziet de prijs vóór je bevestigt.':ready?'Je ziet de prijs vóór je bevestigt. Een bevestigde video gebruikt echt fal-tegoed.':'Activeer je uitnodiging om een video te maken.');return ready;};
  try{
@@ -47,10 +83,12 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
   };
   logout.hidden=false;login.hidden=true;gate.hidden=true;studio.hidden=false;status.textContent='Aangemeld bij RIG.';
   for(const name of ['media.js','app.js','flow.js']){await loadScript(name);if(!binding.isActive())throw Error('Aanmelding gewijzigd.');}
+  disposeStartPhoto=mountStartPhoto({browser,document,binding,selection:browser.rigStartPhotoSelection});
   await loadScript('owner-security.js');if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   await loadScript('customer-security.js');if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   await enable();if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
   await loadScript(googlePlay?'google-play-payments.js':'payments.js');if(!binding.isActive())throw Error('Aanmelding gewijzigd.');
+  disposeAccount=mountAccountDialog({browser,el,logout});
   // Finance is an optional owner view. Its availability never blocks the studio.
   try{await loadScript('owner-administration.js');await loadScript('finance.js');}catch{}
   if(!binding.isActive())throw Error('Aanmelding gewijzigd.');

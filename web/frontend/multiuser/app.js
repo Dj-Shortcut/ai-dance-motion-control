@@ -6,6 +6,18 @@ let personFile = null;
 let motionFile = null, motionLoadingFile = null;
 let busy = false;
 let prepared = null;
+const hasStartPhotoSource=()=>Boolean(personFile?.type.startsWith('image/')&&imageSource);
+window.rigStartPhotoSelection={
+ canEdit:hasStartPhotoSource,
+ async prepare(){
+  if(!hasStartPhotoSource())throw Error('Kies eerst een foto om te bewerken.');
+  return (await window.rigMedia.prepareImage(imageSource,crops.person)).blob;
+ },
+ use(file){
+  putInputFile('personInput',file);
+  usePersonFile(file,window.rigSessionActive);
+ },
+};
 let savedPreparedSource=null,savedVideoSource=null;
 let cropTarget = null;
 let cleanupReview=null,cleanupEpoch=0,cleanupWork=false,returnBriefFromCrop=false;
@@ -202,7 +214,7 @@ $('previewPrepared').addEventListener('click',()=>{if(!prepared||!urls.prepared)
 $('preparedDialog').addEventListener('close',()=>$('preparedVideo').pause());
 $('settingsToggle').addEventListener('click',()=>{$('settings').showModal();$('settingsToggle').setAttribute('aria-expanded','true')});
 $('settings').addEventListener('close',()=>$('settingsToggle').setAttribute('aria-expanded','false'));
-function drawImage(source){const c=$('personFrame'); const w=source.videoWidth||source.naturalWidth; const h=source.videoHeight||source.naturalHeight;if(!w||!h)return;imageSource=source;window.rigMedia.paint(c,source,crops.person,1280,1280);c.hidden=false;$('personChoose').hidden=true;$('personCropButton').hidden=false;refreshButton();renderReferences()}
+function drawImage(source){const c=$('personFrame'); const w=source.videoWidth||source.naturalWidth; const h=source.videoHeight||source.naturalHeight;if(!w||!h)return;imageSource=source;window.rigMedia.paint(c,source,crops.person,1280,1280);c.hidden=false;$('personChoose').hidden=true;$('personCropButton').hidden=false;refreshButton();renderReferences();document.dispatchEvent(new Event('rig-photo-selection'))}
 function usePersonFile(file,isCurrent=()=>true){savedPreparedSource=null;personFile=file;imageSource=null;crops.person=fullCrop();clearReferences();invalidate({reselecting:true});$('referencePanel').hidden=false;$('referenceCapture').hidden=!file.type.startsWith('video/');const url=setURL('person',file);$('personName').textContent=file.name;$('personName').title=file.name;$('frameControl').hidden=true;$('personFrame').hidden=true;$('personCropButton').hidden=true;if(file.type.startsWith('video/')){const video=$('personVideo');video.src=url;video.onloadedmetadata=()=>{if(personFile!==file||!isCurrent())return;if(!Number.isFinite(video.duration)||video.duration<=0){showError('Deze video kon niet worden gelezen.');return}$('frameTime').max=Math.max(0,video.duration-0.01);$('frameTime').value=0;$('frameOutput').textContent='0.0 s';$('frameControl').hidden=false;video.currentTime=Math.min(0.01,video.duration)};video.onseeked=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onloadeddata=()=>{if(personFile===file&&isCurrent())drawImage(video)};video.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze video kan niet worden geopend in je browser.')}}else{let image=new Image();image.onload=()=>{if(personFile===file&&isCurrent())drawImage(image)};image.onerror=()=>{if(personFile===file&&isCurrent())showError('Deze afbeelding kan niet worden geopend.')};image.src=url}if(needsRecastFrame()){$('moreOptions').open=true;showError(recastFrameHint);}else showError(motionFile?'Klaar om verder te gaan.':'Kies nu een video.')}
 $('personInput').addEventListener('change',event=>{const file=event.target.files[0];if(file&&!rejectMedia(event.target,file,'media'))usePersonFile(file);});
 $('frameTime').addEventListener('input',event=>{const time=Number(event.target.value);$('frameOutput').textContent=`${time.toFixed(1)} s`;imageSource=null;invalidate();$('personVideo').currentTime=time;if(!$('personVideo').seeking)drawImage($('personVideo'))});
