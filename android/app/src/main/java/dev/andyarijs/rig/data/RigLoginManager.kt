@@ -23,7 +23,7 @@ class RigLoginManager(private val store: RigStore, private val api: RigApi) {
             store.write("login-completed", null)
             store.write("login", JSONObject().put("verifier", verifier).put("state", state).put("createdAt", System.currentTimeMillis()).put("phase", "ready"))
         }
-        return "$SIGN_IN?challenge=${challenge(verifier)}&state=$state"
+        return "$SIGN_IN?flow=app-link-v1&challenge=${challenge(verifier)}&state=$state"
     }
 
     suspend fun completeCallback(uri: Uri): NativeAuthSession = completeCallbackString(uri.toString())

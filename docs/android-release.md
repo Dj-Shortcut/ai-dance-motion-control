@@ -123,3 +123,19 @@ De Android-fotostap kan een personage maken op basis van een beschrijving of de 
 Activeer de proef pas na migratie `0021_start_photos.sql`, publicatie van de aangepaste relay en privéworker, en installatie van de Android-build. Stel op de privéworker `RIG_OPENAI_IMAGES_KEY` in als geheim van het bedoelde OpenAI-project. Gebruik daarnaast `RIG_START_PHOTO_TESTERS` (kommagescheiden RIG-gebruikers-ID's), `RIG_START_PHOTO_EXPIRES_AT` (ISO 8601 met tijdzone) en `RIG_START_PHOTO_MAX_ATTEMPTS` (maximaal aantal aanvragen voor de hele proef). Zonder geldige configuratie biedt de app de proef niet aan.
 
 De server reserveert vóór verzending één beurt. Er zijn maximaal drie aanvragen per tester, gedeeld door beide fotokeuzes, en een onafhankelijk totaalplafond. Een onzekere aanvraag wordt niet opnieuw verstuurd. De reserveringen blijven meetellen bij een wijziging van de einddatum of testerslijst. De server bewaart geen beschrijvingen of foto’s voor deze functie. Het previewbestand staat tijdelijk op het toestel, en ‘Bewaar foto’ schrijft het naar de locatie van de gebruiker.
+
+## Cutover to verified Android sign-in
+
+Treat the Sites deployment and Android update as one release. Publish the
+certificate association first, then verify the new signed build in a test rollout.
+Make the update available to all installed testers through their existing
+distribution channel before switching the production sign-in endpoint. Record
+the installed version and a successful sign-in on the new build before widening
+the rollout.
+
+The new app sends the `app-link-v1` flow marker. Once Sites switches, older builds
+and previously opened consent forms without that marker receive update instructions
+before Sites issues a code. Existing app sessions do not use the callback until
+the user needs to sign in again. If Android opens the HTTPS callback in the
+browser, the page explains how to enable supported links and restart sign-in
+from RIG. The old custom scheme is retired at cutover.
