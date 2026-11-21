@@ -12,11 +12,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="dev.andyarijs.rig" android:host="auth" android:path="/callback" />
+                <data android:scheme="https" android:host="rig-motion-studio.shortcutcomputerguy.chatgpt.site"
+                    android:path="/native/callback" />
             </intent-filter>
         </activity>
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files"

@@ -10,6 +10,7 @@ const env={RIG_SITES_PRODUCER_ORIGIN:SITE};
 const req=(path,body,headers={})=>new Request(SITE+path,{method:body===undefined?'GET':'POST',headers:body===undefined?headers:{origin:SITE,'content-type':'application/x-www-form-urlencoded',...headers},...(body===undefined?{}:{body})});
 
 test('native browser login preserves PKCE/state through platform login and requires explicit same-origin consent',async()=>{
+ assert.equal(NATIVE_CALLBACK,SITE+'/native/callback');
  const anonymous=await handleNativeSiteLogin(req('/native/signin'+query),env,{context:async()=>null,readBytes}),html=await anonymous.text();assert.match(html,/Inloggen met ChatGPT/);assert.ok(html.includes(encodeURIComponent('/native/signin'+query)));assert.equal(anonymous.headers.get('cache-control'),'private, no-store');assert.match(anonymous.headers.get('content-security-policy'),/frame-ancestors 'none'/);
  const calls=[],context=async()=>({session:{mode:'live'},request:async(path,options)=>{calls.push({path,options});return Response.json({code:'c'.repeat(43),expiresAt:Date.now()+300000},{status:201});}});
  const consent=await handleNativeSiteLogin(req('/native/signin'+query),env,{context,readBytes});assert.match(await consent.text(),/Doorgaan op je telefoon/);assert.equal(calls.length,0);assert.equal(consent.headers.get('referrer-policy'),'same-origin');assert.match(consent.headers.get('content-security-policy'),/form-action 'self'/);

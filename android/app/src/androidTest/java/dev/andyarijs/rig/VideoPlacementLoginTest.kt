@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.andyarijs.rig.data.RigLoginManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import okio.Buffer
@@ -148,7 +149,7 @@ class VideoPlacementLoginTest {
                 compose.onNode(hasSetTextAction()).performTextReplacement(prompt)
                 compose.onNodeWithText("Aanmelden en prijs bekijken").performClick()
                 val state = requireNotNull(fixture.store.read("login")).getString("state")
-                val callback = Uri.parse("dev.andyarijs.rig://auth/callback?code=${"c".repeat(43)}&state=$state")
+                val callback = Uri.parse("${RigLoginManager.CALLBACK}?code=${"c".repeat(43)}&state=$state")
                 runBlocking(Dispatchers.Main) { fixture.model.completeLogin(callback) }
                 assertEquals(fixture.user, fixture.model.state.value.session?.userId)
                 checkSelection(fixture, uploads, quotes)

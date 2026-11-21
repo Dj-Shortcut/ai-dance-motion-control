@@ -224,7 +224,7 @@ class NativeRecoveryTest {
         store.write("login", JSONObject(pending.toString()).put("createdAt", System.currentTimeMillis() - 6 * 60_000L))
         assertTrue(target.contains("challenge=" + RigLoginManager.challenge(pending.getString("verifier"))))
         val state = pending.getString("state")
-        val callback = "dev.andyarijs.rig://auth/callback?code=${"c".repeat(43)}&state=$state"
+        val callback = "${RigLoginManager.CALLBACK}?code=${"c".repeat(43)}&state=$state"
         val wrong = callback.replace("state=$state", "state=${"w".repeat(43)}")
         assertTrue(runCatching { RigLoginManager(store, api).completeCallbackString(wrong) }.isFailure)
         assertEquals(0, server.requestCount)
@@ -246,7 +246,7 @@ class NativeRecoveryTest {
 
     private fun beginCallback(manager: RigLoginManager): String {
         manager.beginAuthorization()
-        return "dev.andyarijs.rig://auth/callback?code=${"c".repeat(43)}&state=${store.read("login")!!.getString("state")}"
+        return "${RigLoginManager.CALLBACK}?code=${"c".repeat(43)}&state=${store.read("login")!!.getString("state")}"
     }
 
     private fun successfulExchange() = response(JSONObject().put("accessToken", "rig_native_" + "n".repeat(43))
@@ -351,10 +351,11 @@ class NativeRecoveryTest {
     @Test fun callbackRejectsInjectedHostsFragmentsDuplicateAndEncodedFields() {
         val code = "c".repeat(43)
         val state = "s".repeat(43)
-        assertNotNull(RigLoginManager.parseCallback("dev.andyarijs.rig://auth/callback?code=$code&state=$state"))
-        for (bad in listOf("https://auth/callback?code=$code&state=$state", "dev.andyarijs.rig://evil/callback?code=$code&state=$state",
-            "dev.andyarijs.rig://auth/callback?code=$code&code=$code", "dev.andyarijs.rig://auth/callback?code=$code&state=$state#token",
-            "dev.andyarijs.rig://auth/callback?%63ode=$code&state=$state")) assertNull(RigLoginManager.parseCallback(bad))
+        assertNotNull(RigLoginManager.parseCallback("${RigLoginManager.CALLBACK}?code=$code&state=$state"))
+        for (bad in listOf("dev.andyarijs.rig://auth/callback?code=$code&state=$state", "https://attacker.invalid/native/callback?code=$code&state=$state",
+            "https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/evil/callback?code=$code&state=$state",
+            "${RigLoginManager.CALLBACK}?code=$code&code=$code", "${RigLoginManager.CALLBACK}?code=$code&state=$state#token",
+            "${RigLoginManager.CALLBACK}?%63ode=$code&state=$state")) assertNull(RigLoginManager.parseCallback(bad))
     }
 
     @Test fun sessionAcceptsOnlyTheDedicatedNativeTokenRealmAndDropsExpiredTokens() {

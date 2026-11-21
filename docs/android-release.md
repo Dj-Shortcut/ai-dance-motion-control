@@ -29,10 +29,11 @@ Android packages must be signed. For a new Play app, use an AAB and Play App Sig
 
 Version 0.2.0 replaces the browser wrapper with Kotlin/Jetpack Compose screens.
 Only external sign-in uses Custom Tabs, with a single-use PKCE code returned to
-`dev.andyarijs.rig://auth/callback`. The native API reuses the existing private
-RIG price, funding, passkey and generation gates; credentials never reach a
-WebView. The active build no longer contains browser payment services.
-The exact native signing certificate must be associated using
+the certificate-verified HTTPS `/native/callback` App Link on the fixed RIG Sites
+host. The native API reuses the existing private RIG price, funding, passkey and
+generation gates; credentials never reach a WebView. The active build no longer
+contains browser payment services. The exact native signing certificate must be
+associated using `delegate_permission/common.handle_all_urls` and
 `delegate_permission/common.get_login_creds`; web passkey origins remain separate.
 The prior TWA evidence and browser/Digital Goods checks below describe the old
 wrapper, not proof that the new native workflow has been accepted on a phone.
@@ -43,7 +44,7 @@ still apply. See [the native client contract](../android/README.md).
 
 Prefer browser-backed authentication over collecting ChatGPT credentials in an app-owned form. Custom Tabs share the selected browser's cookie state; a Trusted Web Activity (TWA) is browser-rendered and additionally verifies common ownership of the app and website. The Android host does not gain access to browser cookies. This architecture does **not** establish that RIG's real login/return flow has been tested. [Custom Tabs](https://developer.chrome.com/docs/android/custom-tabs), [TWA overview](https://developer.chrome.com/docs/android/trusted-web-activity).
 
-If using TWA/App Links:
+For the native callback App Link (and any TWA use):
 
 - [ ] Freeze the final package ID and identify each intended distribution certificate.
 - [ ] Publish the exact package ID and **Play app signing certificate** fingerprint at `https://<RIG-host>/.well-known/assetlinks.json`. A local upload-key fingerprint alone is insufficient for Play installs. Keep debug associations out of the production association unless explicitly needed and reviewed.

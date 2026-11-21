@@ -104,6 +104,7 @@ class RigLoginManager(private val store: RigStore, private val api: RigApi) {
 
     companion object {
         const val SIGN_IN = "https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/native/signin"
+        const val CALLBACK = "https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/native/callback"
         private fun random(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(SecureRandom()::nextBytes))
         private fun hash(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.US_ASCII)).joinToString("") { "%02x".format(it.toInt() and 255) }
         private fun same(a: String, b: String) = MessageDigest.isEqual(a.toByteArray(Charsets.US_ASCII), b.toByteArray(Charsets.US_ASCII))
@@ -111,7 +112,8 @@ class RigLoginManager(private val store: RigStore, private val api: RigApi) {
         fun validCallback(uri: Uri): Boolean = parseCallback(uri.toString()) != null
         internal fun parseCallback(value: String): Map<String, String>? = runCatching {
             val uri = URI(value)
-            require(uri.scheme == "dev.andyarijs.rig" && uri.host == "auth" && uri.rawPath == "/callback" && uri.rawUserInfo == null && uri.port == -1 && uri.rawFragment == null)
+            require(uri.scheme == "https" && uri.host == "rig-motion-studio.shortcutcomputerguy.chatgpt.site" &&
+                uri.rawPath == "/native/callback" && uri.rawUserInfo == null && uri.port == -1 && uri.rawFragment == null)
             val parts = (uri.rawQuery ?: "").split('&')
             require(parts.size == 2 && parts.all { Regex("^(code|state)=[A-Za-z0-9_-]{43}$").matches(it) })
             val fields = parts.associate { it.substringBefore('=') to it.substringAfter('=') }

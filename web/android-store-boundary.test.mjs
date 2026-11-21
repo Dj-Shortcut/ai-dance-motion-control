@@ -66,7 +66,7 @@ test('Android manifest and certificate association are public fixed data, never 
 test('native credential association uses only the operator-pinned exact APK certificate',async()=>{
  const {app,forwarded}=fixture(),certificate=Array(32).fill('12').join(':');
  const response=await app.fetch(new Request(origin+'/.well-known/assetlinks.json'),{...env,RIG_NATIVE_ANDROID_SIGNING_SHA256:certificate});
- assert.deepEqual(await response.json(),[{relation:['delegate_permission/common.get_login_creds'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[certificate]}}]);
+ assert.deepEqual(await response.json(),[{relation:['delegate_permission/common.handle_all_urls','delegate_permission/common.get_login_creds'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[certificate]}}]);
  const combined=await app.fetch(new Request(origin+'/.well-known/assetlinks.json'),{...env,RIG_NATIVE_ANDROID_SIGNING_SHA256:certificate,RIG_ANDROID_APP_SIGNING_SHA256:certificate});
  assert.deepEqual((await combined.json())[0].relation,['delegate_permission/common.handle_all_urls','delegate_permission/common.get_login_creds']);
  for(const value of [undefined,'',certificate+'\n','AB:CD',{certificate}]){
