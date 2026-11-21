@@ -17,7 +17,7 @@ const base={RIG_PRIVATE_SERVICE_ONLY:'yes',RIG_PRODUCTION_PAYMENTS_ENABLED:'yes'
 const producer={RIG_SITES_PROJECT_ID:PROJECT,RIG_SITES_PRODUCER_ORIGIN:SITE,RIG_SITES_BRIDGE_ORIGIN:BRIDGE,RIG_SITES_BRIDGE_KEY:KEY};
 const bundled=await build({stdin:{contents:`import {createProductionCommerceWorker} from './production-commerce-worker.mjs';
 const worker=createProductionCommerceWorker({network:async(url)=>{
- if(url==='https://api.openai.com/v1/images/generations')return Response.json({data:[{b64_json:btoa(String.fromCharCode(255,216,255,24,255,217))}]});
+ if(url==='https://api.openai.com/v1/images/generations'||url==='https://api.openai.com/v1/images/edits')return Response.json({data:[{b64_json:btoa(String.fromCharCode(255,216,255,24,255,217))}]});
  throw Error('Real network prohibited in fixture');
 },videoFactory:async(env,{trustedUserId})=>async req=>{
  const url=new URL(req.url);if(url.pathname==='/api/video-config')return Response.json({enabled:true,funding:'credits'});
@@ -54,15 +54,18 @@ test('Sites and Android share photo eligibility, deduplication and the same atom
   const session=await f.login();
   assert.equal(session.userId,OWNER);
   assert.equal((await f.call('/api/start-photo',undefined,{token:session.accessToken})).status,401);
-  assert.equal((await (await f.signed('/api/start-photo',undefined,'bob')).json()).available,false);
+  const customerStatus=await (await f.signed('/api/start-photo',undefined,'bob')).json();
+  assert.equal(customerStatus.canEdit,true);
+  assert.equal(customerStatus.canCreate,false);
   assert.equal((await (await f.signed('/api/start-photo')).json()).available,true);
   assert.equal((await (await f.call('/api/native/start-photo',undefined,{token:session.accessToken})).json()).available,true);
-  async function sendPhoto(channel,requestId=crypto.randomUUID()){
+  async function sendPhoto(channel,requestId=crypto.randomUUID(),subject='alice',mode='create'){
    const form=new FormData();
-   form.set('mode','create');form.set('prompt','Een dj');form.set('requestId',requestId);
+   form.set('mode',mode);form.set('prompt','Een dj');form.set('requestId',requestId);
+   if(mode==='edit')form.set('image',new Blob([Uint8Array.of(255,216,255,24,255,217)],{type:'image/jpeg'}),'startfoto.jpg');
    const upload=new Request(SITE+'/api/start-photo',{method:'POST',body:form}),body=await upload.arrayBuffer();
    if(channel==='site'){
-    const signed=await signSitesBridgeRequest({env:producer,subject:'alice',path:'/api/start-photo',method:'POST',headers:upload.headers,body:new Uint8Array(body)});
+    const signed=await signSitesBridgeRequest({env:producer,subject,path:'/api/start-photo',method:'POST',headers:upload.headers,body:new Uint8Array(body)});
     return f.mf.dispatchFetch(signed.url,{method:'POST',headers:signed.headers,body});
    }
    return f.mf.dispatchFetch(BRIDGE+'/api/native/start-photo',{method:'POST',headers:{'content-type':upload.headers.get('content-type'),authorization:'Bearer '+session.accessToken},body});
@@ -73,7 +76,7 @@ test('Sites and Android share photo eligibility, deduplication and the same atom
   assert.equal(response.headers.get('cache-control'),'private, no-store');
   const duplicate=await sendPhoto('native',requestId);
   assert.equal(duplicate.status,409,await duplicate.text());
-  const simultaneous=await Promise.all([sendPhoto('native'),sendPhoto('site')]);
+  const simultaneous=await Promise.all([sendPhoto('native'),sendPhoto('site',crypto.randomUUID(),'bob','edit')]);
   assert.deepEqual(simultaneous.map(r=>r.status).sort(),[200,429]);
   assert.equal((await (await f.signed('/api/start-photo')).json()).available,false);
   assert.equal((await (await f.call('/api/native/start-photo',undefined,{token:session.accessToken})).json()).available,false);

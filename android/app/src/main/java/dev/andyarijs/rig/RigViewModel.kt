@@ -53,7 +53,7 @@ data class RigScreenState(
     val history: List<RigJob> = emptyList(), val showHistory: Boolean = false,
     val showCredits: Boolean = false, val needsRegistration: Boolean = false,
     val accountRequest: RigAccountRequestDialog? = null,
-    val startPhotoAvailable: Boolean = false,
+    val startPhotoOffer: RigStartPhotoOffer = RigStartPhotoOffer(),
     val startPhotoPreview: NativeMediaSource? = null,
 ) {
     val placementAvailable: Boolean get() = config == null || (config.enabled && quality in config.qualities)
@@ -331,7 +331,8 @@ class RigViewModel internal constructor(
     fun generateStartPhoto(prompt: String, edit: Boolean) = work("Startfoto maken") {
         val state = mutable.value
         val session = repository.requireSession()
-        check(state.step == 1 && state.session?.userId == session.userId && state.startPhotoAvailable)
+        check(state.step == 1 && state.session?.userId == session.userId)
+        check(if (edit) state.startPhotoOffer.canEdit else state.startPhotoOffer.canCreate) { "Deze fotobewerking is niet beschikbaar." }
         require(prompt.isNotBlank() && prompt.length <= 400) { "Geef een beschrijving van maximaal 400 tekens." }
         val source = if (edit) {
             val selected = state.subject?.takeUnless { it.isVideo } ?: error("Kies eerst een foto om te bewerken.")
@@ -344,11 +345,11 @@ class RigViewModel internal constructor(
     }
 
     private suspend fun refreshStartPhotoAvailability(session: NativeAuthSession) {
-        val available = try { repository.isStartPhotoAvailable(session) }
+        val offer = try { repository.startPhotoOffer(session) }
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { return }
         if (repository.store.session() == session && mutable.value.session?.userId == session.userId)
-            mutable.update { it.copy(startPhotoAvailable = available) }
+            mutable.update { it.copy(startPhotoOffer = offer) }
     }
 
     fun discardStartPhoto() {

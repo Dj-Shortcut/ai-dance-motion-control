@@ -192,12 +192,13 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                             { ownPicker.launch(arrayOf("image/*", "video/*")) }, s.subjectCrop,
                             if (s.subject?.isVideo == false && !s.busy) ({ crop = "subject" }) else null)
                         if (s.subject != null) DancePhotoAdvice(dancePhotoCheck)
-                        if (s.startPhotoAvailable) {
+                        val showEditPhoto = s.startPhotoOffer.canEdit && s.subject?.isVideo == false
+                        if (s.startPhotoOffer.canCreate || showEditPhoto) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { startPhotoEdit = false }, enabled = !s.busy) {
+                                if (s.startPhotoOffer.canCreate) TextButton(onClick = { startPhotoEdit = false }, enabled = !s.busy) {
                                     Text("Maak een typetje")
                                 }
-                                if (s.subject?.isVideo == false) TextButton(onClick = { startPhotoEdit = true }, enabled = !s.busy) {
+                                if (showEditPhoto) TextButton(onClick = { startPhotoEdit = true }, enabled = !s.busy) {
                                     Text("Bewerk mijn foto")
                                 }
                             }

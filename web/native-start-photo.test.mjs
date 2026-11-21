@@ -7,22 +7,30 @@ import {nativePath} from './native-api.mjs';
 
 const tester='u-10000000-0000-0000-0000-000000000001';
 const other='u-10000000-0000-0000-0000-000000000002';
+const siteId='appgprj_rig_photo_fixture';
+const subjects=new Map([[tester,'a'.repeat(64)],[other,'b'.repeat(64)]]);
 const jpeg=Uint8Array.of(255,216,255,24,255,217);
 const environment={
+ RIG_PRODUCTION_SITE_ID:siteId,
  RIG_OPENAI_IMAGES_KEY:['sk','fixture'].join('-'),
  RIG_START_PHOTO_MAX_COST_EUR_CENTS:'100',
  RIG_START_PHOTO_TESTERS:`${tester},${other}`,
  RIG_START_PHOTO_EXPIRES_AT:'2099-01-01T00:00:00Z'
 };
 
-function fixture(t,{legacyAttempts=0}={}) {
+function fixture(t,{legacyAttempts=0,beforeReserve}={}) {
  const sqlite=new DatabaseSync(':memory:');
  t.after(()=>sqlite.close());
  sqlite.exec(readFileSync(new URL('./production-schema.sql',import.meta.url),'utf8'));
  sqlite.exec(readFileSync(new URL('./production-migrations/0021_start_photos.sql',import.meta.url),'utf8'));
  for(let i=0;i<legacyAttempts;i++)sqlite.prepare('INSERT INTO rig_start_photo_attempts VALUES (?,?,?)').run('old-'+i,tester,i);
  sqlite.exec(readFileSync(new URL('./production-migrations/0022_start_photo_budget.sql',import.meta.url),'utf8'));
+ sqlite.exec("INSERT INTO rig_payment_environment VALUES(1,'live')");
+ for (const [userId,subjectHash] of subjects) {
+  sqlite.prepare('INSERT INTO rig_sites_identities(site_id,subject_hash,user_id,created_at) VALUES (?,?,?,1)').run(siteId,subjectHash,userId);
+ }
  const db={prepare(sql) {
+  if (sql.startsWith('INSERT INTO rig_start_photo_attempts')) beforeReserve?.(sqlite);
   const statement=sqlite.prepare(sql);
   return {first:()=>statement.get(),bind(...args) {return {first:()=>statement.get(...args),run:()=>({meta:{changes:statement.run(...args).changes}})};}};
  }};
@@ -32,8 +40,8 @@ function fixture(t,{legacyAttempts=0}={}) {
   return Response.json({data:[{b64_json:btoa(String.fromCharCode(...jpeg))}]});
  };
  const path='https://rig.invalid/api/native/start-photo';
- function run(request,{userId=tester,env=environment,transport=network}={}) {
-  return handleNativeStartPhoto(request,env,{db,session:{userId,subjectHash:'a'.repeat(64)},network:transport});
+ function run(request,{userId=tester,env=environment,transport=network,session={}}={}) {
+  return handleNativeStartPhoto(request,env,{db,session:{siteId,userId,subjectHash:subjects.get(userId)??'a'.repeat(64),...session},network:transport});
  }
  function request(id,mode='create',image) {
   const body=new FormData();
@@ -55,13 +63,14 @@ test('start-photo is available only on the exact native GET and POST endpoints',
  assert.equal(nativePath('/api/native/start-photo','PUT'),false);
 });
 
-test('only allowlisted testers can spend the shared grant before it expires',async t=>{
+test('only authenticated live identities with a priced campaign before expiry can spend',async t=>{
  const f=fixture(t);
  for (const options of [{userId:'u-10000000-0000-0000-0000-000000000009'},
+  {session:{siteId:'unrelated-site'}},{session:{subjectHash:subjects.get(other)}},
   {env:{...environment,RIG_START_PHOTO_EXPIRES_AT:'2000-01-01T00:00:00Z'}},
   ...[undefined,'','0','010','0.4','NaN','16701'].map(bound=>({env:{...environment,RIG_START_PHOTO_MAX_COST_EUR_CENTS:bound}})),
   {env:{...environment,RIG_OPENAI_IMAGES_KEY:undefined}}]) {
-  assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:false,available:false,remaining:0});
+  assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:false,available:false,remaining:0,canEdit:false,canCreate:false});
   assert.equal((await f.run(f.request(1),options)).status,403);
  }
  assert.equal(f.calls.length,0);
@@ -81,14 +90,16 @@ test('paid provider calls use fixed image endpoints, with an explicit reference 
  assert.match(JSON.parse(f.calls[0].init.body).prompt,/discokoning/);
  assert.equal(f.calls[1].init.body.get('image').size,jpeg.length);
  assert.equal(f.calls[1].init.redirect,'error');
- assert.deepEqual(await (await f.run(f.status())).json(),{enabled:true,available:true,remaining:3});
+ assert.deepEqual(await (await f.run(f.status())).json(),{enabled:true,available:true,remaining:3,canEdit:true,canCreate:true});
 });
 
-test('only a redeemed, credited invitation enables an unlisted customer and frozen accounts cannot spend',async t=>{
+test('every active customer can edit; only an invited or listed customer can create',async t=>{
  const f=fixture(t);
  const env={...environment,RIG_START_PHOTO_TESTERS:tester,RIG_PRODUCTION_PROMOTIONAL_INVITATION_ENABLED:'yes'};
  const options={env,userId:other};
- f.sqlite.exec("INSERT INTO rig_payment_environment VALUES(1,'live')");
+ const image=new Blob([jpeg],{type:'image/jpeg'});
+ assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:true,available:true,remaining:3,canEdit:true,canCreate:false});
+ assert.equal((await f.run(f.request(10,'edit',image),options)).status,200);
  f.sqlite.prepare(`INSERT INTO rig_production_invitation
   (id,code_hash,amount_cents,created_at,expires_at,source_environment_id,source_invitation_id,source_invalidated_at,redeemed_by,redeemed_at)
   VALUES(1,?,500,10,100,'rig-public-test-v1',1,1,?,20)`).run('a'.repeat(64),other);
@@ -98,7 +109,28 @@ test('only a redeemed, credited invitation enables an unlisted customer and froz
  f.sqlite.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES (?,'fixture'),(?,'fixture')").run(other,tester);
  assert.equal((await f.run(f.request(3),options)).status,403);
  assert.equal((await f.run(f.request(4),{env})).status,403);
+ assert.equal((await f.run(f.request(11,'edit',image),options)).status,403);
+ assert.equal(f.calls.length,2);
+});
+
+test('an edit-only bound never funds a creation, including a listed tester',async t=>{
+ const f=fixture(t),env={...environment,RIG_START_PHOTO_MAX_COST_EUR_CENTS:undefined,RIG_START_PHOTO_EDIT_MAX_COST_EUR_CENTS:'37'};
+ const options={env};
+ assert.deepEqual(await (await f.run(f.status(),options)).json(),{enabled:true,available:true,remaining:3,canEdit:true,canCreate:false});
+ assert.equal((await f.run(f.request(1),options)).status,403);
+ assert.equal((await f.run(f.request(2,'edit',new Blob([jpeg],{type:'image/jpeg'})),options)).status,200);
  assert.equal(f.calls.length,1);
+ assert.equal(f.sqlite.prepare('SELECT SUM(reserved_eur_cents) cents FROM rig_start_photo_attempts').get().cents,37);
+});
+
+test('a customer frozen after opening the editor cannot reserve or reach the provider',async t=>{
+ const f=fixture(t,{beforeReserve:sqlite=>sqlite.prepare("INSERT INTO rig_frozen_accounts(user_id,reason) VALUES (?,'fixture')").run(other)});
+ const options={userId:other,env:{...environment,RIG_START_PHOTO_TESTERS:tester}};
+ assert.equal((await (await f.run(f.status(),options)).json()).canEdit,true);
+ const response=await f.run(f.request(1,'edit',new Blob([jpeg],{type:'image/jpeg'})),options);
+ assert.equal(response.status,403);
+ assert.equal(f.calls.length,0);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) attempts FROM rig_start_photo_attempts').get().attempts,0);
 });
 
 test('more than three requests per customer can use the same pool, while duplicate submissions reserve only once',async t=>{
@@ -109,7 +141,7 @@ test('more than three requests per customer can use the same pool, while duplica
  assert.equal((await f.run(f.request(2))).status,409);
  for (let id=3;id<=8;id++) assert.equal((await f.run(f.request(id))).status,200);
  assert.equal((await f.run(f.request(9),{userId:other})).status,200);
- assert.deepEqual(await (await f.run(f.status(),{userId:other})).json(),{enabled:true,available:true,remaining:3});
+ assert.deepEqual(await (await f.run(f.status(),{userId:other})).json(),{enabled:true,available:true,remaining:3,canEdit:true,canCreate:true});
  assert.equal(f.calls.length,8);
 });
 

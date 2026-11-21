@@ -24,6 +24,7 @@ import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.andyarijs.rig.media.NativeMediaKind
 import dev.andyarijs.rig.media.NativeMediaSource
+import org.json.JSONObject
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -37,18 +38,21 @@ import java.io.File
 class StartPhotoReviewUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
-    @Test fun renderedPhotoRequiresAnExplicitChoiceAndClosingDoesNotSelectIt() {
+    private fun blueJpeg(): ByteArray {
         val bitmap = Bitmap.createBitmap(360, 480, Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(Color.BLUE)
-        val jpeg = ByteArrayOutputStream().use { output ->
+        return ByteArrayOutputStream().use { output ->
             try { check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)); output.toByteArray() }
             finally { bitmap.recycle() }
         }
-        NativeViewModelFixture(startPhoto = jpeg) { request ->
+    }
+
+    @Test fun renderedPhotoRequiresAnExplicitChoiceAndClosingDoesNotSelectIt() {
+        NativeViewModelFixture(startPhoto = blueJpeg()) { request ->
             throw AssertionError("Unexpected request: ${request.method} ${request.url.encodedPath}")
         }.use { fixture ->
             fixture.onMain { fixture.model.step(1) }
-            fixture.awaitState { it.startPhotoAvailable && it.step == 1 }
+            fixture.awaitState { it.startPhotoOffer.canCreate && it.step == 1 }
             compose.setContent { RigApp(fixture.model, {}, {}, {}, {}) }
 
             makeCharacter()
@@ -64,6 +68,28 @@ class StartPhotoReviewUiTest {
             assertEquals(preview, selected.subject?.uri)
             assertEquals(1, selected.step)
             assertNull(selected.quote)
+        }
+    }
+
+    @Test fun editOnlyCustomerCanPreviewAndUseAnEditFromStepOne() {
+        val offer = JSONObject().put("enabled", true).put("available", true).put("canCreate", false).put("canEdit", true)
+        NativeViewModelFixture(startPhoto = blueJpeg(), startPhotoOffer = offer) { request ->
+            throw AssertionError("Unexpected request: ${request.method} ${request.url.encodedPath}")
+        }.use { fixture ->
+            withSelectedPhoto(fixture) {
+                fixture.awaitState { it.startPhotoOffer.canEdit }
+                compose.onNodeWithText("Maak een typetje").assertDoesNotExist()
+                compose.onNodeWithText("Bewerk mijn foto").performScrollTo().performClick()
+                compose.onNodeWithText("naar OpenAI", substring = true).assertIsDisplayed()
+                val original = fixture.model.state.value.subject?.uri
+                compose.onNodeWithTag("rig-start-photo-description").performTextInput("Maak de foto lichter")
+                compose.onNodeWithText("Maak foto").performClick()
+                val ready = fixture.awaitState { it.startPhotoPreview != null && !it.busy }
+                assertEquals(original, ready.subject?.uri)
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Voorbeeld van je startfoto").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("Gebruik deze foto").performClick()
+                fixture.awaitState { it.subject?.uri == ready.startPhotoPreview!!.uri && it.startPhotoPreview == null }
+            }
         }
     }
 

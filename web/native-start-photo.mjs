@@ -11,18 +11,31 @@ class SponsorshipExhausted extends Error {}
 const headers = {'cache-control':'private, no-store','x-content-type-options':'nosniff'};
 const json = (value,status=200) => Response.json(value,{status,headers});
 
-async function campaign(env,db,userId,now) {
+const activeCustomer = `EXISTS (
+ SELECT 1 FROM rig_sites_identities i
+ WHERE i.site_id=? AND i.subject_hash=? AND i.user_id=?
+ AND EXISTS (SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+ AND NOT EXISTS (SELECT 1 FROM rig_frozen_accounts f WHERE f.user_id=i.user_id)
+)`;
+
+function maximumCost(value) {
+ return typeof value==='string' && /^[1-9]\d{0,4}$/.test(value) && Number(value)<=16700 ? Number(value) : null;
+}
+
+async function campaign(env,db,session,now) {
+ const {siteId,subjectHash,userId}=session;
  const expires = Date.parse(env.RIG_START_PHOTO_EXPIRES_AT);
- // Maximum all-in euro cost of either fixed request below, valid until campaign expiry.
- const bound=env.RIG_START_PHOTO_MAX_COST_EUR_CENTS;
+ const fullBound=maximumCost(env.RIG_START_PHOTO_MAX_COST_EUR_CENTS);
+ const editBound=maximumCost(env.RIG_START_PHOTO_EDIT_MAX_COST_EUR_CENTS ?? env.RIG_START_PHOTO_MAX_COST_EUR_CENTS);
  if (!/^sk-[A-Za-z0-9_-]+$/.test(env.RIG_OPENAI_IMAGES_KEY ?? '') ||
-     typeof bound!=='string' || !/^[1-9]\d{0,4}$/.test(bound) || Number(bound)>16700 ||
+     (!editBound && !fullBound) || typeof siteId!=='string' || siteId!==env.RIG_PRODUCTION_SITE_ID ||
+     typeof subjectHash!=='string' || !/^[a-f0-9]{64}$/.test(subjectHash) ||
      !Number.isFinite(expires) || expires <= now || !USER.test(userId)) return null;
+ const identity=[siteId,subjectHash,userId];
+ if (!(await db.prepare(`SELECT 1 WHERE ${activeCustomer}`).bind(...identity).first())) return null;
  const listed=(env.RIG_START_PHOTO_TESTERS ?? '').split(',').some(id=>id.trim()===userId);
- if (listed) {
-  if (await db.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(userId).first()) return null;
- } else if (env.RIG_PRODUCTION_PROMOTIONAL_INVITATION_ENABLED!=='yes' || !await hasRedeemedProductionInvitation(db,userId)) return null;
- return {expires,reservationCents:Number(bound)};
+ const canCreate=fullBound && (listed || (env.RIG_PRODUCTION_PROMOTIONAL_INVITATION_ENABLED==='yes' && await hasRedeemedProductionInvitation(db,userId)));
+ return {expires,identity,edit:editBound,create:canCreate?fullBound:null};
 }
 
 async function bounded(body,limit,signal) {
@@ -81,12 +94,13 @@ async function readPhotoRequest(req) {
  } catch {return null;}
 }
 
-async function reserve(db,userId,requestId,now,reservationCents) {
+async function reserve(db,userId,requestId,now,reservationCents,identity) {
  const claim=await db.prepare(`INSERT INTO rig_start_photo_attempts(request_id,user_id,created_at,reserved_eur_cents)
-  SELECT ?,?,?,? FROM rig_start_photo_budget WHERE available_eur_cents>=?
+  SELECT ?,?,?,? FROM rig_start_photo_budget WHERE available_eur_cents>=? AND ${activeCustomer}
   ON CONFLICT(request_id) DO NOTHING`)
-  .bind(requestId,userId,now,reservationCents,reservationCents).run();
+  .bind(requestId,userId,now,reservationCents,reservationCents,...identity).run();
  if (claim.meta?.changes===1) return 'reserved';
+ if (!(await db.prepare(`SELECT 1 WHERE ${activeCustomer}`).bind(...identity).first())) return 'denied';
  const previous=await db.prepare('SELECT 1 AS found FROM rig_start_photo_attempts WHERE request_id=?')
   .bind(requestId).first();
  return previous?.found===1?'duplicate':'unavailable';
@@ -127,22 +141,25 @@ async function generate(input,env,session,network) {
 
 export async function handleNativeStartPhoto(req,env,{db,session,network,now=Date.now()}) {
  const {userId}=session;
- const offer=await campaign(env,db,userId,now);
+ const offer=await campaign(env,db,session,now);
  if (req.method==='GET') {
-  let available=false;
-  if (offer) {
-   const budget=await db.prepare('SELECT available_eur_cents FROM rig_start_photo_budget').first();
-   available=Number.isSafeInteger(budget?.available_eur_cents) && budget.available_eur_cents>=offer.reservationCents;
-  }
+  const budget=offer?await db.prepare('SELECT available_eur_cents FROM rig_start_photo_budget').first():null;
+  const availableCents=Number.isSafeInteger(budget?.available_eur_cents)?budget.available_eur_cents:0;
+  const canEdit=Boolean(offer?.edit && availableCents>=offer.edit);
+  const canCreate=Boolean(offer?.create && availableCents>=offer.create);
+  const available=canEdit || canCreate;
   // Android 0.2.6 needs a value in [0,3] to show the photo controls.
-  return json({enabled:available,available,remaining:available?3:0});
+  return json({enabled:available,available,remaining:available?3:0,canEdit,canCreate});
  }
  if (!offer) return json({error:'De gesponsorde startfoto’s zijn niet beschikbaar.'},403);
  const input=await readPhotoRequest(req);
  if (!input) return json({error:'Controleer je beschrijving en foto. Kies een foto van maximaal 3 MB.'},400);
+ const reservationCents=offer[input.mode];
+ if (!reservationCents) return json({error:'Deze fotobewerking is niet beschikbaar.'},403);
  const claimTime=Date.now();
  if (claimTime>=offer.expires) return json({error:'De gesponsorde periode is afgelopen.'},403);
- const claim=await reserve(db,userId,input.requestId,claimTime,offer.reservationCents);
+ const claim=await reserve(db,userId,input.requestId,claimTime,reservationCents,offer.identity);
+ if (claim==='denied') return json({error:'De gesponsorde startfoto’s zijn niet beschikbaar.'},403);
  if (claim==='duplicate') return json({error:'Deze aanvraag is al ingediend.'},409);
  if (claim!=='reserved') return json({error:'Het gezamenlijke fotobudget is op.'},429);
  try {

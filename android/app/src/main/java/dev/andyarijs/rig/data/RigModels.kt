@@ -10,6 +10,8 @@ internal const val TEMPORARY_TRANSFER = "fal-temporary-links-v1"
 
 data class NativeAuthSession(val accessToken: String, val expiresAt: Long, val userId: String)
 
+data class RigStartPhotoOffer(val canCreate: Boolean = false, val canEdit: Boolean = false)
+
 data class RigSession(
     val userId: String,
     val balanceCents: Long,

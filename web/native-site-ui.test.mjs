@@ -146,6 +146,32 @@ test('native visitor can sign in without loading the studio or requiring Google'
  const app=await startNativeSiteApp({window:w,auth:{currentSession:async()=>false,dispose(){}},loadScript:async()=>{loaded++;}});
  try{assert.equal(loaded,0);assert.equal(d.getElementById('authLogin').hidden,false);assert.equal(d.getElementById('rigStudio').hidden,true);assert.match(d.getElementById('authLogin').textContent,/ChatGPT/);}finally{app.dispose();dom.window.close();}
 });
+test('customers offered only editing can open it after selecting a photo, without a create button',async()=>{
+ const {dom,w,d}=page(),calls=[];
+ const el=id=>d.getElementById(id);
+ let selected=false;
+ const stop=mountStartPhoto({browser:w,document:d,
+  binding:{isActive:()=>true,async request(path,options){
+   calls.push(options.method??'GET');
+   return Response.json({available:true,canCreate:false,canEdit:true});
+  }},
+  selection:{canEdit:()=>selected}
+ });
+ try{
+  await waitFor(()=>el('startPhotoCreate').hidden);
+  assert.equal(el('startPhotoActions').hidden,true);
+  selected=true;d.dispatchEvent(new w.Event('rig-photo-selection'));
+  assert.equal(el('startPhotoActions').hidden,false);
+  assert.equal(el('startPhotoEdit').hidden,false);
+  el('startPhotoCreate').click();
+  assert.equal(el('startPhotoDialog').open,false);
+  el('startPhotoDescription').value='Maak een typetje';
+  el('startPhotoForm').dispatchEvent(new w.Event('submit',{cancelable:true}));
+  assert.deepEqual(calls,['GET']);
+  el('startPhotoEdit').click();assert.equal(el('startPhotoDialog').open,true);
+  assert.match(el('startPhotoHint').textContent,/geselecteerde foto naar OpenAI/);
+ }finally{stop();dom.window.close();}
+});
 test('the Site previews a sponsored edit before replacing the selected photo',async()=>{
  const {dom,w,d}=page(),calls=[],selected=[],revoked=[];
  const el=id=>d.getElementById(id);
