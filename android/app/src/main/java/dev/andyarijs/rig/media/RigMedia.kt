@@ -106,7 +106,7 @@ object RigMediaLimits {
 
     fun exportLengthMs(durationSeconds: Int): Long = if (durationSeconds == 3) 3_120L else durationSeconds * 1_000L
 
-    fun requireMotionLength(durationMs: Long, quality: String) {
+    fun requireMotionLength(durationMs: Long, quality: String?) {
         val recast = quality == "human-recast"
         require(durationMs >= exportLengthMs(if (recast) 6 else 3)) {
             if (recast) "Kies voor deze bewerking een bewegingsvideo van minstens 6 seconden."
