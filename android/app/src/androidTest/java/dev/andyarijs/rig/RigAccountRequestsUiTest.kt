@@ -161,6 +161,9 @@ class RigAccountRequestsUiTest {
 
     private fun openDeletion() {
         compose.onNodeWithText("Account", substring = false).performClick()
+        compose.onNodeWithText("RIG-tegoed", substring = false).assertIsDisplayed()
+        compose.onNodeWithTag("rig-delete-account").assertDoesNotExist()
+        compose.onNodeWithText("Privacy en gegevens", substring = false).performClick()
         compose.onNodeWithTag("rig-privacy").assertIsDisplayed()
         compose.onNodeWithTag("rig-delete-account").performClick()
     }

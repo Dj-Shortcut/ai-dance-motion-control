@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -61,6 +63,7 @@ private val Ink = Color(0xffeef2f0)
 private val Muted = Color(0xffa9b3b0)
 private val Accent = Color(0xff8fe3b8)
 private const val PRIVACY_URL = "https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/privacy"
+private enum class AccountPage { OVERVIEW, PRIVACY }
 private val scheme = darkColorScheme(primary = Accent, onPrimary = Color(0xff0d1f17), background = Background,
     surface = Surface, onSurface = Ink, onBackground = Ink, outline = Border, secondary = Accent)
 internal fun euro(cents: Long) = NumberFormat.getCurrencyInstance(Locale.forLanguageTag("nl-BE")).format(cents / 100.0)
@@ -77,9 +80,9 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     var options by remember { mutableStateOf(false) }
     var crop by remember { mutableStateOf<String?>(null) }
     var startPhotoEdit by remember(s.session?.userId) { mutableStateOf<Boolean?>(null) }
-    var account by remember { mutableStateOf(false) }
+    var account by remember(s.session?.userId) { mutableStateOf<AccountPage?>(null) }
     val openPrivacy: () -> Unit = {
-        account = false
+        account = null
         runCatching { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(PRIVACY_URL)) }
             .onFailure(model::showError)
     }
@@ -116,7 +119,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                     } else if (s.session != null) TextButton(onClick = { model.credits(true) }) {
                         Text(euro(s.session!!.balanceCents))
                     }
-                    TextButton(onClick = { if (s.session == null) onLogin() else account = true }) { Text(if (s.session == null) "Aanmelden" else "Account") }
+                    TextButton(onClick = { if (s.session == null) onLogin() else account = AccountPage.OVERVIEW }) { Text(if (s.session == null) "Aanmelden" else "Account") }
                 }
                 if (s.session != null) TextButton(onClick = { model.history(true) }, modifier = Modifier.align(Alignment.End).height(32.dp), contentPadding = PaddingValues(0.dp)) { Text("Mijn video’s", color = Muted, fontSize = 13.sp) }
             }
@@ -297,14 +300,33 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
             }
         }
         if (s.quote != null) QuoteDialog(s.quote!!, s.needsRegistration, s.busy, model::closeQuote, onRegister, onConfirm)
-        if (account) AlertDialog(onDismissRequest = { account = false }, title = { Text("Je RIG-account") }, text = {
-            Column {
-                Text("Je RIG-tegoed en video’s horen bij hetzelfde account als op de website.")
-                TextButton(onClick = openPrivacy, modifier = Modifier.testTag("rig-privacy")) { Text("Privacy") }
-                TextButton(onClick = { account = false; model.openAccountDeletionRequest() }, enabled = !s.busy,
-                    modifier = Modifier.testTag("rig-delete-account")) { Text("Account verwijderen") }
-            }
-        }, confirmButton = { TextButton(onClick = { account = false; model.logout() }) { Text("Afmelden") } }, dismissButton = { TextButton(onClick = { account = false }) { Text("Sluiten") } })
+        val session = s.session
+        if (account == AccountPage.OVERVIEW && session != null) AccountOverviewDialog(
+            session.balanceCents.takeUnless { session.funding == "owner-provider" },
+            s.providerBalance, s.providerBalanceLoading, s.busy,
+            close = { account = null },
+            openCredits = { account = null; model.credits(true) },
+            openPrivacySettings = { account = AccountPage.PRIVACY },
+            logout = { account = null; model.logout() },
+        )
+        if (account == AccountPage.PRIVACY && session != null) AlertDialog(
+            onDismissRequest = { account = AccountPage.OVERVIEW },
+            title = { Text("Privacy en gegevens") },
+            text = {
+                Column {
+                    TextButton(onClick = openPrivacy, modifier = Modifier.testTag("rig-privacy")) {
+                        Text("Privacybeleid")
+                    }
+                    TextButton(onClick = { account = null; model.openAccountDeletionRequest() }, enabled = !s.busy,
+                        modifier = Modifier.testTag("rig-delete-account")) {
+                        Text("Account verwijderen", color = if (s.busy) Muted else Ink)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { account = AccountPage.OVERVIEW }) { Text("Terug") }
+            },
+        )
         s.accountRequest?.let { request ->
             AccountRequestDialog(request, model::closeAccountRequest, model::submitAccountRequest,
                 model::reportReason, model::reportDetails)
@@ -340,6 +362,50 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 onDismiss = { crop = null }, onApply = { model.crop(target == "subject", it); crop = null })
         }
     }
+}
+
+@Composable
+private fun AccountOverviewDialog(
+    creditsCents: Long?,
+    providerBalance: dev.andyarijs.rig.data.RigProviderBalance?,
+    loading: Boolean,
+    busy: Boolean,
+    close: () -> Unit,
+    openCredits: () -> Unit,
+    openPrivacySettings: () -> Unit,
+    logout: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = close,
+        title = {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Je RIG-account", Modifier.weight(1f))
+                IconButton(onClick = close, modifier = Modifier.semantics { contentDescription = "Accountvenster sluiten" }) {
+                    Text("×", fontSize = 26.sp, modifier = Modifier.clearAndSetSemantics {})
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column {
+                    Text(if (creditsCents == null) "Fal-saldo" else "RIG-tegoed", color = Muted)
+                    if (creditsCents == null) {
+                        RigOwnerBalance(providerBalance, loading, modifier = Modifier.testTag("rig-account-fal-balance"))
+                    } else {
+                        TextButton(onClick = openCredits, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                            Text(euro(creditsCents), fontSize = 20.sp)
+                        }
+                        Text("Je tegoed en video’s zijn ook beschikbaar op de website.", color = Muted)
+                    }
+                }
+                HorizontalDivider(color = Border)
+                TextButton(onClick = openPrivacySettings, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                    Text("Privacy en gegevens", color = Ink)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = logout, enabled = !busy) { Text("Afmelden") } },
+    )
 }
 
 @Composable private fun AccountRequestDialog(request: RigAccountRequestDialog, close: () -> Unit,
@@ -397,7 +463,11 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
         dismissButton = { if (request.receipt == null) TextButton(onClick = close, enabled = !request.busy) { Text("Annuleren") } })
 }
 
-@Composable internal fun RigOwnerBalance(balance: dev.andyarijs.rig.data.RigProviderBalance?, loading: Boolean = false) {
+@Composable internal fun RigOwnerBalance(
+    balance: dev.andyarijs.rig.data.RigProviderBalance?,
+    loading: Boolean = false,
+    modifier: Modifier = Modifier.testTag("rig-owner-balance").padding(horizontal = 12.dp, vertical = 8.dp),
+) {
     var fresh by remember(balance) { mutableStateOf(balance?.isFresh() == true) }
     LaunchedEffect(balance) {
         fresh = balance?.isFresh() == true
@@ -414,7 +484,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
         else -> "Saldo niet beschikbaar"
     }
     Text(label, color = if(fresh) Accent else Muted, fontSize = 14.sp,
-        fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("rig-owner-balance").padding(horizontal = 12.dp, vertical = 8.dp))
+        fontWeight = FontWeight.SemiBold, modifier = modifier)
 }
 
 @Composable private fun StartCard(number: String, label: String, modifier: Modifier) {
