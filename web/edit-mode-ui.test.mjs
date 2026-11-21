@@ -94,7 +94,7 @@ test('the shared pop-out remembers each mode description without adding a second
   f.load();f.el('prepare').click();f.prompt('Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
   f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('briefTitle').textContent,'In de video');assert.equal(f.el('promptLabel').textContent,'Wat wil je veranderen?');assert.match(f.el('editPrompt').value,/^Vervang de hoofdpersoon in de video/);assert.equal(f.el('confirmBrief').disabled,false);f.prompt('Vervang de zanger door mijn hond.');f.el('closeBrief').click();
   f.el('motionModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Neem de dans over in mijn woonkamer.');f.el('closeBrief').click();
-  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Vervang de zanger door mijn hond.');assert.equal(f.d.querySelectorAll('textarea').length,1);
+  f.el('editModeButton').click();f.el('prepare').click();assert.equal(f.el('editPrompt').value,'Vervang de zanger door mijn hond.');assert.deepEqual([...f.el('briefDialog').querySelectorAll('textarea')],[f.el('editPrompt')]);
  }finally{f.dom.window.close();}
 });
 test('editing has a visible description, the full fragment within its model limit and clear source labels',()=>{
