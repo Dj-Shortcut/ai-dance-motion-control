@@ -21474,6 +21474,7 @@ ${suffix}`;
         window.rigRequest = binding.request;
         window.rigOpenVideo = binding.openVideo;
         window.rigSessionActive = binding.isActive;
+        window.rigSessionDispose = () => binding?.dispose();
         window.rigCheckout = (url) => {
           if (!binding.isActive()) throw Error("Je aanmelding is be\xEBindigd.");
           location.assign(url);

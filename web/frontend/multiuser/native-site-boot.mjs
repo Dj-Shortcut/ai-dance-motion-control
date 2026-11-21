@@ -35,7 +35,7 @@ export async function startNativeSiteApp({window:browser,document=browser?.docum
    if(typeof path==='string'&&path.startsWith('/api/payments/')&&!googleStatus&&!['/api/payments/balance','/api/payments/google-play/config','/api/payments/google-play/intents','/api/payments/google-play/confirm'].includes(path))throw Error('Tegoed kopen gaat hier via Google Play.');
    return binding.request(path,options);
   }:binding.request;
-  browser.rigOpenVideo=binding.openVideo;browser.rigSessionActive=binding.isActive;
+  browser.rigOpenVideo=binding.openVideo;browser.rigSessionActive=binding.isActive;browser.rigSessionDispose=()=>binding?.dispose();
   // Recheck the bound account immediately before leaving for Mollie. A late
   // checkout response from an ended session must never navigate this tab.
   browser.rigCheckout=async value=>{

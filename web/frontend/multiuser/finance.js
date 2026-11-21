@@ -30,7 +30,7 @@
   ];
   let disposed=false,dialog=null,ui=null,data=null,loadSequence=0,loading=false,salesSequence=0,salesLoading=false,expensePending=null,policyPending=null,correction=null;
 
-  function onPageHide(event){if(event.persisted!==true||!current())dispose();}
+  function onPageHide(){dispose();}
  function dispose(){
     if(disposed)return;disposed=true;loadSequence++;salesSequence++;data=null;expensePending=null;policyPending=null;correction=null;
     window.rigOwnerVerification?.cancel?.();window.rigOwnerAdministration?.dispose?.();
