@@ -379,7 +379,7 @@ $('briefDialog').addEventListener('cancel',event=>{if(busy&&!cleanupReview)event
 $('cleanupEnabled').addEventListener('change',()=>{if(busy||cleanupWork)return;invalidate();clearBriefFeedback();});
 $('briefCrop').addEventListener('click',()=>{if(busy||cleanupWork||!motionFile)return;returnBriefFromCrop=true;$('briefDialog').close();$('motionCropButton').click();});
 $('cropDialog').addEventListener('close',()=>{if(returnBriefFromCrop){returnBriefFromCrop=false;if(window.rigSessionActive?.()===true){$('briefDialog').showModal();refreshButton();}}});
-window.addEventListener('pagehide',event=>{if(!event.persisted)disposeCleanup();});
+window.addEventListener('pagehide',disposeCleanup);
 
 // Trial continuation metadata is account-scoped and bounded. Source files,
 // image bytes and private URLs stay in memory and are never persisted here.
@@ -548,7 +548,25 @@ window.rigPreparedMedia = () => prepared;
 window.rigResumeFullDraft = () => continueFullVideo();
 window.rigPrepareChoice = trial => prepareWithPrompt({trial:trial===true});
 window.rigNewDraft = () => {if(continuationBlocked())return false;trialContinuation=null;savedFullDraft=null;savedPreparedSource=null;savedVideoSource=null;lastCompletedResult=null;continuationOffer=false;reviewingFull=false;resultRecovery=false;persistTrialContinuation();invalidate();renderContinuation();return true;};
-window.addEventListener('pagehide',event=>{if(!event.persisted)Object.values(urls).forEach(URL.revokeObjectURL);});
+function disposeCachedPage(){
+ // A BFCache snapshot can outlive the server session. Invalidate the local
+ // binding before any later pagehide/pageshow listener can render cached data.
+ try{window.rigSessionDispose?.()}catch{}window.rigSessionDispose=undefined;window.rigSessionActive=()=>false;window.rigRequest=undefined;window.rigScopedStorage=undefined;window.rigDraftStorage=undefined;window.rigOpenVideo=undefined;
+ $('rigStudio').hidden=true;$('authGate').hidden=false;
+ for(const dispose of [()=>window.rigGenerationDispose?.(),()=>window.rigFlowDispose?.(),()=>window.rigOwnerVerification?.dispose?.(),()=>window.rigCustomerVerification?.dispose?.(),()=>window.rigFinanceDispose?.(),()=>window.rigOwnerAdministration?.dispose?.(),()=>window.rigPaymentsDispose?.()])try{dispose()}catch{}
+ cancelAutoCrop();disposeCleanup();if(restoreOperation)restoreOperation.canceled=true;draftRevision++;
+ imageSource=null;personFile=null;motionFile=null;motionLoadingFile=null;prepared=null;savedPreparedSource=null;savedVideoSource=null;mainReferenceSelection=null;mainReferenceBlob=null;faceReferenceBlob=null;angleReferenceBlobs=[];
+ for(const key of Object.keys(referenceWork))referenceWork[key]=null;for(const key of Object.keys(thumbBlobs))delete thumbBlobs[key];
+ for(const input of document.querySelectorAll('input[type="file"]'))try{input.value=''}catch{}
+ for(const media of document.querySelectorAll('video,audio')){try{media.pause()}catch{}media.removeAttribute('src');try{media.load()}catch{}}
+ for(const image of document.querySelectorAll('img'))image.removeAttribute('src');
+ for(const link of document.querySelectorAll('a[href^="blob:"]'))link.removeAttribute('href');
+ for(const canvas of document.querySelectorAll('canvas'))canvas.width=canvas.height=1;
+ for(const key of Object.keys(urls)){try{URL.revokeObjectURL(urls[key])}catch{}delete urls[key];}
+ for(const dialog of document.querySelectorAll('dialog[open]'))try{dialog.close()}catch{}
+}
+window.addEventListener('pagehide',disposeCachedPage);
+window.addEventListener('pageshow',event=>{if(event.persisted)window.location.reload();});
 
 $('editPrompt').value=modePrompts[modeKey()];$('duration').max=String(durationLimit());if(editing())$('duration').value='5';
 updateCapabilities();

@@ -82,16 +82,15 @@ test('replacing local media revokes the old URL and page exit revokes current UR
  }finally{f.dom.window.close();}
 });
 
-test('a cached page preserves local media links until the document actually exits',()=>{
+test('a cached page immediately detaches local media and hides the stale session',()=>{
  const f=fixture();try{
+  let bindingDisposed=false;f.w.rigSessionDispose=()=>{bindingDisposed=true;};
   f.files('personInput',f.file('person.jpg','image/jpeg'));
   f.files('resultInput',f.file('result.mp4','video/mp4'));
-  const urls=f.created.map(entry=>entry.url),result=f.el('resultVideo').src;
+  const urls=f.created.map(entry=>entry.url);
   f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:true}));
-  assert.equal(urls.some(url=>f.revoked.includes(url)),false,'a cached document still owns its media');
-  f.w.dispatchEvent(new f.w.PageTransitionEvent('pageshow',{persisted:true}));
-  assert.equal(f.el('resultVideo').src,result);assert.equal(f.el('export').href,result);
-  f.w.dispatchEvent(new f.w.PageTransitionEvent('pagehide',{persisted:false}));
-  assert.ok(urls.every(url=>f.revoked.includes(url)),'an actual page exit still releases all local media');
+  assert.ok(urls.every(url=>f.revoked.includes(url)),'the cached document releases every local media URL');
+  assert.equal(f.el('resultVideo').hasAttribute('src'),false);assert.equal(f.el('export').hasAttribute('href'),false);
+  assert.equal(bindingDisposed,true);assert.equal(f.el('rigStudio').hidden,true);assert.equal(f.el('authGate').hidden,false);assert.equal(f.w.rigSessionActive(),false);
  }finally{f.dom.window.close();}
 });

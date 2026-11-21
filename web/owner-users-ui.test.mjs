@@ -102,9 +102,8 @@ test('owner authorization failures clear every private administration section',a
  }finally{f.close();}}
 });
 
-test('cached page transitions retain user results without new requests and a real unload clears them',async()=>{
+test('cached page hide clears owner user results without new requests',async()=>{
  const f=fixture();try{
-  open(f);await loaded(f);const before=f.calls.length;f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));assert.match(f.root.textContent,/Testgebruiker/);assert.equal(f.calls.length,before);
-  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.root.children.length,0);
+  open(f);await loaded(f);const before=f.calls.length;f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));assert.equal(f.root.children.length,0);assert.equal(f.calls.length,before);
  }finally{f.close();}
 });

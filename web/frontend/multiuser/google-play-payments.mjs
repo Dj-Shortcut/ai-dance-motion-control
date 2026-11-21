@@ -245,7 +245,7 @@ export function startGooglePlayPayments({browser,document=browser?.document}={})
  listen(el('creditsButton'),'click',()=>{void openCredits();});listen(el('closeCredits'),'click',()=>{viewSequence++;el('creditsDialog').close();});listen(el('refreshPayment'),'click',()=>{void openCredits();});
  listen(document,'rig-balance-changed',()=>{void refreshBalance();});listen(browser,'focus',()=>resume());listen(browser,'pageshow',event=>{if(event.persisted===true)resume(true);});
  listen(document,'visibilitychange',()=>{if(document.visibilityState==='hidden')wasHidden=true;else if(document.visibilityState==='visible'&&wasHidden){wasHidden=false;resume(true);}});
- listen(browser,'pagehide',event=>{if(event.persisted!==true)dispose();});browser.rigPaymentsDispose=dispose;
+ listen(browser,'pagehide',dispose);browser.rigPaymentsDispose=dispose;
  const ready=(async()=>{await refreshBalance();if(current()&&!owner()&&readSlot())await openCredits({showDialog:false});})().catch(()=>{message(uncertain);});
  return Object.freeze({dispose,refreshBalance,openCredits,ready});
 }

@@ -612,6 +612,7 @@
       browser.rigRequest = binding.request;
       browser.rigOpenVideo = binding.openVideo;
       browser.rigSessionActive = binding.isActive;
+      browser.rigSessionDispose = () => binding?.dispose();
       browser.rigCheckout = () => {
         throw Error("Betalen is niet nodig tijdens deze test.");
       };

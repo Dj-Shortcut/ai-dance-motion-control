@@ -23,7 +23,7 @@ async function main(){
   else{
    const guarded=await prepareGuardedBinding({auth,browser:window,onChanged:endSession});
    binding=guarded.binding;unsubscribe=guarded.stop;if(ended){binding.dispose();return;}
-   window.rigScopedStorage=binding.scopedStorage;window.rigDraftStorage=binding.draftStorage;window.rigRequest=binding.request;window.rigOpenVideo=binding.openVideo;window.rigSessionActive=binding.isActive;
+   window.rigScopedStorage=binding.scopedStorage;window.rigDraftStorage=binding.draftStorage;window.rigRequest=binding.request;window.rigOpenVideo=binding.openVideo;window.rigSessionActive=binding.isActive;window.rigSessionDispose=()=>binding?.dispose();
    window.rigCheckout=url=>{if(!binding.isActive())throw Error('Je aanmelding is beëindigd.');location.assign(url);};
    logout.hidden=false;gate.hidden=true;studio.hidden=false;
    status.textContent='Aangemeld. Mollie staat in testmodus.';

@@ -198,7 +198,7 @@
  observer.observe(el('checkGeneration'),{attributes:true,attributeFilter:['hidden']});
  function dispose(){if(disposed)return;disposed=true;controller.abort();observer.disconnect();clearTimeout(priceTimer);priceSequence++;shareSequence++;shareFile=null;if(window.rigFlow===api)delete window.rigFlow;if(window.rigFlowDispose===dispose)delete window.rigFlowDispose;}
  const api={refresh,openFullReview:()=>{fullIntent=false;openMake({full:true});},revealFiles:({advanced=false,full=false}={})=>{fullIntent=full;show('files',{focus:false});el('flowAdvanced').open=advanced;},dispose};window.rigFlow=api;window.rigFlowDispose=dispose;
- on(window,'pagehide',event=>{if(!event.persisted)dispose();});
+ on(window,'pagehide',dispose);
  on(window,'pageshow',event=>{if(event.persisted&&current()){if(hasSubmittedGeneration())showProcessing();else render();}});
  on(el('authLogout'),'click',dispose);render();
 })();

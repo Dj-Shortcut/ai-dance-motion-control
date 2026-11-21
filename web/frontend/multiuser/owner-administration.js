@@ -17,7 +17,7 @@
  const euro=value=>Number.isSafeInteger(value)?new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(value/100):'Nog onbekend';
  const date=value=>{const d=new Date(typeof value==='string'&&/^\d{4}-\d{2}-\d{2} /.test(value)?value.replace(' ','T')+'Z':value);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('nl-BE',{timeZone:'Europe/Brussels',day:'2-digit',month:'2-digit',year:'numeric'}).format(d);};
  const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Brussels',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
- function onPageHide(event){if(event.persisted!==true||!current())dispose();}
+ function onPageHide(){dispose();}
  function dispose(){
   if(disposed)return;disposed=true;
   for(const state of [accounting,recovery,users])if(state){state.loadId++;state.actionId++;}

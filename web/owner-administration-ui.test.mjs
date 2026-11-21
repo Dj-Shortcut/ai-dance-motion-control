@@ -141,12 +141,10 @@ test('paid purchases needing invoice review remain visible even when there is no
  }finally{f.close();}
 });
 
-test('cached page transitions preserve manual administration without new mutations and actual unload clears it',async()=>{
+test('cached page hide clears manual administration and unsaved owner input',async()=>{
  const f=fixture();try{
-  await accounting(f);const form=f.d.getElementById('ownerAccountingDocumentForm');f.d.getElementById('ownerAccountingReference').value='ACC-mijn-bewaarde-keuze';const before=f.calls.length;
-  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));f.win.dispatchEvent(new f.win.PageTransitionEvent('pageshow',{persisted:true}));
-  assert.equal(f.d.getElementById('ownerAccountingDocumentForm'),form);assert.equal(f.d.getElementById('ownerAccountingReference').value,'ACC-mijn-bewaarde-keuze');assert.equal(f.calls.length,before);assert.equal(posts(f).length,0);
-  await recovery(f);assert.ok(f.calls.some(([path])=>path==='/api/owner/recovery'));assert.equal(posts(f).length,0);
-  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:false}));assert.equal(f.root.children.length,0);
+  await accounting(f);f.d.getElementById('ownerAccountingReference').value='ACC-mijn-bewaarde-keuze';const before=f.calls.length;
+  f.win.dispatchEvent(new f.win.PageTransitionEvent('pagehide',{persisted:true}));
+  assert.equal(f.root.children.length,0);assert.equal(f.d.getElementById('ownerAccountingDocumentForm'),null);assert.equal(f.calls.length,before);assert.equal(posts(f).length,0);
  }finally{f.close();}
 });
