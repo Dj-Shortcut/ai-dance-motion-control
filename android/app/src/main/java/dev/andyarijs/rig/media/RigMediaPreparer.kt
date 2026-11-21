@@ -121,26 +121,28 @@ class RigMediaPreparer(context: Context) {
         try { coroutineContext.ensureActive(); writeJpeg(bitmap, crop, size) } finally { bitmap.recycle() }
     }
 
-    /** Bounded upright preview for the native crop UI; caller owns/recycles it. */
-    suspend fun previewBitmap(source: NativeMediaSource, positionMs: Long = 0): Bitmap = withContext(Dispatchers.IO) {
+    /** Upright preview in the same crop coordinates as the exported image. */
+    suspend fun previewBitmap(source: NativeMediaSource, positionMs: Long = 0,
+        crop: NormalizedCrop = NormalizedCrop.FULL, maxSide: Int = 1280): Bitmap = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
-        val bitmap = if (source.isVideo) readFrameBitmap(source, positionMs.coerceIn(0, source.durationMs - 1)) else decodeImage(source.uri)
-        val scale = min(1.0, 1280.0 / max(bitmap.width, bitmap.height))
-        if (scale == 1.0) bitmap else Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).roundToInt()), max(1, (bitmap.height * scale).roundToInt()), true).also { if (it !== bitmap) bitmap.recycle() }
+        selectedBitmap(source, positionMs, crop, maxSide)
     }
 
-    /** Decode the selected upright crop in memory. The caller runs on IO and owns the result. */
-    internal fun photoCheckBitmap(source: NativeMediaSource, frameMs: Long, crop: NormalizedCrop): Bitmap {
+    /** The caller runs on IO and owns the result. */
+    internal fun photoCheckBitmap(source: NativeMediaSource, frameMs: Long, crop: NormalizedCrop): Bitmap =
+        selectedBitmap(source, frameMs, crop, PHOTO_CHECK_SIDE)
+
+    private fun selectedBitmap(source: NativeMediaSource, frameMs: Long, crop: NormalizedCrop, maxSide: Int): Bitmap {
         val croppedInDecoder = !source.isVideo && Build.VERSION.SDK_INT >= 28
         val bitmap = if (source.isVideo) {
             require(frameMs in 0 until source.durationMs) { "Kies een moment binnen de video." }
             // Bound the entire frame before extracting a small area from a large movie.
             readFrameBitmap(source, frameMs)
-        } else decodeImage(source.uri, if (croppedInDecoder) crop else null, PHOTO_CHECK_SIDE)
+        } else decodeImage(source.uri, if (croppedInDecoder) crop else null, maxSide)
         try {
             val selection = if (croppedInDecoder) NormalizedCrop.FULL else crop
             val rect = RigMediaLimits.pixelCrop(bitmap.width, bitmap.height, selection)
-            val scale = min(1.0, PHOTO_CHECK_SIDE.toDouble() / max(rect[2], rect[3]))
+            val scale = min(1.0, maxSide.toDouble() / max(rect[2], rect[3]))
             val size = max(1, (rect[2] * scale).roundToInt()) to max(1, (rect[3] * scale).roundToInt())
             return renderImage(bitmap, rect, size)
         } finally { bitmap.recycle() }

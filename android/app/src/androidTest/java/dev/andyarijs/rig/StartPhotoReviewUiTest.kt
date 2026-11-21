@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -13,10 +16,15 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.andyarijs.rig.media.NativeMediaKind
 import dev.andyarijs.rig.media.NativeMediaSource
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -57,6 +65,63 @@ class StartPhotoReviewUiTest {
             assertEquals(1, selected.step)
             assertNull(selected.quote)
         }
+    }
+
+    @Test fun cropPromptShowsLocalEditorAndScreenOneDisplaysTheSelectedPixels() {
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        NativeViewModelFixture(startPhoto = byteArrayOf(), download = { request ->
+            if (request.url.encodedPath == "/api/native/start-photo" && request.method == "POST") requests.incrementAndGet()
+            null
+        }) { request -> throw AssertionError("Unexpected request: ${request.method} ${request.url.encodedPath}") }.use { fixture ->
+            withSelectedPhoto(fixture) {
+                compose.onNodeWithText("Bewerk mijn foto").performScrollTo().performClick()
+                compose.onNodeWithTag("rig-start-photo-description").performTextInput("bijsnijden")
+                compose.onNodeWithText("Kies de uitsnede").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("rig-crop-canvas").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("rig-crop-canvas").performTouchInput {
+                    swipe(Offset(5f, 5f), Offset(width * .60f, height * .12f), 450)
+                }
+                compose.onNodeWithText("Gebruik uitsnede").performClick()
+                fixture.awaitState { it.subjectCrop.left > .45f }
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Gekozen uitsnede").fetchSemanticsNodes().isNotEmpty() }
+                val preview = compose.onNodeWithContentDescription("Gekozen uitsnede").performScrollTo().captureToImage()
+                val center = preview.toPixelMap()[preview.width / 2, preview.height / 2]
+                assertTrue("The preview should show the blue portion actually selected", center.blue > .8f && center.red < .2f)
+                assertEquals(0, requests.get())
+            }
+        }
+    }
+
+    @Test fun cropButtonWorksWithoutSponsoredPhotosAndCancelKeepsTheSelection() {
+        NativeViewModelFixture(signedIn = false) { request ->
+            throw AssertionError("Unexpected request: ${request.method} ${request.url.encodedPath}")
+        }.use { fixture ->
+            withSelectedPhoto(fixture) {
+                compose.onNodeWithText("Bewerk mijn foto").assertDoesNotExist()
+                compose.onNodeWithText("Foto bijsnijden").performScrollTo().performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("rig-crop-canvas").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("Annuleren").performClick()
+                assertEquals(dev.andyarijs.rig.media.NormalizedCrop.FULL, fixture.model.state.value.subjectCrop)
+                compose.onNodeWithContentDescription("Gekozen beeld").performScrollTo().assertIsDisplayed()
+            }
+        }
+    }
+
+    private fun withSelectedPhoto(fixture: NativeViewModelFixture, verify: () -> Unit) {
+        val file = File.createTempFile("crop-fixture-", ".jpg", compose.activity.cacheDir)
+        try {
+            val photo = Bitmap.createBitmap(600, 400, Bitmap.Config.ARGB_8888)
+            try {
+                photo.eraseColor(Color.RED)
+                val canvas = android.graphics.Canvas(photo)
+                canvas.drawRect(390f, 0f, 600f, 400f, android.graphics.Paint().apply { color = Color.BLUE })
+                file.outputStream().use { check(photo.compress(Bitmap.CompressFormat.JPEG, 92, it)) }
+            } finally { photo.recycle() }
+            fixture.onMain { fixture.model.step(1); fixture.model.select(Uri.fromFile(file), "subject") }
+            fixture.awaitState { it.subject?.uri == Uri.fromFile(file) && !it.busy }
+            compose.setContent { RigApp(fixture.model, {}, {}, {}, {}) }
+            verify()
+        } finally { file.delete() }
     }
 
     @Test fun anUnreadableImageCannotBeAccepted() {

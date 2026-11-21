@@ -32,6 +32,17 @@ const receipt=`p.amount_cents=500 AND p.source_environment_id='${SOURCE}'
  AND p.source_invitation_id=1 AND p.source_invalidated_at>0
  AND p.source_invalidated_at<=p.created_at`;
 
+const redeemedInvitation=`FROM rig_production_invitation p JOIN rig_ledger g ON g.event_id=?
+ AND g.user_id=p.redeemed_by AND g.delta=500 AND g.order_id IS NULL
+ WHERE p.id=1 AND p.redeemed_by=? AND p.redeemed_at IS NOT NULL AND ${receipt}
+ AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
+ AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=p.redeemed_by)`;
+
+export async function hasRedeemedProductionInvitation(db,userId){
+ const row=await db.prepare(`SELECT 1 AS found ${redeemedInvitation}`).bind(EVENT,userId).first();
+ return row?.found===1;
+}
+
 export async function handleProductionInvitation(req,rawEnv,{userId,productionContext,clock=Date.now}={}){
  try{
   if(rawEnv?.RIG_PRODUCTION_PROMOTIONAL_INVITATION_ENABLED!=='yes'||!USER.test(rawEnv.RIG_PRODUCTION_OWNER_USER_ID||'')||!isProductionGenerationContext(productionContext,{db:rawEnv.PRODUCTION_DB,origin:rawEnv.RIG_PRODUCTION_SITE_ORIGIN})||typeof clock!=='function')return invalidConfig();
@@ -53,11 +64,7 @@ export async function handleProductionInvitation(req,rawEnv,{userId,productionCo
       ON j.user_id=l.user_id AND j.created_at>=p.redeemed_at
       AND (l.event_id='reserve:'||j.id OR l.event_id='release:'||j.id)
       WHERE l.user_id=p.redeemed_by),0) AS gift_remaining
-    FROM rig_production_invitation p JOIN rig_ledger g ON g.event_id=?
-     AND g.user_id=p.redeemed_by AND g.delta=500 AND g.order_id IS NULL
-    WHERE p.id=1 AND p.redeemed_by=? AND p.redeemed_at IS NOT NULL AND ${receipt}
-     AND EXISTS(SELECT 1 FROM rig_payment_environment WHERE id=1 AND mode='live')
-     AND NOT EXISTS(SELECT 1 FROM rig_frozen_accounts WHERE user_id=p.redeemed_by)`)
+    ${redeemedInvitation}`)
     .bind(EVENT,userId).first();
    if(!Number.isSafeInteger(row?.balance)||!Number.isSafeInteger(row?.gift_remaining))return unavailable();
    // Gift is consumed before later purchases. A confirmed generation refund
