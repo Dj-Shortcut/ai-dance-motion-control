@@ -32,6 +32,7 @@ internal class NativeViewModelFixture(
     beforeRead: (String) -> Unit = {},
     download: (Request) -> ByteArray? = { null },
     private val assessPhoto: AssessDancePhoto? = null,
+    startPhoto: ByteArray? = null,
     respond: (Request) -> Pair<Int, JSONObject>,
 ) : Closeable {
     val user = "u-12345678-1234-4123-8123-123456789abc"
@@ -54,13 +55,16 @@ internal class NativeViewModelFixture(
         download(request)?.let { bytes ->
             return@addInterceptor response.code(200).body(bytes.toResponseBody("video/mp4".toMediaType())).build()
         }
+        if (request.url.encodedPath == "/api/native/start-photo" && request.method == "POST" && startPhoto != null) {
+            return@addInterceptor response.code(200).body(startPhoto.toResponseBody("image/jpeg".toMediaType())).build()
+        }
         val (status, body) = when (request.url.encodedPath) {
             "/api/native/session" -> 200 to JSONObject().put("userId", store.session()?.userId).put("balanceCents", 500)
                 .put("currency", "EUR").put("mode", "live").put("funding", funding)
             "/api/native/video-config" -> 200 to JSONObject().put("enabled", true).put("funding", funding)
                 .put("qualities", JSONArray(qualities))
             "/api/native/start-photo" -> if (request.method == "GET" && store.session() != null) {
-                200 to JSONObject().put("enabled", false)
+                200 to JSONObject().put("enabled", startPhoto != null).put("available", startPhoto != null)
             } else respond(request)
             else -> respond(request)
         }

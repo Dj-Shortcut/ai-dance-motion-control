@@ -303,7 +303,9 @@ class RigMediaPreparer(context: Context) {
 
     private fun decodeImage(uri: Uri, crop: NormalizedCrop? = null, cropMaxSide: Int = RigMediaLimits.MAX_IMAGE_SIDE): Bitmap {
         if (Build.VERSION.SDK_INT >= 28) {
-            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
+            val source = if (uri.scheme == "file") ImageDecoder.createSource(File(requireNotNull(uri.path)))
+                else ImageDecoder.createSource(resolver, uri)
+            return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 val rect = crop?.let { RigMediaLimits.pixelCrop(info.size.width, info.size.height, it) }
                 val scale = if (rect == null) min(1.0, 4096.0 / max(info.size.width, info.size.height))
                     else min(1.0, cropMaxSide.toDouble() / max(rect[2], rect[3]))

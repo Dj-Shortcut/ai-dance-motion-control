@@ -120,22 +120,8 @@ Do not mark a gate complete without its observable evidence. Building locally, d
 
 De Android-fotostap kan een personage maken op basis van een beschrijving of de gekozen foto bewerken. De gebruiker beslist of die het resultaat bewaart of als startfoto gebruikt. De fotobewerking stuurt alleen de gekozen, genormaliseerde foto naar de OpenAI Images API. De bestaande videobevestiging start desgewenst pas daarna een Fal-opdracht. Neem het gebruik van OpenAI als verwerker op in de toepasselijke privacy-informatie voor de proef.
 
-Activeer de proef pas na migratie `0021_start_photos.sql`, publicatie van de aangepaste relay en privéworker, en installatie van de Android-build. Stel op de privéworker `RIG_OPENAI_IMAGES_KEY` in als geheim van het bedoelde OpenAI-project. Gebruik daarnaast `RIG_START_PHOTO_TESTERS` (kommagescheiden RIG-gebruikers-ID's), `RIG_START_PHOTO_EXPIRES_AT` (ISO 8601 met tijdzone) en `RIG_START_PHOTO_MAX_ATTEMPTS` (maximaal aantal aanvragen voor de hele proef). Zonder geldige configuratie biedt de app de proef niet aan.
+Activeer de proef pas na migratie `0021_start_photos.sql`, publicatie van de aangepaste relay en privéworker, en installatie van de Android-build. Stel op de privéworker `RIG_OPENAI_IMAGES_KEY` in als geheim van het bedoelde OpenAI-project. Gebruik daarnaast `RIG_START_PHOTO_TESTERS` (kommagescheiden RIG-gebruikers-ID's) en `RIG_START_PHOTO_EXPIRES_AT` (ISO 8601 met tijdzone, uiterlijk bij het einde van de sponsoring). Zonder geldige configuratie biedt de app de proef niet aan.
 
-De server reserveert vóór verzending één beurt. Er zijn maximaal drie aanvragen per tester, gedeeld door beide fotokeuzes, en een onafhankelijk totaalplafond. Een onzekere aanvraag wordt niet opnieuw verstuurd. De reserveringen blijven meetellen bij een wijziging van de einddatum of testerslijst. De server bewaart geen beschrijvingen of foto’s voor deze functie. Het previewbestand staat tijdelijk op het toestel, en ‘Bewaar foto’ schrijft het naar de locatie van de gebruiker.
+Controleer vóór activering dat de gekoppelde OpenAI-organisatie actief promotietegoed heeft en na uitputting niet op gekocht tegoed, automatisch bijladen of betaalde facturatie terugvalt. De OpenAI-projectsleutel kan die factureringsinstelling niet afdwingen. Sluit de fotoproef wanneer de sponsoring stopt. [OpenAI API-tegoed](https://help.openai.com/en/articles/20001626-api-credits-benefit-for-eligible-chatgpt-subscriptions)
 
-## Cutover to verified Android sign-in
-
-Treat the Sites deployment and Android update as one release. Publish the
-certificate association first, then verify the new signed build in a test rollout.
-Make the update available to all installed testers through their existing
-distribution channel before switching the production sign-in endpoint. Record
-the installed version and a successful sign-in on the new build before widening
-the rollout.
-
-The new app sends the `app-link-v1` flow marker. Once Sites switches, older builds
-and previously opened consent forms without that marker receive update instructions
-before Sites issues a code. Existing app sessions do not use the callback until
-the user needs to sign in again. If Android opens the HTTPS callback in the
-browser, the page explains how to enable supported links and restart sign-in
-from RIG. The old custom scheme is retired at cutover.
+De server registreert vóór verzending het aanvraag-ID om dubbele verzending te voorkomen. De app toont het resultaat vóór selectie en biedt sluiten, bewaren en gebruiken aan. Een onzekere aanvraag wordt niet opnieuw verstuurd. De server bewaart geen beschrijvingen of foto’s voor deze functie. Het previewbestand staat tijdelijk op het toestel, en ‘Bewaar foto’ schrijft het naar de locatie van de gebruiker.

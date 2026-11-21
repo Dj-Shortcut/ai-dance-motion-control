@@ -100,15 +100,12 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
             }
         }
         s.startPhotoPreview?.let { preview ->
-            AlertDialog(
-                onDismissRequest = model::discardStartPhoto,
-                title = { Text("Je startfoto") },
-                text = { MediaThumbnail(preview, 0, Modifier.fillMaxWidth().height(280.dp)) },
-                confirmButton = { TextButton(onClick = model::useStartPhoto, enabled = !s.busy) { Text("Gebruik deze foto") } },
-                dismissButton = {
-                    TextButton(onClick = { saveStartPhoto.launch("rig-startfoto.jpg") }, enabled = !s.busy) { Text("Bewaar foto") }
-                },
-            )
+            key(preview.uri) {
+                StartPhotoReviewDialog(
+                    preview, s.busy, model::discardStartPhoto, model::useStartPhoto,
+                    { saveStartPhoto.launch("rig-startfoto.jpg") },
+                )
+            }
         }
         Scaffold(containerColor = Background, topBar = {
             Column(Modifier.statusBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -191,15 +188,12 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         PageTitle("Kies je beeld.", "Een foto of het beste moment uit je eigen video.", { model.step(0) })
                         MediaCard("Jouw beeld", s.subject, s.frameMs, { model.frame(it) }, { ownPicker.launch(arrayOf("image/*", "video/*")) })
                         if (s.subject != null) DancePhotoAdvice(dancePhotoCheck)
-                        val photoTurns = s.startPhotoRemaining
-                        if (photoTurns != null) {
-                            Text(if (photoTurns == 1) "1 gratis fotobeurt over" else "$photoTurns gratis fotobeurten over",
-                                color = Muted, fontSize = 13.sp)
+                        if (s.startPhotoAvailable) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { startPhotoEdit = false }, enabled = photoTurns > 0 && !s.busy) {
+                                TextButton(onClick = { startPhotoEdit = false }, enabled = !s.busy) {
                                     Text("Maak een typetje")
                                 }
-                                if (s.subject?.isVideo == false) TextButton(onClick = { startPhotoEdit = true }, enabled = photoTurns > 0 && !s.busy) {
+                                if (s.subject?.isVideo == false) TextButton(onClick = { startPhotoEdit = true }, enabled = !s.busy) {
                                     Text("Bewerk mijn foto")
                                 }
                             }
@@ -444,6 +438,39 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     }
 }
 @Composable
+internal fun StartPhotoReviewDialog(
+    photo: NativeMediaSource, busy: Boolean, close: () -> Unit, use: () -> Unit, save: () -> Unit,
+) {
+    val context = LocalContext.current
+    val result by produceState<Result<Bitmap>?>(null, photo.uri) {
+        value = try { Result.success(RigMediaPreparer(context).previewBitmap(photo)) }
+        catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        catch (error: Exception) { Result.failure(error) }
+    }
+    val bitmap = result?.getOrNull()
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("Bekijk je startfoto") },
+        text = {
+            Column {
+                val preview = Modifier.fillMaxWidth().height(300.dp)
+                when {
+                    bitmap != null -> Image(bitmap.asImageBitmap(), "Voorbeeld van je startfoto",
+                        modifier = preview, contentScale = ContentScale.Fit)
+                    result == null -> Box(preview, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    else -> Text("Het voorbeeld kon niet worden geopend. Sluit dit venster en probeer opnieuw.")
+                }
+                if (bitmap != null) TextButton(onClick = save, enabled = !busy) { Text("Bewaar foto") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = use, enabled = bitmap != null && !busy) { Text("Gebruik deze foto") }
+        },
+        dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("Sluiten") } },
+    )
+}
+
+@Composable
 private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (String) -> Unit) {
     var prompt by rememberSaveable(edit) { mutableStateOf("") }
     AlertDialog(
@@ -454,7 +481,8 @@ private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (
                 Text(if (edit) "Beschrijf wat je wilt veranderen. We sturen je geselecteerde foto naar OpenAI."
                     else "Beschrijf je personage, outfit en omgeving. OpenAI maakt er een startfoto van.")
                 OutlinedTextField(value = prompt, onValueChange = { if (it.length <= 400) prompt = it },
-                    label = { Text("Beschrijving") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 5)
+                    label = { Text("Beschrijving") }, modifier = Modifier.fillMaxWidth().testTag("rig-start-photo-description"),
+                    minLines = 2, maxLines = 5)
             }
         },
         confirmButton = {
