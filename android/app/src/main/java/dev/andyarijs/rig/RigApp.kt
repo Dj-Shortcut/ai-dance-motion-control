@@ -157,7 +157,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                 }
             }
         }) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+            val screenScroll = key(s.step, s.showHistory, s.showCredits) { rememberScrollState() }
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(screenScroll).padding(horizontal = 20.dp)) {
                 if (s.error != null) Card(colors = CardDefaults.cardColors(containerColor = Color(0xff3c2727)), modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                     Column(Modifier.padding(16.dp)) { Text(s.error!!, color = Ink); TextButton(onClick = model::clearError) { Text("Sluiten") } }
                 }

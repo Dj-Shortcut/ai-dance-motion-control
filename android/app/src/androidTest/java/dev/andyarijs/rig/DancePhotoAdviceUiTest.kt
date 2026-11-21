@@ -2,6 +2,10 @@ package dev.andyarijs.rig
 
 import android.graphics.Bitmap
 import android.net.Uri
+import android.view.KeyEvent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -9,6 +13,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.andyarijs.rig.media.NormalizedCrop
@@ -37,12 +43,16 @@ class DancePhotoAdviceUiTest {
             instrumentation.context.assets.open("native-media-fixture.mp4").use { input ->
                 motion.outputStream().use { output -> input.copyTo(output) }
             }
-            withAnonymousSelection(photo) { fixture ->
+            withAnonymousSelection(photo, maxHeight = 580.dp) { fixture ->
                 awaitVisibleAdvice("Geen duidelijke lichaamshouding herkend")
                 fixture.onMain { fixture.model.select(Uri.fromFile(motion), "motion") }
                 fixture.awaitState { it.motion != null && !it.busy }
+                compose.onNodeWithText("Meer opties  +").performScrollTo()
                 compose.onNodeWithText("Verder").assertIsEnabled().performClick()
                 compose.onNodeWithText("Waar gebeurt het?").assertIsDisplayed()
+                compose.onNodeWithText("In de video").performScrollTo().performClick()
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                compose.onNodeWithText("Kies je beeld.").assertIsDisplayed()
             }
         } finally {
             photo.delete()
@@ -63,10 +73,12 @@ class DancePhotoAdviceUiTest {
         }
     }
 
-    private fun withAnonymousSelection(photo: File, check: (NativeViewModelFixture) -> Unit) {
+    private fun withAnonymousSelection(photo: File, maxHeight: Dp = Dp.Infinity, check: (NativeViewModelFixture) -> Unit) {
         NativeViewModelFixture(signedIn = false) { error("Unexpected server request during photo selection") }.use { fixture ->
             compose.setContent {
-                RigApp(fixture.model, onLogin = {}, onConfirm = {}, onRegister = {}, onPurchase = {})
+                Box(Modifier.heightIn(max = maxHeight)) {
+                    RigApp(fixture.model, onLogin = {}, onConfirm = {}, onRegister = {}, onPurchase = {})
+                }
             }
             compose.onNodeWithText("Maak een video").performClick()
             fixture.onMain { fixture.model.select(Uri.fromFile(photo), "subject") }
