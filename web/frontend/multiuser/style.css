@@ -216,6 +216,7 @@ body.guided-flow{--mint:#8fe3b8;--muted:#a9b3b0;background:#101416;color:#eef2f0
   gap: 4px 16px;
 }
 .rig-start-photo-actions { padding: 0 12px; }
+.flow-person-meta .rig-account-action,
 .rig-start-photo-actions .rig-account-action,
 .rig-start-photo-footer .rig-account-action { color: #8fe3b8; }
 .guided-flow .rig-start-photo-dialog { width: min(440px, calc(100vw - 40px)); }

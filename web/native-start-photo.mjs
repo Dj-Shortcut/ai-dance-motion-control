@@ -1,3 +1,5 @@
+import {hasRedeemedProductionInvitation} from './production-invitation.mjs';
+
 const MAX_INPUT = 3 * 1024 * 1024;
 export const START_PHOTO_BODY_MAX = MAX_INPUT + 8192;
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -9,12 +11,18 @@ class SponsorshipExhausted extends Error {}
 const headers = {'cache-control':'private, no-store','x-content-type-options':'nosniff'};
 const json = (value,status=200) => Response.json(value,{status,headers});
 
-function campaign(env,userId,now) {
+async function campaign(env,db,userId,now) {
  const expires = Date.parse(env.RIG_START_PHOTO_EXPIRES_AT);
+ // Maximum all-in euro cost of either fixed request below, valid until campaign expiry.
+ const bound=env.RIG_START_PHOTO_MAX_COST_EUR_CENTS;
  if (!/^sk-[A-Za-z0-9_-]+$/.test(env.RIG_OPENAI_IMAGES_KEY ?? '') ||
-     !Number.isFinite(expires) || expires <= now ||
-     !(env.RIG_START_PHOTO_TESTERS ?? '').split(',').map(id=>id.trim()).some(id=>USER.test(id) && id===userId)) return null;
- return expires;
+     typeof bound!=='string' || !/^[1-9]\d{0,4}$/.test(bound) || Number(bound)>16700 ||
+     !Number.isFinite(expires) || expires <= now || !USER.test(userId)) return null;
+ const listed=(env.RIG_START_PHOTO_TESTERS ?? '').split(',').some(id=>id.trim()===userId);
+ if (listed) {
+  if (await db.prepare('SELECT 1 FROM rig_frozen_accounts WHERE user_id=?').bind(userId).first()) return null;
+ } else if (env.RIG_PRODUCTION_PROMOTIONAL_INVITATION_ENABLED!=='yes' || !await hasRedeemedProductionInvitation(db,userId)) return null;
+ return {expires,reservationCents:Number(bound)};
 }
 
 async function bounded(body,limit,signal) {
@@ -73,10 +81,15 @@ async function readPhotoRequest(req) {
  } catch {return null;}
 }
 
-async function reserve(db,userId,requestId,now) {
- const claim=await db.prepare('INSERT OR IGNORE INTO rig_start_photo_attempts(request_id,user_id,created_at) VALUES (?,?,?)')
-  .bind(requestId,userId,now).run();
- return claim.meta?.changes===1;
+async function reserve(db,userId,requestId,now,reservationCents) {
+ const claim=await db.prepare(`INSERT INTO rig_start_photo_attempts(request_id,user_id,created_at,reserved_eur_cents)
+  SELECT ?,?,?,? FROM rig_start_photo_budget WHERE available_eur_cents>=?
+  ON CONFLICT(request_id) DO NOTHING`)
+  .bind(requestId,userId,now,reservationCents,reservationCents).run();
+ if (claim.meta?.changes===1) return 'reserved';
+ const previous=await db.prepare('SELECT 1 AS found FROM rig_start_photo_attempts WHERE request_id=?')
+  .bind(requestId).first();
+ return previous?.found===1?'duplicate':'unavailable';
 }
 
 async function generate(input,env,session,network) {
@@ -114,19 +127,24 @@ async function generate(input,env,session,network) {
 
 export async function handleNativeStartPhoto(req,env,{db,session,network,now=Date.now()}) {
  const {userId}=session;
- const expiresAt=campaign(env,userId,now);
+ const offer=await campaign(env,db,userId,now);
  if (req.method==='GET') {
-  const available=Boolean(expiresAt);
+  let available=false;
+  if (offer) {
+   const budget=await db.prepare('SELECT available_eur_cents FROM rig_start_photo_budget').first();
+   available=Number.isSafeInteger(budget?.available_eur_cents) && budget.available_eur_cents>=offer.reservationCents;
+  }
   // Android 0.2.6 needs a value in [0,3] to show the photo controls.
   return json({enabled:available,available,remaining:available?3:0});
  }
- if (!expiresAt) return json({error:'De gesponsorde startfoto’s zijn niet beschikbaar.'},403);
+ if (!offer) return json({error:'De gesponsorde startfoto’s zijn niet beschikbaar.'},403);
  const input=await readPhotoRequest(req);
  if (!input) return json({error:'Controleer je beschrijving en foto. Kies een foto van maximaal 3 MB.'},400);
  const claimTime=Date.now();
- if (claimTime>=expiresAt) return json({error:'De gesponsorde periode is afgelopen.'},403);
- if (!await reserve(db,userId,input.requestId,claimTime))
-  return json({error:'Deze aanvraag is al ingediend.'},409);
+ if (claimTime>=offer.expires) return json({error:'De gesponsorde periode is afgelopen.'},403);
+ const claim=await reserve(db,userId,input.requestId,claimTime,offer.reservationCents);
+ if (claim==='duplicate') return json({error:'Deze aanvraag is al ingediend.'},409);
+ if (claim!=='reserved') return json({error:'Het gezamenlijke fotobudget is op.'},429);
  try {
   const jpeg=await generate(input,env,session,network);
   return new Response(jpeg,{headers:{...headers,'content-type':'image/jpeg','content-length':String(jpeg.length)}});

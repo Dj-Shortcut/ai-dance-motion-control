@@ -25,7 +25,7 @@ export function mountStartPhoto({browser,document,binding,selection}){
   title.textContent=mode==='create'?'Maak een typetje':'Bewerk mijn foto';
   hint.textContent=mode==='create'
    ?'Beschrijf je personage, outfit en omgeving. OpenAI maakt er een startfoto van.'
-   :'Beschrijf wat je wilt veranderen. We sturen je geselecteerde foto naar OpenAI.';
+   :'Bijsnijden gebeurt op je toestel. Voor een AI-bewerking sturen we je geselecteerde foto naar OpenAI.';
   dialog.showModal();description.focus();
  }
  function closeDialog(){
@@ -42,6 +42,11 @@ export function mountStartPhoto({browser,document,binding,selection}){
   event.preventDefault();
   const prompt=description.value.trim();
   if(pending||!active()||!prompt||prompt.length>400)return;
+  if(/^(?:(?:mijn |de )?foto\s+)?(?:bijsnijden|uitsnijden|crop)[.!]?$/i.test(prompt)){
+   const crop=el('personCropButton');
+   if(crop.hidden){message('Kies eerst een foto op scherm 1 om die bij te snijden.');return;}
+   closeDialog();crop.click();return;
+  }
   pending=true;make.disabled=close.disabled=description.disabled=true;
   message('Startfoto maken…');
   let workingUrl=null;

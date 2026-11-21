@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {enableVideoIfAvailable} from './frontend/multiuser/video-capability.mjs';
 import {prepareBoundUi} from './frontend/multiuser/ui-auth.mjs';
+import {mountStartPhoto} from './frontend/multiuser/start-photo.mjs';
 const html=readFileSync(new URL('./frontend/multiuser/index.html',import.meta.url),'utf8');
 const app=readFileSync(new URL('./frontend/multiuser/app.js',import.meta.url),'utf8');
 const generation=readFileSync(new URL('./frontend/multiuser/generation-ui.js',import.meta.url),'utf8');
@@ -45,6 +46,31 @@ function fixture({qualities=['standard','pro','edit-standard'],withGeneration=fa
  const prepare=()=>{el('prepare').click();if(el('briefDialog').open)el('confirmBrief').click();};
  return {dom,w,d,el,prepared,imagePreparations,calls,storage,removed,change,prompt,file,load,prepare,wrapRequest,setRefundConfirmed:value=>{refundConfirmed=value;}};
 }
+test('step one opens the local photo cropper directly and for a crop-only prompt',async()=>{
+ const f=fixture(),requests=[];
+ const unmount=mountStartPhoto({browser:f.w,document:f.d,selection:f.w.rigStartPhotoSelection,
+  binding:{isActive:()=>true,request:async(_path,options)=>{requests.push(options.method??'GET');return Response.json({available:true});}}});
+ function submitCrop(button){
+  f.el(button).click();f.el('startPhotoDescription').value=' Bijsnijden ';
+  f.el('startPhotoForm').dispatchEvent(new f.w.Event('submit',{cancelable:true}));
+ }
+ try{
+  await waitFor(()=>!f.el('startPhotoActions').hidden);
+  const crop=f.el('personCropButton');
+  assert.equal(crop.closest('[data-flow-screen]').dataset.flowScreen,'files');
+  assert.equal(crop.closest('details'),null);assert.equal(crop.hidden,true);
+  submitCrop('startPhotoCreate');assert.match(f.el('startPhotoStatus').textContent,/Kies eerst een foto/);
+  f.el('startPhotoClose').click();
+  f.file('personInput','start.jpg','image/jpeg');assert.equal(crop.hidden,false);
+  crop.click();assert.equal(f.el('cropDialog').open,true);f.el('cropDialog').close();
+  submitCrop('startPhotoEdit');
+  assert.equal(f.el('startPhotoDialog').open,false);assert.equal(f.el('cropDialog').open,true);
+  f.el('cropX').value='10';f.el('cropW').value='80';f.el('applyCrop').click();
+  assert.equal(f.el('personFrame').hidden,false);assert.equal(f.el('cropDialog').open,false);
+  await f.w.rigStartPhotoSelection.prepare();assert.equal(f.imagePreparations.at(-1).crop.w,80);
+  assert.deepEqual(requests,['GET']);
+ }finally{unmount();f.dom.window.close();}
+});
 test('editing appears only when the server offers edit-standard and adds no footer controls',()=>{
  const unavailable=fixture({qualities:['standard','pro']});
  try{assert.equal(unavailable.el('videoModeTabs').hidden,true);unavailable.el('editModeButton').click();assert.equal(unavailable.w.rigVideoMode(),'motion');}finally{unavailable.dom.window.close();}

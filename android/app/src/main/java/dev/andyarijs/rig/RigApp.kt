@@ -3,8 +3,6 @@ package dev.andyarijs.rig
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.ImageDecoder
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,13 +44,11 @@ import dev.andyarijs.rig.data.ACCOUNT_DELETION_REQUEST
 import dev.andyarijs.rig.data.REPORT_DETAILS_LIMIT
 import dev.andyarijs.rig.data.RigContentReportReason
 import dev.andyarijs.rig.media.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Currency
 import androidx.compose.ui.platform.testTag
-import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.text.NumberFormat
 
@@ -78,7 +74,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     val billing by model.billing.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var options by remember { mutableStateOf(false) }
-    var crop by remember { mutableStateOf<String?>(null) }
+    var crop by remember(s.session?.userId, s.step) { mutableStateOf<String?>(null) }
     var startPhotoEdit by remember(s.session?.userId) { mutableStateOf<Boolean?>(null) }
     var account by remember(s.session?.userId) { mutableStateOf<AccountPage?>(null) }
     val openPrivacy: () -> Unit = {
@@ -97,7 +93,10 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     }
     MaterialTheme(colorScheme = scheme, typography = Typography()) {
         startPhotoEdit?.let { edit ->
-            StartPhotoPromptDialog(edit, { startPhotoEdit = null }) { prompt ->
+            StartPhotoPromptDialog(edit, { startPhotoEdit = null }, openCrop = {
+                startPhotoEdit = null
+                crop = "subject"
+            }) { prompt ->
                 startPhotoEdit = null
                 model.generateStartPhoto(prompt, edit)
             }
@@ -189,7 +188,9 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                     1 -> {
                         Progress(1)
                         PageTitle("Kies je beeld.", "Een foto of het beste moment uit je eigen video.", { model.step(0) })
-                        MediaCard("Jouw beeld", s.subject, s.frameMs, { model.frame(it) }, { ownPicker.launch(arrayOf("image/*", "video/*")) })
+                        MediaCard("Jouw beeld", s.subject, s.frameMs, model::frame,
+                            { ownPicker.launch(arrayOf("image/*", "video/*")) }, s.subjectCrop,
+                            if (s.subject?.isVideo == false && !s.busy) ({ crop = "subject" }) else null)
                         if (s.subject != null) DancePhotoAdvice(dancePhotoCheck)
                         if (s.startPhotoAvailable) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -222,7 +223,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         val config = s.config
                         val editing = s.quality?.takeIf { s.inVideo && s.placementAvailable } ?: config?.videoEditQuality
                         ChoiceCard("Op je foto", "Je neemt de beweging over. De omgeving van je foto blijft het uitgangspunt.",
-                            !s.inVideo, { model.quality("pro") }, s.subject, enabled = config == null || (config.enabled && "pro" in config.qualities))
+                            !s.inVideo, { model.quality("pro") }, s.subject, enabled = config == null || (config.enabled && "pro" in config.qualities),
+                            frameMs = s.frameMs, crop = s.subjectCrop)
                         val description = when {
                             config == null -> "Gebruik de scène uit je bewegingsvideo. Na het aanmelden zie je welke bewerking beschikbaar is."
                             !config.enabled -> "Video maken is tijdelijk niet beschikbaar."
@@ -231,7 +233,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                             else -> "Bewerk de bestaande scène met jouw referentiefoto. Beschrijf precies wie of wat wordt vervangen."
                         }
                         ChoiceCard("In de video", description, s.inVideo, { model.quality(editing) }, s.motion,
-                            enabled = config == null || editing != null)
+                            enabled = config == null || editing != null, frameMs = s.startMs, crop = s.motionCrop)
                         if (s.inVideo && !s.placementAvailable && editing != null) {
                             Text("De eerdere bewerking is niet meer beschikbaar. Tik op ‘In de video’ om de beschikbare bewerking te kiezen.", color = Muted, fontSize = 14.sp)
                         }
@@ -498,10 +500,11 @@ private fun AccountOverviewDialog(
     Text(title, color = Ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 34.sp)
     Text(subtitle, color = Muted, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp, bottom = 24.dp))
 }
-@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean?, onClick: () -> Unit, source: NativeMediaSource? = null, enabled: Boolean = true) {
+@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean?, onClick: () -> Unit, source: NativeMediaSource? = null, enabled: Boolean = true,
+    frameMs: Long = 0, crop: NormalizedCrop = NormalizedCrop.FULL) {
     Surface(onClick = onClick, enabled = enabled, color = if(selected == true) Color(0xff1d2c26) else Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, if(selected == true) Accent else Border), modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).semantics { if (selected != null) this.selected = selected }) {
         Column(Modifier.padding(18.dp)) {
-            source?.let { MediaThumbnail(it, 0, Modifier.fillMaxWidth().height(125.dp).padding(bottom = 12.dp)) }
+            source?.let { MediaThumbnail(it, frameMs, Modifier.fillMaxWidth().height(125.dp).padding(bottom = 12.dp), crop) }
             Row(verticalAlignment = Alignment.CenterVertically) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Ink, modifier = Modifier.weight(1f)); if(selected == true) Text("✓", color = Accent) }
             Text(subtitle, color = Muted, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp))
         }
@@ -511,12 +514,7 @@ private fun AccountOverviewDialog(
 internal fun StartPhotoReviewDialog(
     photo: NativeMediaSource, busy: Boolean, close: () -> Unit, use: () -> Unit, save: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val result by produceState<Result<Bitmap>?>(null, photo.uri) {
-        value = try { Result.success(RigMediaPreparer(context).previewBitmap(photo)) }
-        catch (error: kotlinx.coroutines.CancellationException) { throw error }
-        catch (error: Exception) { Result.failure(error) }
-    }
+    val result = mediaPreview(photo)
     val bitmap = result?.getOrNull()
     AlertDialog(
         onDismissRequest = close,
@@ -541,14 +539,16 @@ internal fun StartPhotoReviewDialog(
 }
 
 @Composable
-private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (String) -> Unit) {
+private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, openCrop: () -> Unit, submit: (String) -> Unit) {
     var prompt by rememberSaveable(edit) { mutableStateOf("") }
+    val localCrop = edit && prompt.trim().trimEnd('.', '!').trimEnd().lowercase() in setOf("bijsnijden", "uitsnijden", "crop")
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text(if (edit) "Bewerk mijn foto" else "Maak een typetje") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (edit) "Beschrijf wat je wilt veranderen. We sturen je geselecteerde foto naar OpenAI."
+                Text(if (localCrop) "Kies zelf de uitsnede op je telefoon."
+                    else if (edit) "Beschrijf wat je wilt veranderen. We sturen je geselecteerde foto naar OpenAI."
                     else "Beschrijf je personage, outfit en omgeving. OpenAI maakt er een startfoto van.")
                 OutlinedTextField(value = prompt, onValueChange = { if (it.length <= 400) prompt = it },
                     label = { Text("Beschrijving") }, modifier = Modifier.fillMaxWidth().testTag("rig-start-photo-description"),
@@ -556,7 +556,9 @@ private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (
             }
         },
         confirmButton = {
-            TextButton(onClick = { submit(prompt.trim()) }, enabled = prompt.isNotBlank()) { Text("Maak foto") }
+            TextButton(onClick = { if (localCrop) openCrop() else submit(prompt.trim()) }, enabled = prompt.isNotBlank()) {
+                Text(if (localCrop) "Kies de uitsnede" else "Maak foto")
+            }
         },
         dismissButton = { TextButton(onClick = dismiss) { Text("Annuleer") } },
     )
@@ -575,27 +577,42 @@ private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (
     }
 }
 
-@Composable private fun MediaCard(title: String, source: NativeMediaSource?, position: Long, onPosition: (Long) -> Unit, choose: () -> Unit) {
+@Composable private fun MediaCard(title: String, source: NativeMediaSource?, position: Long, onPosition: (Long) -> Unit, choose: () -> Unit,
+    crop: NormalizedCrop = NormalizedCrop.FULL, onCrop: (() -> Unit)? = null) {
     Surface(shape = RoundedCornerShape(18.dp), color = Surface, border = BorderStroke(1.dp,Border), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) { Text(title, color = Ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); TextButton(onClick = choose) { Text(if(source==null) "Kiezen" else "Wijzigen") } }
             if(source==null) Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) { Text("+", fontSize = 32.sp, color = Accent) }
             else if(source.isVideo) NativeVideo(source.uri, position, onPosition, Modifier.fillMaxWidth().height(230.dp))
-            else MediaThumbnail(source,0,Modifier.fillMaxWidth().height(230.dp))
+            else MediaThumbnail(source, 0, Modifier.fillMaxWidth().height(230.dp), crop)
+            if (onCrop != null) TextButton(onClick = onCrop) { Text("Foto bijsnijden") }
             source?.let { Text(it.displayName, color = Muted, fontSize = 12.sp, maxLines = 2, modifier = Modifier.padding(top=8.dp)) }
         }
     }
 }
-@Composable internal fun MediaThumbnail(source: NativeMediaSource, frameMs: Long, modifier: Modifier = Modifier) {
+@Composable
+private fun mediaPreview(source: NativeMediaSource, frameMs: Long = 0, crop: NormalizedCrop = NormalizedCrop.FULL,
+    maxSide: Int = 1280): Result<Bitmap>? {
     val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(null, source.uri, frameMs) {
-        value = withContext(Dispatchers.IO) { runCatching {
-            if (source.isVideo) MediaMetadataRetriever().let { retriever -> try { retriever.setDataSource(context,source.uri); retriever.getScaledFrameAtTime(frameMs*1000,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,640,640) } finally { retriever.release() } }
-            else ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver,source.uri)) { decoder,info,_ -> val scale = 640f / maxOf(info.size.width,info.size.height); if(scale<1) decoder.setTargetSize((info.size.width*scale).toInt().coerceAtLeast(1),(info.size.height*scale).toInt().coerceAtLeast(1)); decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE }
-        }.getOrNull() }
+    return key(source.uri, frameMs, crop, maxSide) {
+        produceState<Result<Bitmap>?>(null) {
+            value = try { Result.success(RigMediaPreparer(context).previewBitmap(source, frameMs, crop, maxSide)) }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (error: Exception) { Result.failure(error) }
+        }.value
     }
-    if(bitmap!=null) Image(bitmap!!.asImageBitmap(),contentDescription="Gekozen beeld",modifier=modifier,contentScale=ContentScale.Fit)
-    else Box(modifier.background(Background),contentAlignment=Alignment.Center) { Text("Beeld laden…",color=Muted,fontSize=12.sp) }
+}
+
+@Composable internal fun MediaThumbnail(source: NativeMediaSource, frameMs: Long, modifier: Modifier = Modifier,
+    crop: NormalizedCrop = NormalizedCrop.FULL) {
+    val preview = mediaPreview(source, frameMs, crop, maxSide = 640)
+    val bitmap = preview?.getOrNull()
+    if (bitmap != null) Image(bitmap.asImageBitmap(),
+        contentDescription = if (crop == NormalizedCrop.FULL) "Gekozen beeld" else "Gekozen uitsnede",
+        modifier = modifier, contentScale = ContentScale.Fit)
+    else Box(modifier.background(Background), contentAlignment = Alignment.Center) {
+        Text(if (preview == null) "Beeld laden…" else "Dit voorbeeld kon niet worden geopend.", color = Muted, fontSize = 12.sp)
+    }
 }
 @Composable private fun ReferenceRow(title: String, source: NativeMediaSource, remove: () -> Unit) {
     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) { MediaThumbnail(source,0,Modifier.size(54.dp)); Text(title,modifier=Modifier.weight(1f).padding(12.dp),color=Ink); TextButton(onClick=remove) { Text("Verwijderen") } }
