@@ -44,9 +44,10 @@ goedgekeurd; er is nog geen telefoon verwijderd of vervangen.
 ## Aanmelden en beveiliging
 
 De externe ChatGPT/Sites-aanmelding en de openbare privacyinformatie openen een
-browser. Na de aanmelding komt de gebruiker terug in de native app. Een eenmalige
-code, PKCE en een controle van de
-bewaarde state verbinden de aanmelding met precies dat toestelverzoek. De app
+browser. Na de aanmelding komt de gebruiker via een geverifieerde HTTPS App Link
+terug in de native app. De vaste host is met het exacte pakket en
+ondertekeningscertificaat verbonden. Een eenmalige code, PKCE en een controle van
+de bewaarde state verbinden de aanmelding met precies dat toestelverzoek. De app
 verzamelt geen ChatGPT-wachtwoorden en leest geen browsercookies.
 
 De beperkte, intrekbare RIG-sessie wordt versleuteld met Android Keystore.
@@ -57,7 +58,8 @@ expliciete bevestiging en echte passkeycontrole blijven servercontroles.
 
 Native passkeys vereisen de exacte openbare APK-certificaatvingerafdruk in
 `RIG_NATIVE_ANDROID_SIGNING_SHA256`, zowel bij de private server als bij Sites.
-Sites publiceert uitsluitend voor dat pakket/certificaat de relatie
+Sites publiceert uitsluitend voor dat pakket/certificaat de relaties
+`delegate_permission/common.handle_all_urls` en
 `delegate_permission/common.get_login_creds` in `/.well-known/assetlinks.json`.
 Gebruik voor Google Play het **Play app signing**-certificaat, niet de uploadkey.
 Een expliciete sideload-test gebruikt alleen zijn eigen exacte testcertificaat;

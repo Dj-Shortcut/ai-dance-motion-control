@@ -3,6 +3,7 @@ package dev.andyarijs.rig
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.andyarijs.rig.data.PendingGeneration
+import dev.andyarijs.rig.data.RigLoginManager
 import dev.andyarijs.rig.data.RigStorageUnavailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -35,7 +36,7 @@ class NativeAccountStateTest {
             f.onMain { f.model.beginLogin() }
             assertNull(f.store.read("draft-login"))
             val loginState = f.store.read("login")!!.getString("state")
-            val callback = Uri.parse("dev.andyarijs.rig://auth/callback?code=${"c".repeat(43)}&state=$loginState")
+            val callback = Uri.parse("${RigLoginManager.CALLBACK}?code=${"c".repeat(43)}&state=$loginState")
             runBlocking(Dispatchers.Main) { f.model.completeLogin(callback) }
             assertEquals(nextUser, f.model.state.value.session?.userId)
             assertEquals("Tweede account", f.model.state.value.prompt)

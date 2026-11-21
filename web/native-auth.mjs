@@ -4,7 +4,7 @@
 import {sitesDigest} from './sites-bridge-protocol.mjs';
 export const NATIVE_CODE_TTL=300000;
 export const NATIVE_SESSION_TTL=30*24*60*60*1000;
-export const NATIVE_CALLBACK='dev.andyarijs.rig://auth/callback';
+export const NATIVE_CALLBACK='https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/native/callback';
 const SITE='appgprj_6aeec13b50448191b88da670dac8aa98';
 const USER=/^u-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH=/^[a-f0-9]{64}$/;

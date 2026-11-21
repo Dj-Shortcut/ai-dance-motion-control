@@ -29,10 +29,11 @@ Android packages must be signed. For a new Play app, use an AAB and Play App Sig
 
 Version 0.2.0 replaces the browser wrapper with Kotlin/Jetpack Compose screens.
 Only external sign-in uses Custom Tabs, with a single-use PKCE code returned to
-`dev.andyarijs.rig://auth/callback`. The native API reuses the existing private
-RIG price, funding, passkey and generation gates; credentials never reach a
-WebView. The active build no longer contains browser payment services.
-The exact native signing certificate must be associated using
+the certificate-verified HTTPS `/native/callback` App Link on the fixed RIG Sites
+host. The native API reuses the existing private RIG price, funding, passkey and
+generation gates; credentials never reach a WebView. The active build no longer
+contains browser payment services. The exact native signing certificate must be
+associated using `delegate_permission/common.handle_all_urls` and
 `delegate_permission/common.get_login_creds`; web passkey origins remain separate.
 The prior TWA evidence and browser/Digital Goods checks below describe the old
 wrapper, not proof that the new native workflow has been accepted on a phone.
@@ -43,7 +44,7 @@ still apply. See [the native client contract](../android/README.md).
 
 Prefer browser-backed authentication over collecting ChatGPT credentials in an app-owned form. Custom Tabs share the selected browser's cookie state; a Trusted Web Activity (TWA) is browser-rendered and additionally verifies common ownership of the app and website. The Android host does not gain access to browser cookies. This architecture does **not** establish that RIG's real login/return flow has been tested. [Custom Tabs](https://developer.chrome.com/docs/android/custom-tabs), [TWA overview](https://developer.chrome.com/docs/android/trusted-web-activity).
 
-If using TWA/App Links:
+For the native callback App Link (and any TWA use):
 
 - [ ] Freeze the final package ID and identify each intended distribution certificate.
 - [ ] Publish the exact package ID and **Play app signing certificate** fingerprint at `https://<RIG-host>/.well-known/assetlinks.json`. A local upload-key fingerprint alone is insufficient for Play installs. Keep debug associations out of the production association unless explicitly needed and reviewed.
@@ -122,3 +123,19 @@ De Android-fotostap kan een personage maken op basis van een beschrijving of de 
 Activeer de proef pas na migratie `0021_start_photos.sql`, publicatie van de aangepaste relay en privéworker, en installatie van de Android-build. Stel op de privéworker `RIG_OPENAI_IMAGES_KEY` in als geheim van het bedoelde OpenAI-project. Gebruik daarnaast `RIG_START_PHOTO_TESTERS` (kommagescheiden RIG-gebruikers-ID's), `RIG_START_PHOTO_EXPIRES_AT` (ISO 8601 met tijdzone) en `RIG_START_PHOTO_MAX_ATTEMPTS` (maximaal aantal aanvragen voor de hele proef). Zonder geldige configuratie biedt de app de proef niet aan.
 
 De server reserveert vóór verzending één beurt. Er zijn maximaal drie aanvragen per tester, gedeeld door beide fotokeuzes, en een onafhankelijk totaalplafond. Een onzekere aanvraag wordt niet opnieuw verstuurd. De reserveringen blijven meetellen bij een wijziging van de einddatum of testerslijst. De server bewaart geen beschrijvingen of foto’s voor deze functie. Het previewbestand staat tijdelijk op het toestel, en ‘Bewaar foto’ schrijft het naar de locatie van de gebruiker.
+
+## Cutover to verified Android sign-in
+
+Treat the Sites deployment and Android update as one release. Publish the
+certificate association first, then verify the new signed build in a test rollout.
+Make the update available to all installed testers through their existing
+distribution channel before switching the production sign-in endpoint. Record
+the installed version and a successful sign-in on the new build before widening
+the rollout.
+
+The new app sends the `app-link-v1` flow marker. Once Sites switches, older builds
+and previously opened consent forms without that marker receive update instructions
+before Sites issues a code. Existing app sessions do not use the callback until
+the user needs to sign in again. If Android opens the HTTPS callback in the
+browser, the page explains how to enable supported links and restart sign-in
+from RIG. The old custom scheme is retired at cutover.

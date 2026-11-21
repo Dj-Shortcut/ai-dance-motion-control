@@ -5,10 +5,11 @@ import {fileURLToPath} from 'node:url';
 
 // Use the public APP SIGNING certificate from Play Console, never a private key
 // or an upload key. For an explicitly scoped sideload test use its exact signing
-// certificate. This tool writes a local file, not a Site.
+// certificate. The same binding protects HTTPS callbacks and native passkeys.
+// This tool writes a local file, not a Site.
 export function assetLinks(fingerprint){
  if(typeof fingerprint!=='string'||fingerprint.length!==95||!/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(fingerprint))throw Error('Use the complete SHA-256 app-signing certificate fingerprint from Play Console.');
- return [{relation:['delegate_permission/common.get_login_creds'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[fingerprint.toUpperCase()]}}];
+ return [{relation:['delegate_permission/common.handle_all_urls','delegate_permission/common.get_login_creds'],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[fingerprint.toUpperCase()]}}];
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const {values}=parseArgs({options:{fingerprint:{type:'string'},output:{type:'string'}},allowPositionals:false});

@@ -33,11 +33,12 @@ function androidPublicDocument(path,env){
  if(path==='/android/manifest.webmanifest')return {type:'application/manifest+json',body:{id:'/android/',name:'RIG',short_name:'RIG',lang:'nl',start_url:'/android/',scope:'/android/',display:'standalone',background_color:'#111416',theme_color:'#111416',icons:[{src:'/favicon.svg',sizes:'any',type:'image/svg+xml',purpose:'any'}]}};
  if(path==='/.well-known/assetlinks.json'){
   // Only operator-pinned public signing certificates can associate this exact
-  // package. Native passkeys need their own relation; browser links stay intact.
+  // package. Native login and passkeys share the native certificate binding.
   const valid=value=>typeof value==='string'&&value.length===95&&/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(value);
   const entries=[];
-  const add=(fingerprint,relation)=>{if(!valid(fingerprint))return;const cert=fingerprint.toUpperCase();let entry=entries.find(e=>e.target.sha256_cert_fingerprints[0]===cert);if(!entry){entry={relation:[],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[cert]}};entries.push(entry);}entry.relation.push(relation);};
+  const add=(fingerprint,relation)=>{if(!valid(fingerprint))return;const cert=fingerprint.toUpperCase();let entry=entries.find(e=>e.target.sha256_cert_fingerprints[0]===cert);if(!entry){entry={relation:[],target:{namespace:'android_app',package_name:'dev.andyarijs.rig',sha256_cert_fingerprints:[cert]}};entries.push(entry);}if(!entry.relation.includes(relation))entry.relation.push(relation);};
   add(env.RIG_ANDROID_APP_SIGNING_SHA256,'delegate_permission/common.handle_all_urls');
+  add(env.RIG_NATIVE_ANDROID_SIGNING_SHA256,'delegate_permission/common.handle_all_urls');
   add(env.RIG_NATIVE_ANDROID_SIGNING_SHA256,'delegate_permission/common.get_login_creds');
   return {type:'application/json',body:entries};
  }

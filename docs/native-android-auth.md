@@ -7,9 +7,11 @@ system browser. No website UI or WebView is embedded in the app.
 
 The app opens the existing Sites host at `/native/signin?challenge=<S256>&state=<random>`.
 The platform authenticates its existing ChatGPT account. After explicit consent,
-RIG returns a one-use, five-minute authorization code through the fixed
-`dev.andyarijs.rig://auth/callback?code=...&state=...` callback. PKCE and the app's
-persisted state protect the callback. A client-selected redirect is never used.
+RIG returns a one-use, five-minute authorization code through the fixed verified
+`https://rig-motion-studio.shortcutcomputerguy.chatgpt.site/native/callback?code=...&state=...`
+Android App Link. The manifest requires HTTPS domain verification, and Sites binds
+that host to the exact APK package and signing certificate. PKCE and the app's
+persisted state protect the transaction. A client-selected redirect is never used.
 
 `POST https://rig-api.shortcut-computerguy.workers.dev/api/native/auth/exchange`
 accepts exactly `{code,codeVerifier}` and returns
@@ -58,9 +60,10 @@ origin, including when a signing certificate is configured. RP ID stays the
 existing RIG Sites hostname. UV is always required. Native `crossOrigin` may be
 absent (the Android default) or false; true and `topOrigin` remain rejected.
 
-Sites DAL must list `delegate_permission/common.get_login_creds` for the exact
-package and verified installed signing certificate. The public certificate is
-not a secret and never a client-supplied trust override.
+Sites DAL must list both `delegate_permission/common.handle_all_urls` and
+`delegate_permission/common.get_login_creds` for the exact package and verified
+installed signing certificate. The public certificate is not a secret and never
+a client-supplied trust override.
 
 ## Current native feature gate
 
