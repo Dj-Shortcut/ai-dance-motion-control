@@ -13,6 +13,9 @@ import dev.andyarijs.rig.security.RigDeviceSecurity
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,6 +39,7 @@ data class RigScreenState(
     val step: Int = 0, val session: RigSession? = null, val config: RigVideoConfig? = null,
     val providerBalance: RigProviderBalance? = null, val providerBalanceLoading: Boolean = false,
     val subject: NativeMediaSource? = null, val motion: NativeMediaSource? = null,
+    val subjectRevision: Long = 0,
     val frameMs: Long = 0, val startMs: Long = 0, val duration: Int = 5,
     val subjectCrop: NormalizedCrop = NormalizedCrop.FULL, val motionCrop: NormalizedCrop = NormalizedCrop.FULL,
     val face: NativeMediaSource? = null, val angles: List<NativeMediaSource> = emptyList(),
@@ -69,10 +73,31 @@ data class RigScreenState(
     }
 }
 
-class RigViewModel internal constructor(app: Application, val repository: RigRepository) : AndroidViewModel(app) {
+internal data class DancePhotoSelection(
+    val source: NativeMediaSource, val frameMs: Long, val crop: NormalizedCrop,
+    val userId: String?, val revision: Long,
+)
+
+internal fun RigScreenState.dancePhotoSelection() = subject?.let {
+    DancePhotoSelection(it, if (it.isVideo) frameMs else 0, subjectCrop, session?.userId, subjectRevision)
+}
+
+private fun selectedFrame(source: NativeMediaSource?, positionMs: Long): Long =
+    if (source?.isVideo == true) positionMs.coerceIn(0L, (source.durationMs - 1).coerceAtLeast(0L)) else 0L
+
+internal data class DancePhotoCheckResult(val selection: DancePhotoSelection, val assessment: DancePhotoAssessment?)
+
+internal typealias AssessDancePhoto = suspend (NativeMediaSource, Long, NormalizedCrop) -> DancePhotoAssessment
+
+class RigViewModel internal constructor(
+    app: Application, val repository: RigRepository, assessPhoto: AssessDancePhoto? = null,
+) : AndroidViewModel(app) {
     constructor(app: Application) : this(app, RigRepository(app))
     val billing = RigPlayBilling(app, repository, viewModelScope)
     private val media = RigMediaPreparer(app)
+    private val checkDancePhoto = assessPhoto ?: DancePhotoChecker(media)::check
+    private val checkedPhoto = MutableStateFlow<DancePhotoCheckResult?>(null)
+    internal val dancePhotoCheck = checkedPhoto.asStateFlow()
     private val security = RigDeviceSecurity(repository)
     private val mutable = MutableStateFlow(RigScreenState())
     val state = mutable.asStateFlow()
@@ -89,6 +114,23 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
 
     init {
         media.pruneCache()
+        viewModelScope.launch {
+            state.map { it.dancePhotoSelection() }.distinctUntilChanged().collectLatest { selection ->
+                checkedPhoto.value = null
+                if (selection == null) return@collectLatest
+                val assessment = try {
+                    checkDancePhoto(selection.source, selection.frameMs, selection.crop)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    null
+                }
+                currentCoroutineContext().ensureActive()
+                if (selection == mutable.value.dancePhotoSelection()) {
+                    checkedPhoto.value = DancePhotoCheckResult(selection, assessment)
+                }
+            }
+        }
         running = viewModelScope.launch {
             mutable.update { it.copy(busy = true, stage = "Je selectie terughalen") }
             try {
@@ -264,7 +306,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
     }
     fun keepSound(value: Boolean) = change { it.copy(keepSound = if(it.quality == "human-recast") true else value) }
     fun trial(value: Boolean) = change { it.copy(trial = value) }
-    fun frame(value: Long) = change { it.copy(frameMs = value) }
+    fun frame(value: Long) = change { it.copy(frameMs = selectedFrame(it.subject, value)) }
     fun timing(start: Long, duration: Int) = change { it.copy(startMs = start, duration = duration.coerceIn(if(it.quality == "human-recast") 6 else 3, if(it.quality == "pro") 30 else 15)) }
     fun crop(subject: Boolean, crop: NormalizedCrop) = change { if (subject) it.copy(subjectCrop = crop) else it.copy(motionCrop = crop) }
     fun removeReference(index: Int) = change { if (index < 0) it.copy(face = null, angles = emptyList()) else it.copy(angles = it.angles.filterIndexed { n, _ -> n != index }) }
@@ -279,7 +321,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         }
         if (target in setOf("face", "angle")) check(!source.isVideo) { "Kies een foto. Een beeld uit je referentievideo voeg je toe met ‘Gebruik dit beeld’." }
         mutable.update { current -> when (target) {
-            "subject" -> current.copy(subject = source, subjectCrop = NormalizedCrop.FULL, frameMs = 0, quote = null)
+            "subject" -> current.copy(subject = source, subjectRevision = current.subjectRevision + 1, subjectCrop = NormalizedCrop.FULL, frameMs = 0, quote = null)
             "motion" -> current.copy(motion = source, motionCrop = NormalizedCrop.FULL, startMs = 0, duration = min((source.durationMs / 1000).toInt(), if (current.quality == "pro") 30 else 15).coerceAtLeast(if(current.quality == "human-recast") 6 else 3), quote = null)
             "face" -> current.copy(face = source, quote = null)
             else -> { check(current.face != null) { "Voeg eerst een close-up toe." }; check(current.angles.size < 3); current.copy(angles = current.angles + source, quote = null) }
@@ -319,7 +361,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
 
     fun useStartPhoto() {
         val preview = mutable.value.startPhotoPreview ?: return
-        change { it.copy(subject = preview, subjectCrop = NormalizedCrop.FULL, frameMs = 0, startPhotoPreview = null) }
+        change { it.copy(subject = preview, subjectRevision = it.subjectRevision + 1, subjectCrop = NormalizedCrop.FULL, frameMs = 0, startPhotoPreview = null) }
     }
 
     fun saveStartPhoto(uri: Uri) = work("Startfoto bewaren") {
@@ -638,7 +680,7 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         restoredFullRequest = if (user == null) null else d.optJSONObject("fullRequest")?.let(RigQuoteRequest::fromJson)
         val hasSelection = restoredFullRequest != null || (subject != null && motion != null)
         val quality = if (d.has("quality") && d.isNull("quality")) null else d.optString("quality", "pro")
-        mutable.update { it.copy(step = if (hasSelection) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = d.optLong("frameMs"), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = quality, keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
+        mutable.update { it.copy(step = if (hasSelection) d.optInt("step",1) else 0, subject = subject, motion = motion, face = face, angles = if(face!=null) angles else emptyList(), frameMs = selectedFrame(subject, d.optLong("frameMs")), startMs = d.optLong("startMs"), duration = d.optInt("duration",5), subjectCrop = cropFrom(d.optJSONArray("subjectCrop")), motionCrop = cropFrom(d.optJSONArray("motionCrop")), prompt = d.optString("prompt"), quality = quality, keepSound = d.optBoolean("keepSound",true), trial = d.optBoolean("trial")) }
     }
     private fun cropJson(c: NormalizedCrop) = JSONArray(listOf(c.left,c.top,c.right,c.bottom))
     private fun cropFrom(a: JSONArray?) = runCatching { if(a==null) NormalizedCrop.FULL else NormalizedCrop(a.getDouble(0).toFloat(),a.getDouble(1).toFloat(),a.getDouble(2).toFloat(),a.getDouble(3).toFloat()) }.getOrDefault(NormalizedCrop.FULL)

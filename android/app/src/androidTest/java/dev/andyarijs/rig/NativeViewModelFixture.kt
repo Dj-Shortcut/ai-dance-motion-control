@@ -31,6 +31,7 @@ internal class NativeViewModelFixture(
     setupStore: (RigStore) -> Unit = {},
     beforeRead: (String) -> Unit = {},
     download: (Request) -> ByteArray? = { null },
+    private val assessPhoto: AssessDancePhoto? = null,
     respond: (Request) -> Pair<Int, JSONObject>,
 ) : Closeable {
     val user = "u-12345678-1234-4123-8123-123456789abc"
@@ -81,7 +82,7 @@ internal class NativeViewModelFixture(
     fun recreate() {
         onMain {
             if (::model.isInitialized) disposeModel()
-            model = RigViewModel(app, repository)
+            model = RigViewModel(app, repository, assessPhoto)
         }
         val expectedUser = store.session()?.userId
         awaitState { it.session?.userId == expectedUser && !it.busy }

@@ -23,6 +23,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,6 +70,8 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
     // Drawing callbacks can outlive this composition. Keep its state snapshot
     // instead of rereading the delegate after progress has been cleared.
     val s = model.state.collectAsStateWithLifecycle().value
+    val checkedPhoto by model.dancePhotoCheck.collectAsStateWithLifecycle()
+    val dancePhotoCheck = checkedPhoto?.takeIf { it.selection == s.dancePhotoSelection() }
     val billing by model.billing.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var options by remember { mutableStateOf(false) }
@@ -185,6 +189,7 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                         Progress(1)
                         PageTitle("Kies je beeld.", "Een foto of het beste moment uit je eigen video.", { model.step(0) })
                         MediaCard("Jouw beeld", s.subject, s.frameMs, { model.frame(it) }, { ownPicker.launch(arrayOf("image/*", "video/*")) })
+                        if (s.subject != null) DancePhotoAdvice(dancePhotoCheck)
                         val photoTurns = s.startPhotoRemaining
                         if (photoTurns != null) {
                             Text(if (photoTurns == 1) "1 gratis fotobeurt over" else "$photoTurns gratis fotobeurten over",
@@ -245,6 +250,9 @@ fun RigApp(model: RigViewModel, onLogin: () -> Unit, onConfirm: () -> Unit, onRe
                     3 -> {
                         Progress(3)
                         PageTitle("Maak het van jou.", "Vertel wat je in het resultaat wilt zien.", { model.step(2) })
+                        if (!s.inVideo && s.subject != null && dancePhotoCheck?.assessment != DancePhotoAssessment.FULL_BODY) {
+                            DancePhotoAdvice(dancePhotoCheck)
+                        }
                         OutlinedTextField(s.prompt, model::prompt, modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp), placeholder = { Text("Wie zie je, wat doet die en wat blijft hetzelfde?") }, shape = RoundedCornerShape(16.dp), enabled = !s.busy)
                         Text(when (s.quality) {
                             "pro" -> "Beweging · Pro"
@@ -453,6 +461,19 @@ private fun StartPhotoPromptDialog(edit: Boolean, dismiss: () -> Unit, submit: (
         },
         dismissButton = { TextButton(onClick = dismiss) { Text("Annuleer") } },
     )
+}
+
+@Composable private fun DancePhotoAdvice(result: DancePhotoCheckResult?) {
+    val message = when (result?.assessment) {
+        DancePhotoAssessment.FULL_BODY -> "Het lichaam is van hoofd tot voeten herkend. Dit beeld lijkt geschikt voor een dansvideo."
+        DancePhotoAssessment.PARTIAL_BODY -> "De houding is niet goed te zien. Kies een beeld waarop één persoon van hoofd tot voeten duidelijk zichtbaar is, met beide handen in beeld."
+        DancePhotoAssessment.NO_CLEAR_PERSON -> "Geen duidelijke lichaamshouding herkend. Kies voor dans liefst een scherp beeld waarop één persoon van hoofd tot voeten zichtbaar is."
+        null -> if (result == null) "Je apparaat controleert de houding in dit beeld…" else "De fotocheck kon dit beeld niet beoordelen. Je kunt verdergaan."
+    }
+    Column(Modifier.padding(vertical = 10.dp).testTag("rig-dance-photo-check").semantics { liveRegion = LiveRegionMode.Polite }) {
+        Text("Fotocheck voor dans", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(message, color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
+    }
 }
 
 @Composable private fun MediaCard(title: String, source: NativeMediaSource?, position: Long, onPosition: (Long) -> Unit, choose: () -> Unit) {

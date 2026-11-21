@@ -23,3 +23,18 @@ never enter the repository. Copy the real file into the test app's private
 All derivatives remain under the app's private cache. No test invokes Fal or
 creates a paid generation. Screenshots and normalized exports are local test
 evidence, not fabricated provider results.
+
+The dance photo UI test always checks an image without a person. To also exercise
+the bundled model on a full-body photo and an upper-body crop of the same photo,
+use MediaPipe's [public pose test image](https://storage.googleapis.com/mediapipe-assets/pose.jpg)
+(SHA-256 `c8a830ed683c0276d713dd5aeda28f415f10cd6291972084a40d0d8b934ed62b`).
+After installing the debug app and test APK on the emulator, run:
+
+    adb shell run-as dev.andyarijs.rig mkdir -p files
+    adb push pose.jpg /data/local/tmp/rig-pose.jpg
+    adb shell run-as dev.andyarijs.rig cp /data/local/tmp/rig-pose.jpg files/pose.jpg
+    adb shell am instrument -w -r -e class dev.andyarijs.rig.DancePhotoAdviceUiTest \
+      -e rigPosePhotoPath /data/user/0/dev.andyarijs.rig/files/pose.jpg \
+      dev.andyarijs.rig.test/androidx.test.runner.AndroidJUnitRunner
+
+The test also runs with the emulator in airplane mode.
