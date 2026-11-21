@@ -104,3 +104,24 @@ test('native wallet display is an exact authenticated GET, without widening owne
   const denied=fixture();assert.equal((await denied.fetch(path,{method,headers:{authorization:token},...(method==='POST'?{body:'{}'}:{})})).status,404);assert.equal(denied.calls.length,0);
  }
 });
+
+test('native start-photo accepts a bounded multipart body without admitting browser or relay credentials',async()=>{
+ const path='/api/native/start-photo';
+ const token='Bearer rig_native_'+'n'.repeat(43);
+ const body=new FormData();
+ body.set('mode','edit');
+ body.set('image',new Blob([new Uint8Array(9000)],{type:'image/jpeg'}),'start.jpg');
+ const multipart=new Request(origin+path,{method:'POST',body});
+ const headers={authorization:token,'content-type':multipart.headers.get('content-type'),'content-length':'9500'};
+ const fixtureWithImage=fixture({response:new Response(new Uint8Array([1,2]),{headers:{'content-type':'image/jpeg'}})});
+ const response=await fixtureWithImage.fetch(path,{method:'POST',body:'fixture',headers});
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('content-type'),'image/jpeg');
+ assert.equal(fixtureWithImage.calls[0].headers.get('authorization'),token);
+ assert.equal(fixtureWithImage.calls[0].headers.get('content-type'),headers['content-type']);
+ for(const [extra,status] of [[{origin:site},403],[{'content-length':String(4*1024*1024)},413]]) {
+  const denied=fixture();
+  assert.equal((await denied.fetch(path,{method:'POST',body:'fixture',headers:{...headers,...extra}})).status,status);
+  assert.equal(denied.calls.length,0);
+ }
+});

@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 
 /** All balances, prices and job states come from RIG. Sending and recovery are
  * separate operations: a lost response must never start another paid video. */
@@ -24,6 +25,19 @@ class RigRepository internal constructor(private val filesDirectory: File, priva
     }
 
     suspend fun videoConfig(session: NativeAuthSession = requireSession()): RigVideoConfig = RigVideoConfig.fromJson(api.get("/video-config", session))
+
+    suspend fun startPhotoAllowance(session: NativeAuthSession): Int? {
+        val value = api.get("/start-photo", session)
+        api.checkSession(session)
+        return value.optInt("remaining", -1).takeIf { value.optBoolean("enabled") && it in 0..3 }
+    }
+
+    suspend fun startPhoto(prompt: String, source: File?, session: NativeAuthSession): File {
+        val directory = File(cacheDirectory, "rig-media")
+        check(directory.mkdirs() || directory.isDirectory)
+        val requestId = UUID.randomUUID().toString()
+        return api.startPhoto(prompt, requestId, source, File(directory, "start-photo-$requestId.jpg"), session)
+    }
 
     suspend fun providerBalance(): RigProviderBalance {
         val user = requireSession().userId

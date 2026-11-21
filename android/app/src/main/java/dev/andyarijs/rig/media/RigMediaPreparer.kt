@@ -129,6 +129,23 @@ class RigMediaPreparer(context: Context) {
         if (scale == 1.0) bitmap else Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).roundToInt()), max(1, (bitmap.height * scale).roundToInt()), true).also { if (it !== bitmap) bitmap.recycle() }
     }
 
+    /** Decode the selected upright crop in memory. The caller runs on IO and owns the result. */
+    internal fun photoCheckBitmap(source: NativeMediaSource, frameMs: Long, crop: NormalizedCrop): Bitmap {
+        val croppedInDecoder = !source.isVideo && Build.VERSION.SDK_INT >= 28
+        val bitmap = if (source.isVideo) {
+            require(frameMs in 0 until source.durationMs) { "Kies een moment binnen de video." }
+            // Bound the entire frame before extracting a small area from a large movie.
+            readFrameBitmap(source, frameMs)
+        } else decodeImage(source.uri, if (croppedInDecoder) crop else null, PHOTO_CHECK_SIDE)
+        try {
+            val selection = if (croppedInDecoder) NormalizedCrop.FULL else crop
+            val rect = RigMediaLimits.pixelCrop(bitmap.width, bitmap.height, selection)
+            val scale = min(1.0, PHOTO_CHECK_SIDE.toDouble() / max(rect[2], rect[3]))
+            val size = max(1, (rect[2] * scale).roundToInt()) to max(1, (rect[3] * scale).roundToInt())
+            return renderImage(bitmap, rect, size)
+        } finally { bitmap.recycle() }
+    }
+
     /** A native H264/AAC export; only this bounded short derivative can be uploaded. */
     suspend fun prepareMotion(
         source: NativeMediaSource,
@@ -284,12 +301,12 @@ class RigMediaPreparer(context: Context) {
         } finally { retriever.release() }
     }
 
-    private fun decodeImage(uri: Uri, crop: NormalizedCrop? = null): Bitmap {
+    private fun decodeImage(uri: Uri, crop: NormalizedCrop? = null, cropMaxSide: Int = RigMediaLimits.MAX_IMAGE_SIDE): Bitmap {
         if (Build.VERSION.SDK_INT >= 28) {
             return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
                 val rect = crop?.let { RigMediaLimits.pixelCrop(info.size.width, info.size.height, it) }
                 val scale = if (rect == null) min(1.0, 4096.0 / max(info.size.width, info.size.height))
-                    else min(1.0, RigMediaLimits.MAX_IMAGE_SIDE.toDouble() / max(rect[2], rect[3]))
+                    else min(1.0, cropMaxSide.toDouble() / max(rect[2], rect[3]))
                 val width = max(1, (info.size.width * scale).roundToInt())
                 val height = max(1, (info.size.height * scale).roundToInt())
                 decoder.setTargetSize(width, height)
@@ -328,14 +345,23 @@ class RigMediaPreparer(context: Context) {
         resolver.openInputStream(uri)?.use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } ?: ExifInterface.ORIENTATION_NORMAL
     }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
-    private fun writeJpeg(source: Bitmap, crop: NormalizedCrop, size: Pair<Int, Int>): PreparedAsset {
-        val rect = RigMediaLimits.pixelCrop(source.width, source.height, crop)
-        val bitmap = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
-        val output = File(directory, "${UUID.randomUUID()}.jpg")
+    private fun renderImage(source: Bitmap, rect: IntArray, size: Pair<Int, Int>): Bitmap {
+        val rendered = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
         try {
-            val canvas = Canvas(bitmap)
+            val canvas = Canvas(rendered)
             canvas.drawColor(Color.WHITE)
             canvas.drawBitmap(source, android.graphics.Rect(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]), android.graphics.Rect(0, 0, size.first, size.second), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            return rendered
+        } catch (error: Throwable) {
+            rendered.recycle()
+            throw error
+        }
+    }
+
+    private fun writeJpeg(source: Bitmap, crop: NormalizedCrop, size: Pair<Int, Int>): PreparedAsset {
+        val bitmap = renderImage(source, RigMediaLimits.pixelCrop(source.width, source.height, crop), size)
+        val output = File(directory, "${UUID.randomUUID()}.jpg")
+        try {
             output.outputStream().use { require(bitmap.compress(Bitmap.CompressFormat.JPEG, 94, it)) { "Deze foto kon niet worden voorbereid." } }
             require(output.length() in 1..RigMediaLimits.MAX_ASSET_BYTES) { "Deze foto kon niet veilig worden voorbereid." }
             return seal(output, "image/jpeg", size.first, size.second, null, false)
@@ -378,6 +404,7 @@ class RigMediaPreparer(context: Context) {
     }
 
     companion object {
+        private const val PHOTO_CHECK_SIDE = 1024
         private val IMAGE_MIMES = setOf("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/avif")
         private val ROTATED_EXIF = setOf(ExifInterface.ORIENTATION_ROTATE_90, ExifInterface.ORIENTATION_ROTATE_270, ExifInterface.ORIENTATION_TRANSPOSE, ExifInterface.ORIENTATION_TRANSVERSE)
     }

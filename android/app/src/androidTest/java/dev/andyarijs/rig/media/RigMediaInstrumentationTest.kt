@@ -29,7 +29,10 @@ class RigMediaInstrumentationTest {
     @Test fun phonePhotoAppliesExifRotationBeforeCropAndStripsMetadata(): Unit = runBlocking {
         val original = File(context.cacheDir, "orientation-test.jpg")
         val bitmap = Bitmap.createBitmap(1400, 900, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).apply { drawColor(Color.RED) }
+        Canvas(bitmap).apply {
+            drawColor(Color.RED)
+            drawRect(700f, 0f, 1400f, 900f, android.graphics.Paint().apply { color = Color.BLUE })
+        }
         original.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         bitmap.recycle()
         ExifInterface(original).apply {
@@ -41,6 +44,14 @@ class RigMediaInstrumentationTest {
             val source = preparer.inspect(Uri.fromFile(original))
             assertEquals(900, source.width)
             assertEquals(1400, source.height)
+            // After the EXIF rotation the blue right half is the displayed bottom half.
+            val check = preparer.photoCheckBitmap(source, 0, NormalizedCrop(0f, .5f, 1f, 1f))
+            try {
+                assertEquals(900, check.width)
+                assertEquals(700, check.height)
+                val pixel = check.getPixel(check.width / 2, check.height / 2)
+                assertTrue(Color.blue(pixel) > 180 && Color.red(pixel) < 80)
+            } finally { check.recycle() }
             val asset = preparer.prepareImage(source)
             try {
                 assertEquals(900, asset.width)
@@ -63,6 +74,13 @@ class RigMediaInstrumentationTest {
             assertEquals(720, source.width)
             assertEquals(1280, source.height)
             assertTrue(source.durationMs >= 8900)
+            val check = preparer.photoCheckBitmap(source, 5000, NormalizedCrop(.25f, .25f, .75f, .75f))
+            try {
+                assertEquals(360, check.width)
+                assertEquals(640, check.height)
+                val pixel = check.getPixel(check.width / 2, check.height / 2)
+                assertTrue(Color.red(pixel) > 180 && Color.green(pixel) < 80 && Color.blue(pixel) > 180)
+            } finally { check.recycle() }
             val frame = preparer.prepareFrame(source, 5000)
             try {
                 assertEquals("image/jpeg", frame.mimeType)

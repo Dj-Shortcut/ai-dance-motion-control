@@ -34,7 +34,7 @@ test('every public page works without an account and has restrictive document he
   const html=await response.text();
   assert.match(html,/^<!doctype html><html lang="nl">/);
   assert.match(html,/<meta name="viewport"/);
-  assert.match(html,path==='/privacy'?/Versie rig-privacy-2026-11-20-v1 · 20 november 2026/:/Versie rig-commerce-2026-11-09-v2/);
+  assert.match(html,path==='/privacy'?/Versie rig-privacy-2026-11-21-v1 · 21 november 2026/:/Versie rig-commerce-2026-11-09-v2/);
   for(const link of ['/',...paths])assert.ok(html.includes('href="'+link+'"'),path+' links '+link);
   assert.doesNotMatch(html,/<script|<iframe|<form|on(?:load|error|click)=/i);
   assert.match(html,/info@andyarijs\.dev/);
@@ -45,12 +45,15 @@ test('account visibility disclosure has its own version without changing purchas
  const privacy=await commerceDocument('/privacy').text(),terms=await commerceDocument('/voorwaarden').text();
  assert.match(privacy,/aanmeldplatform je naam en e-mailadres/);assert.match(privacy,/eerste bezoek/);assert.match(privacy,/laatst actief/);
  assert.match(privacy,/Alleen de beheerder/);assert.match(privacy,/Een sessiecontrole geldt niet als een nieuwe login/);
- assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/rig-privacy-2026-11-20-v1/);
+ assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/rig-privacy-2026-11-21-v1/);
 });
 
 test('Android privacy describes actual account storage, Play proof and manual data requests separately from website payments',async()=>{
  const privacy=await commerceDocument('/privacy').text(),terms=await commerceDocument('/voorwaarden').text();
  for(const text of ['Android Keystore','Google Play','aankoopbewijs','afgeschermde accountkoppeling','Mollie op de website','RIG ontvangt geen vingerafdruk','/account/verwijderen','bevoegde beheerder','geen automatische verwijdering'])assert.ok(privacy.includes(text),text);
+ assert.match(privacy,/gekozen beeld, de herkende lichaamspunten en de uitkomst op je toestel/);
+ assert.match(privacy,/Google kan technische gegevens ontvangen/);
+ assert.match(privacy,/https:\/\/developers\.google\.com\/ml-kit\/android-data-disclosure/);
  assert.match(terms,new RegExp('Versie '+COMMERCE_VERSION));assert.doesNotMatch(terms,/<h2>Android en Google Play/);
 });
 

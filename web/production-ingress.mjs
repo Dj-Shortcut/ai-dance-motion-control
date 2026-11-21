@@ -3,12 +3,13 @@
 import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesRequestBodyLimit,sitesPath} from './sites-bridge-protocol.mjs';
 import {productionTenantTesting} from './production-tenant.mjs';
 import {nativePath,nativeApiPath} from './native-api.mjs';
+import {START_PHOTO_BODY_MAX} from './native-start-photo.mjs';
 const {BRIDGE_ORIGIN,SITE_ORIGIN}=productionTenantTesting;
 const deny=status=>Response.json({error:'Deze RIG-aanvraag is tijdelijk niet beschikbaar.'},{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const provider=/^\/provider-inputs\/[A-Za-z0-9_-]{32,1536}\.[a-f0-9]{64}\/[0-9a-f-]{36}\.(?:jpg|mp4)$/;
 export default {async fetch(req,env){
  try{
-  if(env.RIG_PRODUCTION_RELAY_ENABLED!=='yes'||env.RIG_PRODUCTION_BRIDGE_ORIGIN!==BRIDGE_ORIGIN||typeof env.CLOSED_VIDEO_SERVICE?.fetch!=='function'||['DB','PRODUCTION_DB','BUCKET','FAL_KEY','MOLLIE_API_KEY','MOLLIE_LIVE_API_KEY','RIG_MEDIA_SECRET','RIG_PRODUCTION_SITES_BRIDGE_KEY','GOOGLE_PLAY_SERVICE_ACCOUNT_JSON','RIG_GOOGLE_PLAY_ACCOUNT_HMAC_KEY','RIG_GOOGLE_PLAY_TOKEN_KEYS_JSON'].some(k=>env[k]))return deny(503);
+  if(env.RIG_PRODUCTION_RELAY_ENABLED!=='yes'||env.RIG_PRODUCTION_BRIDGE_ORIGIN!==BRIDGE_ORIGIN||typeof env.CLOSED_VIDEO_SERVICE?.fetch!=='function'||['DB','PRODUCTION_DB','BUCKET','FAL_KEY','MOLLIE_API_KEY','MOLLIE_LIVE_API_KEY','RIG_MEDIA_SECRET','RIG_PRODUCTION_SITES_BRIDGE_KEY','GOOGLE_PLAY_SERVICE_ACCOUNT_JSON','RIG_GOOGLE_PLAY_ACCOUNT_HMAC_KEY','RIG_GOOGLE_PLAY_TOKEN_KEYS_JSON','RIG_OPENAI_IMAGES_KEY'].some(k=>env[k]))return deny(503);
   const u=new URL(req.url),hook=u.pathname==='/api/payments/webhook',googleHook=u.pathname==='/api/payments/google-play/rtdn',input=provider.test(u.pathname),native=nativePath(u.pathname+u.search,req.method);
   if(u.origin!==BRIDGE_ORIGIN||u.username||u.password||u.hash||(hook||googleHook)&&(u.search||req.method!=='POST')||input&&(u.search||!['GET','HEAD'].includes(req.method))||!hook&&!googleHook&&!input&&!native&&!sitesPath(u.pathname+u.search,req.method))return deny(404);
   if(native&&req.headers.has('origin'))return deny(403);
@@ -16,7 +17,7 @@ export default {async fetch(req,env){
   const ip=req.headers.get('cf-connecting-ip');
   if(!ip||ip.length>45||!/^[a-fA-F0-9:.]+$/.test(ip)||typeof env.RIG_PUBLIC_LIMITER?.limit!=='function')return deny(503);
   if((await env.RIG_PUBLIC_LIMITER.limit({key:ip}))?.success!==true)return deny(429);
-  const max=hook?2048:googleHook?49152:native&&u.pathname.startsWith('/api/native/auth/')?1024:sitesRequestBodyLimit(native?nativeApiPath(u.pathname+u.search,req.method):u.pathname,req.method),length=req.headers.get('content-length');
+  const max=native&&u.pathname==='/api/native/start-photo'&&req.method==='POST'?START_PHOTO_BODY_MAX:hook?2048:googleHook?49152:native&&u.pathname.startsWith('/api/native/auth/')?1024:sitesRequestBodyLimit(native?nativeApiPath(u.pathname+u.search,req.method):u.pathname,req.method),length=req.headers.get('content-length');
   if(length!==null&&(!/^\d+$/.test(length)||Number(length)>max))return deny(413);
   const headers=new Headers();
   if(hook){

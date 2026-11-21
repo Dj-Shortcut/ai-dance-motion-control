@@ -3,6 +3,7 @@
 import {SITE_HEADER_NAMES,SIGNED_CONTENT_HEADERS,sitesCanonical,sitesHmac,sitesDigest,sitesRequestBodyLimit,sitesPreparationWrite,sitesGooglePlayPath,sitesCustomerSecurityPath,sitesVideoDraftPath,sitesAccountServicePath} from './sites-bridge-protocol.mjs';
 import {authenticateNativeSession,exchangeNativeAuthorization,revokeNativeSession} from './native-auth.mjs';
 import {nativeTransportEnvironment,configuredAndroidOrigin} from './native-passkey.mjs';
+import {handleNativeStartPhoto} from './native-start-photo.mjs';
 import {handleNativeProviderBalance} from './native-provider-balance.mjs';
 const PREFIX='/api/native';
 const UUID='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
@@ -14,6 +15,7 @@ export function nativeApiPath(path,method){
  if(typeof path!=='string'||path.length>1200||!path.startsWith(PREFIX+'/')||/[#\\\r\n]/.test(path)||!['GET','POST'].includes(method))return null;
  const mapped='/api'+path.slice(PREFIX.length);let u;try{u=new URL(mapped,'https://rig.invalid');}catch{return null;}
  if(u.origin!=='https://rig.invalid'||u.pathname+u.search!==mapped)return null;
+ if(mapped==='/api/start-photo')return mapped;
  if(sitesGooglePlayPath(mapped,method)||sitesCustomerSecurityPath(mapped,method)||sitesVideoDraftPath(mapped,method)||sitesAccountServicePath(mapped,method))return mapped;
  if(method==='GET'&&mapped==='/api/owner/security'||method==='POST'&&mapped==='/api/owner/security/verification/options')return mapped;
  if(method==='GET'){
@@ -62,6 +64,7 @@ export async function handleNativeApi(req,env,{db,dispatch,network=fetch}={}){
   const result=await exchangeNativeAuthorization(db,await data(req));return result?json(result):denied();
  }
  const session=await authenticateNativeSession(db,req.headers.get('authorization'));if(!session)return denied();
+ if(path==='/api/native/start-photo')return handleNativeStartPhoto(req,env,{db,session,network});
  if(path==='/api/native/provider-balance')return handleNativeProviderBalance(req,env,{userId:session.userId,network});
  if(path==='/api/native/auth/logout'){
   const value=await data(req);if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length)return json({error:'Controleer je aanvraag.'},400);
