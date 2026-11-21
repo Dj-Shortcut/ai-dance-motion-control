@@ -146,7 +146,7 @@ async function editPhoto(input,env,session,network,db) {
   quality:'medium',output_format:'jpeg',n:'1',safety_identifier:session.subjectHash})) form.set(name,value);
  form.set('image',input.photo,'startfoto.jpg');
  const signal=AbortSignal.timeout(75000);
- const response=await network(EDIT_URL,{method:'POST',body:form,signal,redirect:'error',
+ const response=await network(EDIT_URL,{method:'POST',body:form,signal,redirect:'manual',
   headers:{authorization:`Bearer ${env.RIG_OPENAI_IMAGES_KEY}`,'X-Client-Request-Id':input.requestId}});
  const providerId=response.headers.get('x-request-id');
  if (providerId && /^[a-zA-Z0-9._:-]{1,200}$/.test(providerId)) {

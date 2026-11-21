@@ -93,7 +93,7 @@ test('an ordinary customer submits the selected JPEG to OpenAI and its usage is 
  assert.equal(f.calls.length,1);
  const {url,init}=f.calls[0];
  assert.equal(url,'https://api.openai.com/v1/images/edits');
- assert.equal(init.redirect,'error');
+ assert.equal(init.redirect,'manual');
  assert.equal(init.body.get('model'),'gpt-image-2.6-sunburst');
  assert.equal(init.body.get('n'),'1');
  assert.equal(init.body.get('image').size,jpeg.length);
