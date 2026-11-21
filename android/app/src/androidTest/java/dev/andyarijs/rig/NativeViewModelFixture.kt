@@ -59,6 +59,9 @@ internal class NativeViewModelFixture(
                 .put("currency", "EUR").put("mode", "live").put("funding", funding)
             "/api/native/video-config" -> 200 to JSONObject().put("enabled", true).put("funding", funding)
                 .put("qualities", JSONArray(qualities))
+            "/api/native/start-photo" -> if (request.method == "GET" && store.session() != null) {
+                200 to JSONObject().put("enabled", false)
+            } else respond(request)
             else -> respond(request)
         }
         response.code(status).body(body.toString().toResponseBody("application/json".toMediaType())).build()

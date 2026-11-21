@@ -44,8 +44,15 @@ class DancePhotoLifecycleTest {
                     assertEquals(0L, original.frame)
                     val crop = NormalizedCrop(0.1f, 0.15f, 0.9f, 0.85f)
                     val end = requireNotNull(fixture.model.state.value.subject).durationMs
-                    fixture.onMain { fixture.model.frame(end); fixture.model.crop(true, crop) }
+                    fixture.onMain { fixture.model.frame(end) }
                     original.reply.complete(DancePhotoAssessment.FULL_BODY)
+                    val lastFrame = checks.receive()
+                    assertEquals(end - 1, lastFrame.frame)
+                    assertEquals(NormalizedCrop.FULL, lastFrame.crop)
+                    assertNull(fixture.model.dancePhotoCheck.value)
+
+                    fixture.onMain { fixture.model.crop(true, crop) }
+                    lastFrame.reply.complete(DancePhotoAssessment.FULL_BODY)
                     val edited = checks.receive()
                     assertEquals(end - 1, edited.frame)
                     assertEquals(crop, edited.crop)
