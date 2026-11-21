@@ -3,12 +3,14 @@ package dev.andyarijs.rig.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okio.BufferedSink
 import org.json.JSONObject
 import java.io.File
@@ -38,7 +40,7 @@ class RigApi internal constructor(private val store: RigStore, client: OkHttpCli
             val query = path.substringAfter('?', "")
             if ('?' in path && query.isEmpty()) return false
             if (query.isNotEmpty() && !(plain == "/payments/google-play/status" && Regex("^intentId=[a-f0-9-]{36}$").matches(query))) return false
-            return plain in setOf("/session", "/video-config", "/provider-balance", "/assets", "/generation-quotes", "/generations", "/generations/recent", "/video-drafts", "/auth/exchange", "/auth/logout", "/security", "/security/registration/options", "/security/registration/verify", "/security/verification/options", "/owner/security", "/owner/security/verification/options", "/payments/google-play/config", "/payments/google-play/intents", "/payments/google-play/confirm", "/payments/google-play/status") ||
+            return plain in setOf("/session", "/start-photo", "/video-config", "/provider-balance", "/assets", "/generation-quotes", "/generations", "/generations/recent", "/video-drafts", "/auth/exchange", "/auth/logout", "/security", "/security/registration/options", "/security/registration/verify", "/security/verification/options", "/owner/security", "/owner/security/verification/options", "/payments/google-play/config", "/payments/google-play/intents", "/payments/google-play/confirm", "/payments/google-play/status") ||
                 Regex("^/generations/[A-Za-z0-9_-]{1,100}(/video|/draft)?$").matches(plain) ||
                 Regex("^/generation-intents/[A-Za-z0-9_-]{1,100}/reconcile$").matches(plain) ||
                 plain == "/account-deletion-requests" ||
@@ -101,6 +103,42 @@ class RigApi internal constructor(private val store: RigStore, client: OkHttpCli
             val result = runCatching { JSONObject(String(raw, Charsets.UTF_8)) }.getOrNull() ?: throw IOException("Het voorbereide bestand kon niet worden gecontroleerd.")
             if (!response.isSuccessful) throw failure(response.code, result, request)
             result
+        }
+    }
+
+    suspend fun startPhoto(prompt: String, requestId: String, source: File?, destination: File, session: NativeAuthSession): File = withContext(Dispatchers.IO) {
+        val jpeg = "image/jpeg".toMediaType()
+        val form = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("mode", if (source == null) "create" else "edit")
+            .addFormDataPart("prompt", prompt)
+            .addFormDataPart("requestId", requestId)
+        source?.let {
+            require(it.length() in 1..3L * 1024 * 1024) { "Kies een kleinere foto voor deze bewerking." }
+            form.addFormDataPart("image", "startfoto.jpg", it.asRequestBody(jpeg))
+        }
+        val request = builder("/start-photo", session = session).header("Accept", "image/jpeg")
+            .post(OneShotBody(form.build())).build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val raw = response.body?.source()?.apply { request(8193) }?.buffer
+                    val message = raw?.takeIf { it.size <= 8192 }?.readUtf8()
+                    val value = runCatching { JSONObject(message ?: "{}") }.getOrDefault(JSONObject())
+                    throw failure(response.code, value, request)
+                }
+                val body = response.body ?: throw IOException("Er is geen foto ontvangen.")
+                val limit = 4L * 1024 * 1024
+                val length = body.contentLength()
+                if (body.contentType() != jpeg || length > limit) throw IOException("De ontvangen foto is ongeldig.")
+                val bytes = body.source().apply { request(limit + 1) }.buffer
+                if (bytes.size !in 5L..limit || length >= 0 && length != bytes.size) throw IOException("De ontvangen foto is ongeldig.")
+                checkSession(session)
+                destination.outputStream().use { output -> output.write(bytes.readByteArray()) }
+            }
+            destination
+        } catch (error: Exception) {
+            destination.delete()
+            throw error
         }
     }
 

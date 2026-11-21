@@ -48,6 +48,8 @@ data class RigScreenState(
     val history: List<RigJob> = emptyList(), val showHistory: Boolean = false,
     val showCredits: Boolean = false, val needsRegistration: Boolean = false,
     val accountRequest: RigAccountRequestDialog? = null,
+    val startPhotoRemaining: Int? = null,
+    val startPhotoPreview: NativeMediaSource? = null,
 )
 
 class RigViewModel internal constructor(app: Application, val repository: RigRepository) : AndroidViewModel(app) {
@@ -276,6 +278,52 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         } }
         fullPrepared = null; restoredFullRequest = null; persistDraft()
     }
+    fun generateStartPhoto(prompt: String, edit: Boolean) = work("Startfoto maken") {
+        val state = mutable.value
+        val session = repository.requireSession()
+        check(state.step == 1 && state.session?.userId == session.userId && (state.startPhotoRemaining ?: 0) > 0)
+        require(prompt.isNotBlank() && prompt.length <= 400) { "Geef een beschrijving van maximaal 400 tekens." }
+        val source = if (edit) {
+            val selected = state.subject?.takeUnless { it.isVideo } ?: error("Kies eerst een foto om te bewerken.")
+            media.prepareImage(selected, state.subjectCrop)
+        } else null
+        val preview = try {
+            val file = repository.startPhoto(prompt.trim(), source?.file, session)
+            media.inspect(Uri.fromFile(file))
+        } finally {
+            refreshStartPhotoAllowance(session)
+        }
+        repository.api.checkSession(session)
+        mutable.update { it.copy(startPhotoPreview = preview) }
+    }
+
+    private suspend fun refreshStartPhotoAllowance(session: NativeAuthSession) {
+        val remaining = try { repository.startPhotoAllowance(session) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { null }
+        if (repository.store.session() == session && mutable.value.session?.userId == session.userId)
+            mutable.update { it.copy(startPhotoRemaining = remaining) }
+    }
+
+    fun discardStartPhoto() {
+        if (!mutable.value.busy) mutable.update { it.copy(startPhotoPreview = null) }
+    }
+
+    fun useStartPhoto() {
+        val preview = mutable.value.startPhotoPreview ?: return
+        change { it.copy(subject = preview, subjectCrop = NormalizedCrop.FULL, frameMs = 0, startPhotoPreview = null) }
+    }
+
+    fun saveStartPhoto(uri: Uri) = work("Startfoto bewaren") {
+        val preview = mutable.value.startPhotoPreview ?: return@work
+        withContext(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            resolver.openOutputStream(uri)?.use { output ->
+                resolver.openInputStream(preview.uri)?.use { it.copyTo(output) } ?: error("De foto kon niet worden geopend.")
+            } ?: error("De foto kon niet worden bewaard.")
+        }
+    }
+
     fun referenceFrame(face: Boolean) = work("Referentiebeeld bewaren") {
         val s = mutable.value; val source = s.subject ?: error("Kies eerst je eigen video.")
         check(source.isVideo)
@@ -338,6 +386,9 @@ class RigViewModel internal constructor(app: Application, val repository: RigRep
         mutable.update { it.copy(session = session.copy(funding = config.funding), config = config,
             providerBalance = it.providerBalance?.takeIf { config.funding == "owner-provider" && it.isFresh() }) }
         restartBalancePolling()
+        repository.store.session()?.takeIf { it.userId == session.userId }?.let { credential ->
+            viewModelScope.launch { refreshStartPhotoAllowance(credential) }
+        }
         if (!draftRestored) {
             draftRestored = true
             try { restoreDraft() } catch (error: Exception) {

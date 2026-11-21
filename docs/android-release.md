@@ -113,3 +113,11 @@ proof of an actual purchase or a published store app. Activation still requires:
 - Account-deletion request, in-app AI report receipt and reviewer-access results; current Console declarations, test-track status and remaining blockers.
 
 Do not mark a gate complete without its observable evidence. Building locally, deploying the website, uploading to Play, passing review and publicly releasing are separate outcomes.
+
+## Gratis startfoto's voor testers
+
+De Android-fotostap kan een personage maken op basis van een beschrijving of de gekozen foto bewerken. De gebruiker beslist of die het resultaat bewaart of als startfoto gebruikt. De fotobewerking stuurt alleen de gekozen, genormaliseerde foto naar de OpenAI Images API. De bestaande videobevestiging start desgewenst pas daarna een Fal-opdracht. Neem het gebruik van OpenAI als verwerker op in de toepasselijke privacy-informatie voor de proef.
+
+Activeer de proef pas na migratie `0021_start_photos.sql`, publicatie van de aangepaste relay en privéworker, en installatie van de Android-build. Stel op de privéworker `RIG_OPENAI_IMAGES_KEY` in als geheim van het bedoelde OpenAI-project. Gebruik daarnaast `RIG_START_PHOTO_TESTERS` (kommagescheiden RIG-gebruikers-ID's), `RIG_START_PHOTO_EXPIRES_AT` (ISO 8601 met tijdzone) en `RIG_START_PHOTO_MAX_ATTEMPTS` (maximaal aantal aanvragen voor de hele proef). Zonder geldige configuratie biedt de app de proef niet aan.
+
+De server reserveert vóór verzending één beurt. Er zijn maximaal drie aanvragen per tester, gedeeld door beide fotokeuzes, en een onafhankelijk totaalplafond. Een onzekere aanvraag wordt niet opnieuw verstuurd. De reserveringen blijven meetellen bij een wijziging van de einddatum of testerslijst. De server bewaart geen beschrijvingen of foto’s voor deze functie. Het previewbestand staat tijdelijk op het toestel, en ‘Bewaar foto’ schrijft het naar de locatie van de gebruiker.
